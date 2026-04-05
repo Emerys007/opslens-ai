@@ -1,0 +1,7 @@
+{
+  "uid": "opslens_ai_settings",
+  "type": "settings",
+  "config": {
+    "entrypoint": "/app/settings/SettingsPage.tsx"
+  }
+}

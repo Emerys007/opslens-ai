@@ -1,0 +1,8 @@
+{
+  "uid": "opslens_ai_page",
+  "type": "page",
+  "config": {
+    "entrypoint": "/app/pages/Home.tsx",
+    "location": "home"
+  }
+}

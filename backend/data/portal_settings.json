@@ -1,0 +1,7 @@
+{
+  "51300126": {
+    "slackWebhookUrl": "",
+    "alertThreshold": "high",
+    "criticalWorkflows": "This Is A Test 2"
+  }
+}

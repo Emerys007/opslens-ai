@@ -1,0 +1,12 @@
+{
+  "token_type": "bearer",
+  "refresh_token": "na1-3348-4232-48aa-8967-2b875f22de07",
+  "access_token": "CIbEnbbVMxIQQlNQMl8kQEwrAgMACAkWEhiejrsYIN3gkCsozqGKETIUmrQk3UReiCYd8ITGefLmYGciUr86F0JTUDJfJEBMKwIKAAgZBnFOMAEBAWQFQhQ9B6jjMSYc8csE6rFiosjxIwcZo0oDbmExUgBaAGAAaL_J9gVwAXgB",
+  "hub_id": 51300126,
+  "scopes": [
+    "oauth",
+    "crm.objects.contacts.write",
+    "crm.objects.contacts.read"
+  ],
+  "expires_in": 1800
+}

@@ -1,0 +1,74 @@
+{
+  "uid": "opslens_ai_workflow_action",
+  "type": "workflow-action",
+  "config": {
+    "actionUrl": "https://api.app-sync.com/api/v1/workflow-actions/notify",
+    "isPublished": true,
+    "supportedClients": [
+      {
+        "client": "WORKFLOWS"
+      }
+    ],
+    "objectTypes": [
+      "CONTACT"
+    ],
+    "inputFields": [
+      {
+        "typeDefinition": {
+          "name": "severityOverride",
+          "type": "enumeration",
+          "fieldType": "select",
+          "options": [
+            {
+              "value": "use_settings",
+              "label": "Use app settings"
+            },
+            {
+              "value": "critical",
+              "label": "Critical"
+            },
+            {
+              "value": "high",
+              "label": "High"
+            },
+            {
+              "value": "medium",
+              "label": "Medium"
+            }
+          ]
+        },
+        "supportedValueTypes": [
+          "STATIC_VALUE"
+        ],
+        "isRequired": false
+      },
+      {
+        "typeDefinition": {
+          "name": "analystNote",
+          "type": "string",
+          "fieldType": "textarea"
+        },
+        "supportedValueTypes": [
+          "STATIC_VALUE"
+        ],
+        "isRequired": false
+      }
+    ],
+    "labels": {
+      "en": {
+        "appDisplayName": "OpsLens AI",
+        "actionName": "Send OpsLens alert",
+        "actionDescription": "Send an OpsLens alert event to the external service.",
+        "actionCardContent": "Send OpsLens alert with {{severityOverride}} threshold",
+        "inputFieldLabels": {
+          "severityOverride": "Severity override",
+          "analystNote": "Analyst note"
+        },
+        "inputFieldDescriptions": {
+          "severityOverride": "Choose whether to use the saved app threshold or force a severity.",
+          "analystNote": "Optional note to include in the alert event."
+        }
+      }
+    }
+  }
+}
