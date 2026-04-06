@@ -1,61 +1,22 @@
-from pathlib import Path
-import json
-
 from fastapi import APIRouter, Request
 from sqlalchemy import desc, select
 
 from app.db import get_session, init_db
 from app.models.alert_event import AlertEvent
+from app.services.portal_settings import (
+    SEVERITY_ORDER,
+    load_portal_settings,
+    normalize_severity,
+)
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
-
-DATA_DIR = Path(__file__).resolve().parents[4] / "data"
-DATA_DIR.mkdir(parents=True, exist_ok=True)
-SETTINGS_FILE = DATA_DIR / "portal_settings.json"
-
-SEVERITY_ORDER = {
-    "low": 1,
-    "medium": 2,
-    "high": 3,
-    "critical": 4,
-}
-
-
-def _normalize_severity(value: str | None, fallback: str = "high") -> str:
-    text = str(value or "").strip().lower()
-    return text if text in SEVERITY_ORDER else fallback
-
-
-def _read_portal_settings(portal_id: str | None) -> dict:
-    defaults = {
-        "slackWebhookUrl": "",
-        "alertThreshold": "high",
-        "criticalWorkflows": "",
-    }
-
-    if not portal_id or not SETTINGS_FILE.exists():
-        return defaults
-
-    try:
-        all_settings = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
-    except Exception:
-        return defaults
-
-    portal_settings = all_settings.get(str(portal_id), {})
-    if not isinstance(portal_settings, dict):
-        return defaults
-
-    merged = defaults.copy()
-    merged.update(portal_settings)
-    merged["alertThreshold"] = _normalize_severity(merged.get("alertThreshold"), "high")
-    return merged
 
 
 def _resolved_level(row: AlertEvent, threshold: str) -> str:
     override = str(row.severity_override or "").strip().lower()
     if override in ("", "use_settings"):
         return threshold
-    return _normalize_severity(override, threshold)
+    return normalize_severity(override, threshold)
 
 
 def _visible(level: str, threshold: str) -> bool:
@@ -71,13 +32,11 @@ def dashboard_overview(request: Request):
     user_email = str(query.get("userEmail", "")).strip()
     app_id = str(query.get("appId", "")).strip()
 
-    settings = _read_portal_settings(portal_id)
-    threshold = _normalize_severity(settings.get("alertThreshold"), "high")
-
     db_ready = init_db()
     session = get_session()
 
     if not db_ready or session is None:
+        settings = load_portal_settings(None, portal_id)
         return {
             "status": "ok",
             "app": "OpsLens AI",
@@ -100,8 +59,10 @@ def dashboard_overview(request: Request):
         }
 
     try:
-        stmt = select(AlertEvent).where(AlertEvent.result == "accepted")
+        settings = load_portal_settings(session, portal_id)
+        threshold = normalize_severity(settings.get("alertThreshold"), "high")
 
+        stmt = select(AlertEvent).where(AlertEvent.result == "accepted")
         if portal_id:
             stmt = stmt.where(AlertEvent.portal_id == portal_id)
 
@@ -158,6 +119,7 @@ def dashboard_overview(request: Request):
                 "dbConfigured": True,
                 "savedAlertRows": len(rows),
                 "visibleRowsAtThreshold": len(visible_rows),
+                "settingsStorage": settings.get("storage", "unknown"),
             },
         }
     finally:

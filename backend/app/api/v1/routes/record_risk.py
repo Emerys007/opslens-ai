@@ -1,54 +1,15 @@
-from pathlib import Path
-import json
-
 from fastapi import APIRouter, Request
 from sqlalchemy import desc, select
 
 from app.db import get_session, init_db
 from app.models.alert_event import AlertEvent
+from app.services.portal_settings import (
+    SEVERITY_ORDER,
+    load_portal_settings,
+    normalize_severity,
+)
 
 router = APIRouter(prefix="/records", tags=["records"])
-
-DATA_DIR = Path(__file__).resolve().parents[4] / "data"
-DATA_DIR.mkdir(parents=True, exist_ok=True)
-SETTINGS_FILE = DATA_DIR / "portal_settings.json"
-
-SEVERITY_ORDER = {
-    "low": 1,
-    "medium": 2,
-    "high": 3,
-    "critical": 4,
-}
-
-
-def _normalize_severity(value: str | None, fallback: str = "high") -> str:
-    text = str(value or "").strip().lower()
-    return text if text in SEVERITY_ORDER else fallback
-
-
-def _read_portal_settings(portal_id: str | None) -> dict:
-    defaults = {
-        "slackWebhookUrl": "",
-        "alertThreshold": "high",
-        "criticalWorkflows": "",
-    }
-
-    if not portal_id or not SETTINGS_FILE.exists():
-        return defaults
-
-    try:
-        all_settings = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
-    except Exception:
-        return defaults
-
-    portal_settings = all_settings.get(str(portal_id), {})
-    if not isinstance(portal_settings, dict):
-        return defaults
-
-    merged = defaults.copy()
-    merged.update(portal_settings)
-    merged["alertThreshold"] = _normalize_severity(merged.get("alertThreshold"), "high")
-    return merged
 
 
 def _severity_visible_at_threshold(level: str, threshold: str) -> bool:
@@ -79,13 +40,13 @@ def contact_risk(request: Request):
             "message": "recordId is required.",
         }
 
-    settings = _read_portal_settings(portal_id)
-    threshold = _normalize_severity(settings.get("alertThreshold"), "high")
-
     db_ready = init_db()
     session = get_session()
 
     if not db_ready or session is None:
+        settings = load_portal_settings(None, portal_id)
+        threshold = normalize_severity(settings.get("alertThreshold"), "high")
+
         return {
             "status": "ok",
             "record": {
@@ -108,10 +69,14 @@ def contact_risk(request: Request):
                 "userId": user_id or "not-provided",
                 "userEmail": user_email or "not-provided",
                 "appId": app_id or "not-provided",
+                "dbConfigured": False,
             },
         }
 
     try:
+        settings = load_portal_settings(session, portal_id)
+        threshold = normalize_severity(settings.get("alertThreshold"), "high")
+
         stmt = (
             select(AlertEvent)
             .where(AlertEvent.object_id == record_id)
@@ -123,7 +88,6 @@ def contact_risk(request: Request):
             stmt = stmt.where(AlertEvent.portal_id == portal_id)
 
         stmt = stmt.order_by(desc(AlertEvent.received_at_utc)).limit(1)
-
         row = session.execute(stmt).scalars().first()
 
         if row is None:
@@ -149,13 +113,13 @@ def contact_risk(request: Request):
                     "userId": user_id or "not-provided",
                     "userEmail": user_email or "not-provided",
                     "appId": app_id or "not-provided",
+                    "dbConfigured": True,
+                    "settingsStorage": settings.get("storage", "unknown"),
                 },
             }
 
-        resolved_level = _normalize_severity(
-            row.severity_override if row.severity_override not in (None, "", "use_settings") else threshold,
-            threshold,
-        )
+        override = str(row.severity_override or "").strip().lower()
+        resolved_level = threshold if override in ("", "use_settings") else normalize_severity(override, threshold)
         visible = _severity_visible_at_threshold(resolved_level, threshold)
 
         latest_alert = {
@@ -194,6 +158,8 @@ def contact_risk(request: Request):
                 "userId": user_id or "not-provided",
                 "userEmail": user_email or "not-provided",
                 "appId": app_id or "not-provided",
+                "dbConfigured": True,
+                "settingsStorage": settings.get("storage", "unknown"),
             },
         }
     finally:

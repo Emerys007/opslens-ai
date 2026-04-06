@@ -2,58 +2,58 @@ import os
 from typing import Optional
 
 from sqlalchemy import create_engine
-from sqlalchemy.orm import declarative_base, sessionmaker, Session
+from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
 Base = declarative_base()
 
 _engine = None
 _SessionLocal = None
-_initialized = False
-
-
-def _normalize_database_url(url: str) -> str:
-    if url.startswith("postgresql://"):
-        return url.replace("postgresql://", "postgresql+psycopg://", 1)
-    return url
 
 
 def get_engine():
-    global _engine
+    global _engine, _SessionLocal
+
+    if _engine is not None:
+        return _engine
+
     database_url = os.getenv("DATABASE_URL", "").strip()
     if not database_url:
         return None
-    if _engine is None:
-        _engine = create_engine(
-            _normalize_database_url(database_url),
-            pool_pre_ping=True,
-            future=True,
-        )
+
+    connect_args = {}
+    if database_url.startswith("sqlite"):
+        connect_args["check_same_thread"] = False
+
+    _engine = create_engine(
+        database_url,
+        future=True,
+        pool_pre_ping=True,
+        connect_args=connect_args,
+    )
+    _SessionLocal = sessionmaker(
+        bind=_engine,
+        autoflush=False,
+        autocommit=False,
+        future=True,
+    )
     return _engine
 
 
-def get_session() -> Optional[Session]:
-    global _SessionLocal
-    engine = get_engine()
-    if engine is None:
-        return None
-    if _SessionLocal is None:
-        _SessionLocal = sessionmaker(
-            bind=engine,
-            autoflush=False,
-            autocommit=False,
-            future=True,
-        )
-    return _SessionLocal()
-
-
 def init_db() -> bool:
-    global _initialized
     engine = get_engine()
     if engine is None:
         return False
-    if _initialized:
-        return True
+
+    # Import models so they are registered with Base.metadata
     from app.models.alert_event import AlertEvent  # noqa: F401
+    from app.models.portal_setting import PortalSetting  # noqa: F401
+
     Base.metadata.create_all(bind=engine)
-    _initialized = True
     return True
+
+
+def get_session() -> Optional[Session]:
+    engine = get_engine()
+    if engine is None or _SessionLocal is None:
+        return None
+    return _SessionLocal()
