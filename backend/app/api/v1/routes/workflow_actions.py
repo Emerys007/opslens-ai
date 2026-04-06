@@ -18,12 +18,24 @@ def _truthy(value: str | None) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _first_header_value(value: str | None) -> str:
+    return str(value or "").split(",")[0].strip()
+
+
 def _public_request_uri(request: Request) -> str:
-    scheme = request.headers.get("x-forwarded-proto") or request.url.scheme
-    host = request.headers.get("host") or request.url.netloc
-    uri = f"{scheme}://{host}{request.url.path}"
-    if request.url.query:
-        uri += f"?{request.url.query}"
+    scheme = _first_header_value(request.headers.get("x-forwarded-proto")) or request.url.scheme
+    host = (
+        _first_header_value(request.headers.get("x-forwarded-host"))
+        or _first_header_value(request.headers.get("host"))
+        or request.url.netloc
+    )
+
+    path = request.scope.get("raw_path", b"").decode("utf-8") or request.url.path
+    query_string = request.scope.get("query_string", b"").decode("utf-8")
+
+    uri = f"{scheme}://{host}{path}"
+    if query_string:
+        uri += f"?{query_string}"
     return uri
 
 
@@ -92,6 +104,9 @@ async def notify(request: Request):
         "signaturePresent": bool(provided_signature),
         "signatureValid": False,
         "uri": uri,
+        "hostHeader": request.headers.get("host", ""),
+        "forwardedHost": request.headers.get("x-forwarded-host", ""),
+        "forwardedProto": request.headers.get("x-forwarded-proto", ""),
     }
 
     if validate_signature:
@@ -191,4 +206,5 @@ async def notify(request: Request):
         "signatureValidated": validation["enabled"],
         "signatureVersion": validation["signatureVersion"],
         "callbackId": details["callbackId"],
+        "uriUsedForValidation": validation["uri"],
     }
