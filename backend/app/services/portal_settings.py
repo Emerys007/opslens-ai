@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.models.portal_setting import PortalSetting
 
-LEGACY_SETTINGS_FILE = Path(__file__).resolve().parents[3] / "data" / "portal_settings.json"
+LEGACY_SETTINGS_FILE = Path(__file__).resolve().parents[2] / "data" / "portal_settings.json"
 
 DEFAULT_SETTINGS = {
     "slackWebhookUrl": "",
