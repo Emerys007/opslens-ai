@@ -1,3 +1,115 @@
+﻿from pathlib import Path
+import json
+import textwrap
+
+ROOT = Path(r"C:\OpsLens AI")
+BACKEND = ROOT / "backend"
+PROJECT = ROOT / "opslens-ai"
+
+def write_file(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(textwrap.dedent(content).lstrip(), encoding="utf-8")
+
+write_file(BACKEND / "app" / "api" / "v1" / "routes" / "alerts_feed.py", """
+from fastapi import APIRouter, Request
+from sqlalchemy import desc, select
+
+from app.db import get_session, init_db
+from app.models.alert_event import AlertEvent
+
+router = APIRouter(prefix="/alerts", tags=["alerts"])
+
+
+@router.get("/recent")
+def recent_alerts(request: Request, limit: int = 10):
+    safe_limit = max(1, min(limit, 25))
+    portal_id = request.query_params.get("portalId")
+
+    if not init_db():
+        return {
+            "status": "ok",
+            "dbConfigured": False,
+            "alerts": [],
+        }
+
+    session = get_session()
+    if session is None:
+        return {
+            "status": "ok",
+            "dbConfigured": False,
+            "alerts": [],
+        }
+
+    try:
+        stmt = select(AlertEvent)
+
+        if portal_id:
+            stmt = stmt.where(AlertEvent.portal_id == str(portal_id))
+
+        stmt = stmt.order_by(desc(AlertEvent.received_at_utc)).limit(safe_limit)
+        rows = session.execute(stmt).scalars().all()
+
+        alerts = []
+        for row in rows:
+            alerts.append(
+                {
+                    "id": row.id,
+                    "receivedAtUtc": row.received_at_utc.isoformat() if row.received_at_utc else None,
+                    "callbackId": row.callback_id,
+                    "portalId": row.portal_id,
+                    "workflowId": row.workflow_id,
+                    "objectType": row.object_type,
+                    "objectId": row.object_id,
+                    "severityOverride": row.severity_override,
+                    "analystNote": row.analyst_note,
+                    "result": row.result,
+                    "reason": row.reason,
+                }
+            )
+
+        return {
+            "status": "ok",
+            "dbConfigured": True,
+            "count": len(alerts),
+            "alerts": alerts,
+        }
+    finally:
+        session.close()
+""")
+
+write_file(BACKEND / "app" / "api" / "v1" / "router.py", """
+from fastapi import APIRouter
+
+from app.api.v1.routes.alerts_feed import router as alerts_feed_router
+from app.api.v1.routes.dashboard import router as dashboard_router
+from app.api.v1.routes.health import router as health_router
+from app.api.v1.routes.record_risk import router as record_risk_router
+from app.api.v1.routes.settings_store import router as settings_store_router
+from app.api.v1.routes.webhooks import router as webhook_router
+from app.api.v1.routes.workflow_actions import router as workflow_actions_router
+
+api_router = APIRouter()
+api_router.include_router(health_router)
+api_router.include_router(webhook_router)
+api_router.include_router(dashboard_router)
+api_router.include_router(settings_store_router)
+api_router.include_router(record_risk_router)
+api_router.include_router(workflow_actions_router)
+api_router.include_router(alerts_feed_router)
+""")
+
+app_hsmeta_path = PROJECT / "src" / "app" / "app-hsmeta.json"
+app_meta = json.loads(app_hsmeta_path.read_text(encoding="utf-8-sig"))
+config = app_meta.setdefault("config", {})
+permitted_urls = config.setdefault("permittedUrls", {})
+fetch_urls = permitted_urls.setdefault("fetch", [])
+
+if "https://api.app-sync.com" not in fetch_urls:
+    fetch_urls.append("https://api.app-sync.com")
+
+app_hsmeta_path.write_text(json.dumps(app_meta, indent=2), encoding="utf-8")
+
+write_file(PROJECT / "src" / "app" / "pages" / "Home.tsx", """
 import React, { useEffect, useState } from "react";
 import { Button, Divider, Flex, Text, hubspot } from "@hubspot/ui-extensions";
 
@@ -181,3 +293,11 @@ const Home = () => {
 };
 
 export default Home;
+""")
+
+print("OpsLens step 13 scaffold created successfully.")
+print("Updated files:")
+print(" - backend/app/api/v1/routes/alerts_feed.py")
+print(" - backend/app/api/v1/router.py")
+print(" - src/app/app-hsmeta.json")
+print(" - src/app/pages/Home.tsx")

@@ -21,7 +21,8 @@
     "permittedUrls": {
       "fetch": [
         "https://api.hubapi.com",
-        "https://opslens.local"
+        "https://opslens.local",
+        "https://api.app-sync.com"
       ],
       "iframe": [],
       "img": []
