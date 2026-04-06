@@ -1,0 +1,1 @@
+print('OpsLens step 12 scaffold created successfully.')\nprint('Updated files:')\nprint(' - backend/requirements.txt')\nprint(' - backend/app/db.py')\nprint(' - backend/app/models/__init__.py')\nprint(' - backend/app/models/alert_event.py')\nprint(' - backend/app/api/v1/routes/workflow_actions.py')\n

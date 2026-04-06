@@ -1,4 +1,4 @@
-﻿from datetime import datetime, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 import hashlib
 import hmac
@@ -6,6 +6,9 @@ import json
 import os
 
 from fastapi import APIRouter, HTTPException, Request, status
+
+from app.db import get_session, init_db
+from app.models.alert_event import AlertEvent
 
 router = APIRouter(prefix="/workflow-actions", tags=["workflow-actions"])
 
@@ -76,6 +79,44 @@ def _extract_payload_details(payload: dict) -> dict:
     }
 
 
+def _save_event_to_db(event: dict, details: dict, payload: dict, validation: dict) -> tuple[bool, str]:
+    session = None
+    try:
+        init_db()
+        session = get_session()
+        if session is None:
+            return False, "DATABASE_URL not configured"
+
+        row = AlertEvent(
+            received_at_utc=datetime.fromisoformat(event["receivedAtUtc"]),
+            callback_id=details.get("callbackId"),
+            portal_id=str(details.get("portalId")) if details.get("portalId") is not None else None,
+            action_definition_id=str(details.get("actionDefinitionId")) if details.get("actionDefinitionId") is not None else None,
+            action_definition_version=str(details.get("actionDefinitionVersion")) if details.get("actionDefinitionVersion") is not None else None,
+            workflow_id=str(details.get("workflowId")) if details.get("workflowId") is not None else None,
+            workflow_source=details.get("workflowSource"),
+            object_type=details.get("objectType"),
+            object_id=str(details.get("objectId")) if details.get("objectId") is not None else None,
+            severity_override=details.get("severityOverride"),
+            analyst_note=details.get("analystNote"),
+            result=event.get("result"),
+            reason=event.get("reason"),
+            signature_version=validation.get("signatureVersion"),
+            uri=validation.get("uri"),
+            payload_json=json.dumps(payload),
+        )
+        session.add(row)
+        session.commit()
+        return True, ""
+    except Exception as exc:
+        if session is not None:
+            session.rollback()
+        return False, str(exc)
+    finally:
+        if session is not None:
+            session.close()
+
+
 @router.post("/notify")
 async def notify(request: Request):
     raw_body = await request.body()
@@ -125,6 +166,7 @@ async def notify(request: Request):
                 "payload": payload,
             }
             _append_event(event)
+            _save_event_to_db(event, details, payload, validation)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="HUBSPOT_CLIENT_SECRET is not configured.",
@@ -145,6 +187,7 @@ async def notify(request: Request):
                 "payload": payload,
             }
             _append_event(event)
+            _save_event_to_db(event, details, payload, validation)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Unexpected HubSpot signature version.",
@@ -177,6 +220,7 @@ async def notify(request: Request):
                 "payload": payload,
             }
             _append_event(event)
+            _save_event_to_db(event, details, payload, validation)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid HubSpot signature.",
@@ -197,6 +241,7 @@ async def notify(request: Request):
         "payload": payload,
     }
     _append_event(event)
+    db_saved, db_error = _save_event_to_db(event, details, payload, validation)
 
     return {
         "status": "ok",
@@ -207,4 +252,6 @@ async def notify(request: Request):
         "signatureVersion": validation["signatureVersion"],
         "callbackId": details["callbackId"],
         "uriUsedForValidation": validation["uri"],
+        "dbSaved": db_saved,
+        "dbError": db_error,
     }
