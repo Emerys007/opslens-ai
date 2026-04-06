@@ -1,3 +1,15 @@
+﻿from pathlib import Path
+import textwrap
+
+ROOT = Path(r"C:\OpsLens AI")
+BACKEND = ROOT / "backend"
+PROJECT = ROOT / "opslens-ai"
+
+def write_file(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(textwrap.dedent(content).lstrip(), encoding="utf-8")
+
+write_file(BACKEND / "app" / "api" / "v1" / "routes" / "dashboard.py", """
 from pathlib import Path
 import json
 
@@ -162,3 +174,8 @@ def dashboard_overview(request: Request):
         }
     finally:
         session.close()
+""")
+
+print("OpsLens step 15 scaffold created successfully.")
+print("Updated files:")
+print(" - backend/app/api/v1/routes/dashboard.py")
