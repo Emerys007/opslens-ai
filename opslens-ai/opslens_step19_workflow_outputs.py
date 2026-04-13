@@ -57,25 +57,25 @@ config["executionRules"] = [
     {
         "labelName": "slackSent",
         "conditions": {
-            "deliveryStatus": "SLACK_SENT"
+            "deliveryStatus": ["SLACK_SENT"]
         }
     },
     {
         "labelName": "slackSkippedNoWebhook",
         "conditions": {
-            "deliveryStatus": "SLACK_SKIPPED_NO_WEBHOOK"
+            "deliveryStatus": ["SLACK_SKIPPED_NO_WEBHOOK"]
         }
     },
     {
         "labelName": "slackSkippedThreshold",
         "conditions": {
-            "deliveryStatus": "SLACK_SKIPPED_THRESHOLD"
+            "deliveryStatus": ["SLACK_SKIPPED_THRESHOLD"]
         }
     },
     {
         "labelName": "slackFailed",
         "conditions": {
-            "deliveryStatus": "SLACK_FAILED"
+            "deliveryStatus": ["SLACK_FAILED"]
         }
     },
 ]
