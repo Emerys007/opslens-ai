@@ -1,130 +1,230 @@
-import React, { useEffect, useState } from "react";
-import { Button, Divider, Flex, Text, hubspot } from "@hubspot/ui-extensions";
+import React, { useEffect, useMemo, useState } from "react";
+import {
+  Box,
+  Button,
+  Divider,
+  Flex,
+  Text,
+  hubspot,
+} from "@hubspot/ui-extensions";
 
 const BACKEND_BASE_URL = "https://api.app-sync.com";
 
-type CardPayload = {
-  status?: string;
-  settings?: {
-    alertThreshold?: string;
-    criticalWorkflows?: string;
-  };
+hubspot.extend(({ context }) => {
+  return <NewCard context={context} />;
+});
+
+type RecordRiskResponse = {
+  alertThreshold?: string;
+  visibleAtThreshold?: boolean;
   risk?: {
     level?: string;
     incidentTitle?: string;
+    affectedWorkflows?: number;
     recommendation?: string;
   };
-  visibility?: {
-    threshold?: string;
-    visible?: boolean;
-  };
-  latestAlert?: {
-    id?: number;
+  latestSavedAlert?: {
     receivedAtUtc?: string;
-    callbackId?: string;
-    portalId?: string;
     workflowId?: string;
-    objectType?: string;
-    objectId?: string;
-    severityOverride?: string;
-    analystNote?: string;
+    callbackId?: string;
     result?: string;
     reason?: string;
-  } | null;
+    analystNote?: string;
+    objectType?: string;
+    objectId?: string;
+    severity?: string;
+    deliveryStatus?: string;
+  };
 };
 
-function safeText(value: unknown, fallback = "-"): string {
-  if (value === null || value === undefined) return fallback;
-  const text = String(value).trim();
-  return text ? text : fallback;
-}
+type WebhookEvent = {
+  receivedAtUtc?: string;
+  portalId?: string;
+  subscriptionType?: string;
+  objectTypeId?: string | null;
+  objectId?: string;
+  propertyName?: string | null;
+  propertyValue?: string | null;
+  changeSource?: string | null;
+  sourceId?: string | null;
+  eventId?: string | null;
+  occurredAtUtc?: string | null;
+};
 
-function formatDateTime(value: unknown): string {
-  if (!value) return "-";
-  const date = new Date(String(value));
-  if (Number.isNaN(date.getTime())) return String(value);
-  return date.toLocaleString();
-}
-
-hubspot.extend(({ context }) => <NewCard context={context} />);
+type RecentWebhooksResponse = {
+  status?: string;
+  dbConfigured?: boolean;
+  count?: number;
+  events?: WebhookEvent[];
+};
 
 const NewCard = ({ context }: { context: any }) => {
+  const recordId = useMemo(
+    () => String(context?.crm?.objectId ?? context?.objectId ?? ""),
+    [context]
+  );
+  const objectTypeId = useMemo(
+    () => String(context?.crm?.objectTypeId ?? context?.objectTypeId ?? ""),
+    [context]
+  );
+
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [payload, setPayload] = useState<CardPayload | null>(null);
+  const [errorMessage, setErrorMessage] = useState("");
+  const [recordRisk, setRecordRisk] = useState<RecordRiskResponse | null>(null);
+  const [recentWebhookActivity, setRecentWebhookActivity] = useState<WebhookEvent[]>([]);
 
-  const recordId = String(context?.crm?.objectId ?? "");
-  const objectTypeId = String(context?.crm?.objectTypeId ?? "0-1");
+  const formatDate = (value?: string | null) => {
+    if (!value) return "-";
+    try {
+      return new Date(value).toLocaleString();
+    } catch {
+      return value;
+    }
+  };
 
-  const loadRisk = async () => {
+  const loadRecordRisk = async () => {
+    const response = await hubspot.fetch(
+      `${BACKEND_BASE_URL}/api/v1/records/contact-risk?recordId=${encodeURIComponent(recordId)}&objectTypeId=${encodeURIComponent(objectTypeId)}`,
+      {
+        method: "GET",
+        timeout: 5000,
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error(`Record risk request failed with status ${response.status}`);
+    }
+
+    const data = (await response.json()) as RecordRiskResponse;
+    setRecordRisk(data);
+  };
+
+  const loadRecentWebhooks = async () => {
+    const response = await hubspot.fetch(
+      `${BACKEND_BASE_URL}/api/v1/webhooks/recent?objectId=${encodeURIComponent(recordId)}&limit=5`,
+      {
+        method: "GET",
+        timeout: 5000,
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error(`Webhook history request failed with status ${response.status}`);
+    }
+
+    const data = (await response.json()) as RecentWebhooksResponse;
+    setRecentWebhookActivity(Array.isArray(data?.events) ? data.events : []);
+  };
+
+  const refreshAll = async () => {
     if (!recordId) {
-      setError("Record ID is missing from HubSpot context.");
+      setErrorMessage("No recordId was provided by HubSpot context.");
       setLoading(false);
       return;
     }
 
     setLoading(true);
-    setError("");
+    setErrorMessage("");
 
     try {
-      const response = await hubspot.fetch(
-        `${BACKEND_BASE_URL}/api/v1/records/contact-risk?recordId=${encodeURIComponent(recordId)}&objectTypeId=${encodeURIComponent(objectTypeId)}`
-      );
-
-      if (!response.ok) {
-        throw new Error(`Record risk request failed with status ${response.status}`);
-      }
-
-      const json: CardPayload = await response.json();
-      setPayload(json);
+      await Promise.all([loadRecordRisk(), loadRecentWebhooks()]);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unknown error");
-      setPayload(null);
+      console.error("New Card refresh failed", err);
+      setErrorMessage(err instanceof Error ? err.message : "Unknown error");
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    loadRisk();
+    refreshAll().catch((err) =>
+      console.error("Unexpected New Card load error", err)
+    );
   }, [recordId, objectTypeId]);
 
-  const latest = payload?.latestAlert;
+  const latestSavedAlert = recordRisk?.latestSavedAlert;
 
   return (
-    <Flex direction="column">
-      <Text>OpsLens AI</Text>
-      <Text>This record card now reads the latest saved alert for this contact from Postgres.</Text>
+    <Flex direction="column" gap="medium">
+      <Box>
+        <Text format={{ fontWeight: "bold" }}>OpsLens AI</Text>
+        <Text>
+          This record card now reads the latest saved alert and the most recent webhook history for this record.
+        </Text>
+      </Box>
 
-      <Button onClick={loadRisk}>Refresh record risk</Button>
+      <Button
+        onClick={() => {
+          refreshAll().catch((err) =>
+            console.error("Unexpected New Card refresh error", err)
+          );
+        }}
+      >
+        Refresh record risk
+      </Button>
 
       <Divider />
 
-      {loading ? (
-        <Text>Loading...</Text>
-      ) : error ? (
-        <Text>Error: {error}</Text>
-      ) : latest ? (
-        <>
-          <Text>Alert threshold: {safeText(payload?.visibility?.threshold).toUpperCase()}</Text>
-          <Text>Risk level: {safeText(payload?.risk?.level).toUpperCase()}</Text>
-          <Text>Visible at threshold: {String(Boolean(payload?.visibility?.visible))}</Text>
-          <Text>Latest event at: {formatDateTime(latest.receivedAtUtc)}</Text>
-          <Text>Workflow ID: {safeText(latest.workflowId)}</Text>
-          <Text>Callback ID: {safeText(latest.callbackId)}</Text>
-          <Text>Result: {safeText(latest.result)}</Text>
-          <Text>Reason: {safeText(latest.reason, "No rejection reason")}</Text>
-          <Text>Analyst note: {safeText(latest.analystNote, "No analyst note")}</Text>
-          <Text>Object: {safeText(latest.objectType)} / {safeText(latest.objectId)}</Text>
-        </>
-      ) : (
-        <>
-          <Text>Alert threshold: {safeText(payload?.visibility?.threshold).toUpperCase()}</Text>
-          <Text>Risk level: {safeText(payload?.risk?.level).toUpperCase()}</Text>
-          <Text>{safeText(payload?.risk?.incidentTitle, "No saved alert")}</Text>
-          <Text>{safeText(payload?.risk?.recommendation, "Run the workflow and refresh this card.")}</Text>
-        </>
-      )}
+      <Box>
+        <Text format={{ fontWeight: "bold" }}>Card status</Text>
+        <Text>{loading ? "Loading..." : "Ready"}</Text>
+        <Text>{errorMessage ? `Error: ${errorMessage}` : "No card fetch error detected."}</Text>
+      </Box>
+
+      <Divider />
+
+      <Box>
+        <Text format={{ fontWeight: "bold" }}>Latest saved alert</Text>
+        <Text>Alert threshold: {String(recordRisk?.alertThreshold ?? "-")}</Text>
+        <Text>Risk level: {String(recordRisk?.risk?.level ?? "-").toUpperCase()}</Text>
+        <Text>Visible at threshold: {String(recordRisk?.visibleAtThreshold ?? "-")}</Text>
+        <Text>Latest event at: {formatDate(latestSavedAlert?.receivedAtUtc)}</Text>
+        <Text>Workflow ID: {String(latestSavedAlert?.workflowId ?? "-")}</Text>
+        <Text>Callback ID: {String(latestSavedAlert?.callbackId ?? "-")}</Text>
+        <Text>Result: {String(latestSavedAlert?.result ?? "-")}</Text>
+        <Text>Reason: {String(latestSavedAlert?.reason ?? "-")}</Text>
+        <Text>Analyst note: {String(latestSavedAlert?.analystNote ?? "-")}</Text>
+        <Text>
+          Object: {String(latestSavedAlert?.objectType ?? "-")} / {String(latestSavedAlert?.objectId ?? "-")}
+        </Text>
+      </Box>
+
+      <Divider />
+
+      <Box>
+        <Text format={{ fontWeight: "bold" }}>Recent webhook activity for this record</Text>
+        {recentWebhookActivity.length === 0 ? (
+          <Text>No recent webhook events found for this record.</Text>
+        ) : (
+          <Flex direction="column" gap="small">
+            {recentWebhookActivity.map((event, idx) => (
+              <Box key={event?.eventId ?? `${event?.subscriptionType ?? "event"}-${idx}`}>
+                <Text>
+                  {String(event?.subscriptionType ?? "-")} on object {String(event?.objectId ?? "-")}
+                </Text>
+                <Text>Received: {formatDate(event?.receivedAtUtc)}</Text>
+                <Text>Occurred: {formatDate(event?.occurredAtUtc)}</Text>
+                <Text>Property: {String(event?.propertyName ?? "-")}</Text>
+                <Text>Value: {String(event?.propertyValue ?? "-")}</Text>
+                <Text>Change source: {String(event?.changeSource ?? "-")}</Text>
+                <Text>Source ID: {String(event?.sourceId ?? "-")}</Text>
+                <Text>Event ID: {String(event?.eventId ?? "-")}</Text>
+              </Box>
+            ))}
+          </Flex>
+        )}
+      </Box>
+
+      <Divider />
+
+      <Box>
+        <Text format={{ fontWeight: "bold" }}>Debug context</Text>
+        <Text>Record ID: {recordId || "unknown"}</Text>
+        <Text>Object type ID: {objectTypeId || "unknown"}</Text>
+        <Text>Portal ID: {String(context?.portal?.id ?? "unknown")}</Text>
+        <Text>User ID: {String(context?.user?.id ?? "unknown")}</Text>
+        <Text>User Email: {String(context?.user?.email ?? "unknown")}</Text>
+      </Box>
     </Flex>
   );
 };
