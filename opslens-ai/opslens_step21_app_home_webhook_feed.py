@@ -1,4 +1,9 @@
-import React, { useEffect, useState } from "react";
+from pathlib import Path
+
+path = Path(r"C:\OpsLens AI\opslens-ai\src\app\pages\Home.tsx")
+path.parent.mkdir(parents=True, exist_ok=True)
+
+content = r'''import React, { useEffect, useState } from "react";
 import {
   Box,
   Button,
@@ -308,3 +313,6 @@ const HomePage = ({ context }: HomePageProps) => {
 };
 
 export default HomePage;
+'''
+path.write_text(content, encoding="utf-8")
+print(f"Updated App Home page: {path}")
