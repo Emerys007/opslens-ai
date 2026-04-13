@@ -67,8 +67,92 @@
         "inputFieldDescriptions": {
           "severityOverride": "Choose whether to use the saved app threshold or force a severity.",
           "analystNote": "Optional note to include in the alert event."
+        },
+        "outputFieldLabels": {
+          "deliveryStatus": "Delivery status",
+          "deliveryChannel": "Delivery channel",
+          "deliveryReason": "Delivery reason",
+          "severityUsed": "Severity used",
+          "portalIdUsed": "Portal ID used",
+          "callbackId": "Callback ID"
+        },
+        "executionRules": {
+          "slackSent": "Slack alert sent successfully.",
+          "slackSkippedNoWebhook": "Slack alert skipped because no Slack webhook is configured.",
+          "slackSkippedThreshold": "Slack alert skipped because severity {{ severityUsed }} is below the saved threshold.",
+          "slackFailed": "Slack alert failed. Reason: {{ deliveryReason }}"
         }
       }
-    }
+    },
+    "outputFields": [
+      {
+        "typeDefinition": {
+          "name": "deliveryStatus",
+          "type": "string",
+          "fieldType": "text"
+        }
+      },
+      {
+        "typeDefinition": {
+          "name": "deliveryChannel",
+          "type": "string",
+          "fieldType": "text"
+        }
+      },
+      {
+        "typeDefinition": {
+          "name": "deliveryReason",
+          "type": "string",
+          "fieldType": "text"
+        }
+      },
+      {
+        "typeDefinition": {
+          "name": "severityUsed",
+          "type": "string",
+          "fieldType": "text"
+        }
+      },
+      {
+        "typeDefinition": {
+          "name": "portalIdUsed",
+          "type": "string",
+          "fieldType": "text"
+        }
+      },
+      {
+        "typeDefinition": {
+          "name": "callbackId",
+          "type": "string",
+          "fieldType": "text"
+        }
+      }
+    ],
+    "executionRules": [
+      {
+        "labelName": "slackSent",
+        "conditions": {
+          "deliveryStatus": "SLACK_SENT"
+        }
+      },
+      {
+        "labelName": "slackSkippedNoWebhook",
+        "conditions": {
+          "deliveryStatus": "SLACK_SKIPPED_NO_WEBHOOK"
+        }
+      },
+      {
+        "labelName": "slackSkippedThreshold",
+        "conditions": {
+          "deliveryStatus": "SLACK_SKIPPED_THRESHOLD"
+        }
+      },
+      {
+        "labelName": "slackFailed",
+        "conditions": {
+          "deliveryStatus": "SLACK_FAILED"
+        }
+      }
+    ]
   }
 }

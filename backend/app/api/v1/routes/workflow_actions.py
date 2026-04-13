@@ -217,6 +217,26 @@ def _build_slack_message(details: dict, portal_id: str, severity: str) -> str:
     return "\n".join(lines)
 
 
+def _build_output_fields(
+    *,
+    callback_id: str,
+    portal_id_used: str,
+    severity_used: str,
+    delivery_status: str,
+    delivery_reason: str,
+    execution_state: str,
+) -> dict:
+    return {
+        "deliveryStatus": delivery_status,
+        "deliveryChannel": "slack",
+        "deliveryReason": delivery_reason,
+        "severityUsed": severity_used,
+        "portalIdUsed": portal_id_used,
+        "callbackId": callback_id,
+        "hs_execution_state": execution_state,
+    }
+
+
 @router.post("/notify")
 async def notify(request: Request):
     raw_body = await request.body()
@@ -351,6 +371,10 @@ async def notify(request: Request):
     slack_webhook_configured = False
     portal_id_used_for_settings = ""
     settings_storage = "unknown"
+    incoming_severity = "high"
+    delivery_status = "SLACK_SKIPPED_NO_WEBHOOK"
+    delivery_reason = "No Slack webhook URL is configured in OpsLens settings."
+    execution_state = "SUCCESS"
 
     try:
         portal_id_used_for_settings = str(
@@ -374,7 +398,15 @@ async def notify(request: Request):
         else:
             incoming_severity = _normalize_slack_severity(raw_severity, "high")
 
-        if slack_webhook_url and _should_send_to_slack(incoming_severity, slack_threshold):
+        if not slack_webhook_url:
+            delivery_status = "SLACK_SKIPPED_NO_WEBHOOK"
+            delivery_reason = "No Slack webhook URL is configured in OpsLens settings."
+        elif not _should_send_to_slack(incoming_severity, slack_threshold):
+            delivery_status = "SLACK_SKIPPED_THRESHOLD"
+            delivery_reason = (
+                f"Severity {incoming_severity} is below the saved threshold {slack_threshold}."
+            )
+        else:
             slack_attempted = True
             slack_text = _build_slack_message(
                 details=details,
@@ -385,8 +417,29 @@ async def notify(request: Request):
             slack_sent = bool(slack_result["ok"])
             slack_status_code = slack_result["statusCode"]
             slack_error = str(slack_result["error"] or "")
+
+            if slack_sent:
+                delivery_status = "SLACK_SENT"
+                delivery_reason = "Slack alert delivered successfully."
+            else:
+                delivery_status = "SLACK_FAILED"
+                delivery_reason = slack_error or "Slack delivery failed."
+                execution_state = "FAIL_CONTINUE"
+
     except Exception as exc:
         slack_error = str(exc)
+        delivery_status = "SLACK_FAILED"
+        delivery_reason = str(exc)
+        execution_state = "FAIL_CONTINUE"
+
+    output_fields = _build_output_fields(
+        callback_id=str(details.get("callbackId") or ""),
+        portal_id_used=portal_id_used_for_settings or "not-provided",
+        severity_used=incoming_severity,
+        delivery_status=delivery_status,
+        delivery_reason=delivery_reason,
+        execution_state=execution_state,
+    )
 
     return {
         "status": "ok",
@@ -407,4 +460,5 @@ async def notify(request: Request):
         "slackError": slack_error,
         "slackThreshold": slack_threshold,
         "slackWebhookConfigured": slack_webhook_configured,
+        "outputFields": output_fields,
     }
