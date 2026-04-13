@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-path = Path(r"C:\OpsLens AI\opslens-ai\src\app\webhooks\webhook-hsmeta.json")
+path = Path(r"C:\OpsLens AI\opslens-ai\src\app\webhooks\webhooks-hsmeta.json")
 path.parent.mkdir(parents=True, exist_ok=True)
 
 data = {

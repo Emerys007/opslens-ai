@@ -3,38 +3,33 @@
   "type": "webhooks",
   "config": {
     "settings": {
-      "targetUrl": "https://example.com/webhook",
+      "targetUrl": "https://api.app-sync.com/api/v1/webhooks/hubspot",
       "maxConcurrentRequests": 10
     },
     "subscriptions": {
-      "crmObjects": [
-        {
-          "subscriptionType": "object.creation",
-          "objectType": "contact",
-          "active": false
-        },
-        {
-          "subscriptionType": "object.propertyChange",
-          "objectType": "contact",
-          "propertyName": "firstname",
-          "active": false
-        }
-      ],
       "legacyCrmObjects": [
         {
-          "subscriptionType": "contact.propertyChange",
-          "propertyName": "lastname",
-          "active": false
+          "subscriptionType": "contact.creation",
+          "active": true
         },
         {
           "subscriptionType": "contact.deletion",
-          "active": false
-        }
-      ],
-      "hubEvents": [
+          "active": true
+        },
         {
-          "subscriptionType": "contact.privacyDeletion",
-          "active": false
+          "subscriptionType": "contact.propertyChange",
+          "propertyName": "email",
+          "active": true
+        },
+        {
+          "subscriptionType": "contact.propertyChange",
+          "propertyName": "firstname",
+          "active": true
+        },
+        {
+          "subscriptionType": "contact.propertyChange",
+          "propertyName": "lastname",
+          "active": true
         }
       ]
     }
