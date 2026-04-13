@@ -60,6 +60,7 @@ def init_db() -> bool:
 
     from app.models.alert_event import AlertEvent  # noqa: F401
     from app.models.portal_setting import PortalSetting  # noqa: F401
+    from app.models.webhook_event import WebhookEvent  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
     return True
