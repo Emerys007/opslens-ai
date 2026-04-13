@@ -3,21 +3,28 @@ from pathlib import Path
 import hashlib
 import hmac
 import json
+import os
 import urllib.error
 import urllib.request
-import os
 
 from fastapi import APIRouter, HTTPException, Request, status
 
 from app.db import get_session, init_db
-from app.models.portal_setting import PortalSetting
 from app.models.alert_event import AlertEvent
+from app.services.portal_settings import load_portal_settings, normalize_severity
 
 router = APIRouter(prefix="/workflow-actions", tags=["workflow-actions"])
 
 DATA_DIR = Path(__file__).resolve().parents[4] / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 LOG_FILE = DATA_DIR / "workflow_action_events.jsonl"
+
+SEVERITY_RANK = {
+    "low": 1,
+    "medium": 2,
+    "high": 3,
+    "critical": 4,
+}
 
 
 def _truthy(value: str | None) -> bool:
@@ -120,52 +127,26 @@ def _save_event_to_db(event: dict, details: dict, payload: dict, validation: dic
             session.close()
 
 
-# STEP18_SLACK_HELPERS_START
-SEVERITY_RANK = {
-    "medium": 1,
-    "high": 2,
-    "critical": 3,
-}
-
-
-def _normalize_slack_severity(value: str) -> str:
-    value = str(value or "").strip().lower()
-    if value in SEVERITY_RANK:
-        return value
-    return "high"
+def _normalize_slack_severity(value: str | None, fallback: str = "high") -> str:
+    return normalize_severity(value, fallback)
 
 
 def _should_send_to_slack(event_severity: str, threshold: str) -> bool:
     return SEVERITY_RANK[_normalize_slack_severity(event_severity)] >= SEVERITY_RANK[_normalize_slack_severity(threshold)]
 
 
-def _load_portal_settings_from_db(portal_id: str) -> dict:
+def _load_portal_settings_for_workflow(portal_id: str) -> dict:
     session = None
     try:
-        if not init_db():
-            return {}
-
+        db_ready = init_db()
         session = get_session()
-        if session is None:
-            return {}
 
-        row = (
-            session.query(PortalSetting)
-            .filter(PortalSetting.portal_id == str(portal_id))
-            .order_by(PortalSetting.updated_at_utc.desc())
-            .first()
-        )
+        if not db_ready or session is None:
+            return load_portal_settings(None, portal_id)
 
-        if row is None:
-            return {}
-
-        return {
-            "slackWebhookUrl": getattr(row, "slack_webhook_url", "") or "",
-            "alertThreshold": getattr(row, "alert_threshold", "high") or "high",
-            "criticalWorkflows": getattr(row, "critical_workflows", "") or "",
-        }
+        return load_portal_settings(session, portal_id)
     except Exception:
-        return {}
+        return load_portal_settings(None, portal_id)
     finally:
         if session is not None:
             session.close()
@@ -234,7 +215,6 @@ def _build_slack_message(details: dict, portal_id: str, severity: str) -> str:
         lines.append(f"Analyst note: {analyst_note}")
 
     return "\n".join(lines)
-# STEP18_SLACK_HELPERS_END
 
 
 @router.post("/notify")
@@ -363,48 +343,50 @@ async def notify(request: Request):
     _append_event(event)
     db_saved, db_error = _save_event_to_db(event, details, payload, validation)
 
-    # STEP18_SLACK_RUNTIME_START
     slack_attempted = False
     slack_sent = False
     slack_status_code = None
     slack_error = ""
     slack_threshold = "high"
     slack_webhook_configured = False
+    portal_id_used_for_settings = ""
+    settings_storage = "unknown"
 
     try:
-        portal_id_for_slack = str(
-            request.query_params.get("portalId")
-            or details.get("portalId")
-            or "not-provided"
+        portal_id_used_for_settings = str(
+            details.get("portalId")
+            or request.query_params.get("portalId")
+            or ""
         ).strip()
 
-        portal_settings = _load_portal_settings_from_db(portal_id_for_slack)
+        portal_settings = _load_portal_settings_for_workflow(portal_id_used_for_settings)
         slack_webhook_url = str(portal_settings.get("slackWebhookUrl", "") or "").strip()
-        slack_threshold = _normalize_slack_severity(portal_settings.get("alertThreshold", "high"))
-        slack_webhook_configured = bool(slack_webhook_url)
-
-        raw_severity = (
-            details.get("severityOverride")
-            or details.get("severity")
-            or request.query_params.get("severityOverride")
-            or "high"
+        slack_threshold = _normalize_slack_severity(
+            portal_settings.get("alertThreshold"),
+            "high",
         )
+        slack_webhook_configured = bool(slack_webhook_url)
+        settings_storage = str(portal_settings.get("storage", "unknown") or "unknown")
 
+        raw_severity = details.get("severityOverride")
         if str(raw_severity or "").strip().lower() == "use_settings":
             incoming_severity = slack_threshold
         else:
-            incoming_severity = _normalize_slack_severity(raw_severity)
+            incoming_severity = _normalize_slack_severity(raw_severity, "high")
 
         if slack_webhook_url and _should_send_to_slack(incoming_severity, slack_threshold):
             slack_attempted = True
-            slack_text = _build_slack_message(details, portal_id_for_slack, incoming_severity)
+            slack_text = _build_slack_message(
+                details=details,
+                portal_id=portal_id_used_for_settings or "not-provided",
+                severity=incoming_severity,
+            )
             slack_result = _send_slack_webhook(slack_webhook_url, slack_text)
             slack_sent = bool(slack_result["ok"])
             slack_status_code = slack_result["statusCode"]
             slack_error = str(slack_result["error"] or "")
     except Exception as exc:
         slack_error = str(exc)
-    # STEP18_SLACK_RUNTIME_END
 
     return {
         "status": "ok",
@@ -415,6 +397,8 @@ async def notify(request: Request):
         "signatureVersion": validation["signatureVersion"],
         "callbackId": details["callbackId"],
         "uriUsedForValidation": validation["uri"],
+        "portalIdUsedForSettings": portal_id_used_for_settings or "not-provided",
+        "settingsStorage": settings_storage,
         "dbSaved": db_saved,
         "dbError": db_error,
         "slackAttempted": slack_attempted,
