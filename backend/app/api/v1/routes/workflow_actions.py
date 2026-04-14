@@ -518,65 +518,80 @@ async def notify(request: Request):
     }
 
     ticket_sync = sync_hubspot_ticket_for_alert(
-        {
-            **response_payload,
-            **output_fields,
-            "portalId": str(details.get("portalId") or ""),
-            "objectId": str(details.get("objectId") or ""),
-            "workflowId": str(details.get("workflowId") or ""),
-            "analystNote": str(details.get("analystNote") or ""),
-            "reason": delivery_reason,
-            "result": "accepted",
-        }
+    {
+        **response_payload,
+        **output_fields,
+        "portalId": str(details.get("portalId") or ""),
+        "objectId": str(details.get("objectId") or ""),
+        "workflowId": str(details.get("workflowId") or ""),
+        "analystNote": str(details.get("analystNote") or ""),
+        "reason": delivery_reason,
+        "result": "accepted",
+    }
     )
 
-    ticket_sync_attempted = bool(
-        ticket_sync.get("ticketSyncAttempted")
-        or ticket_sync.get("attempted")
-    )
-    ticket_sync_ok = bool(
-        ticket_sync.get("ticketSyncOk")
-        or ticket_sync.get("ok")
-    )
     ticket_id = str(
         ticket_sync.get("ticketId")
         or ticket_sync.get("hubspotTicketId")
         or ""
     ).strip()
+
     ticket_created = bool(
         ticket_sync.get("ticketCreated")
         or ticket_sync.get("created")
     )
+
     ticket_updated = bool(
         ticket_sync.get("ticketUpdated")
         or ticket_sync.get("updated")
     )
+
     ticket_association_ok = bool(
         ticket_sync.get("ticketAssociationOk")
         or ticket_sync.get("associationOk")
     )
+
     ticket_sync_error = str(
         ticket_sync.get("ticketSyncError")
         or ticket_sync.get("error")
         or ""
     ).strip()
 
+    ticket_sync_attempted = bool(
+        ticket_sync.get("ticketSyncAttempted")
+        or ticket_sync.get("attempted")
+        or ticket_id
+        or ticket_created
+        or ticket_updated
+        or ticket_sync_error
+    )
+
+    ticket_sync_ok = bool(
+        ticket_sync.get("ticketSyncOk")
+        or ticket_sync.get("ok")
+        or ticket_id
+        or ticket_created
+        or ticket_updated
+    )
+
     if ticket_sync.get("ticketReason"):
         ticket_reason = str(ticket_sync["ticketReason"]).strip()
-    elif ticket_sync_ok and ticket_created:
+    elif ticket_created:
         ticket_reason = "HubSpot ticket created successfully."
-    elif ticket_sync_ok and ticket_updated:
+    elif ticket_updated:
         ticket_reason = "HubSpot ticket updated successfully."
     elif ticket_sync_ok:
         ticket_reason = "HubSpot ticket sync completed successfully."
+    elif ticket_sync_error:
+        ticket_reason = ticket_sync_error
     elif ticket_sync_attempted:
-        ticket_reason = ticket_sync_error or "HubSpot ticket sync failed."
+        ticket_reason = "HubSpot ticket sync failed."
     else:
         ticket_reason = "HubSpot ticket sync was not attempted."
 
-    if ticket_sync_ok and ticket_created:
+    if ticket_created:
         ticket_sync_status = "TICKET_CREATED"
-    elif ticket_sync_ok and ticket_updated:
+    elif ticket_updated:
         ticket_sync_status = "TICKET_UPDATED"
     elif ticket_sync_ok:
         ticket_sync_status = "TICKET_SYNCED"
