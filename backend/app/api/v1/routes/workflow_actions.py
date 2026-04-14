@@ -13,6 +13,7 @@ from app.db import get_session, init_db
 from app.models.alert_event import AlertEvent
 from app.services.portal_settings import load_portal_settings, normalize_severity
 from app.services.hubspot_native_contact_sync import sync_latest_alert_to_hubspot_contact
+from app.services.hubspot_ticket_sync import sync_hubspot_ticket_for_alert
 
 router = APIRouter(prefix="/workflow-actions", tags=["workflow-actions"])
 
@@ -442,7 +443,6 @@ async def notify(request: Request):
         execution_state=execution_state,
     )
 
-
     native_contact_sync_attempted = False
     native_contact_sync_ok = False
     native_contact_sync_error = ""
@@ -465,17 +465,17 @@ async def notify(request: Request):
                 severity_used = str(slack_threshold or "high").strip().lower()
 
             if slack_sent:
-                delivery_status = "SLACK_SENT"
-                delivery_reason = "Slack alert delivered successfully."
+                native_delivery_status = "SLACK_SENT"
+                native_delivery_reason = "Slack alert delivered successfully."
             elif slack_attempted:
-                delivery_status = "SLACK_FAILED"
-                delivery_reason = str(slack_error or "Slack delivery attempt failed.").strip()
+                native_delivery_status = "SLACK_FAILED"
+                native_delivery_reason = str(slack_error or "Slack delivery attempt failed.").strip()
             elif slack_webhook_configured:
-                delivery_status = "SLACK_SKIPPED_THRESHOLD"
-                delivery_reason = f"Saved Slack threshold is {slack_threshold}; this alert did not meet that threshold."
+                native_delivery_status = "SLACK_SKIPPED_THRESHOLD"
+                native_delivery_reason = f"Saved Slack threshold is {slack_threshold}; this alert did not meet that threshold."
             else:
-                delivery_status = "SLACK_SKIPPED_NO_WEBHOOK"
-                delivery_reason = "No Slack webhook URL is configured for this portal."
+                native_delivery_status = "SLACK_SKIPPED_NO_WEBHOOK"
+                native_delivery_reason = "No Slack webhook URL is configured for this portal."
 
             native_contact_sync_ok, native_contact_sync_error, native_contact_properties_written = sync_latest_alert_to_hubspot_contact(
                 contact_id=target_contact_id,
@@ -484,14 +484,14 @@ async def notify(request: Request):
                 callback_id=str(details.get("callbackId") or ""),
                 severity=severity_used,
                 result="accepted",
-                reason=delivery_reason,
+                reason=native_delivery_reason,
                 analyst_note=str(details.get("analystNote") or ""),
-                delivery_status=delivery_status,
+                delivery_status=native_delivery_status,
             )
     except Exception as exc:
         native_contact_sync_error = str(exc)
 
-    return {
+    response_payload = {
         "status": "ok",
         "message": "Workflow action event captured by OpsLens AI.",
         "loggedTo": str(LOG_FILE),
@@ -516,3 +516,19 @@ async def notify(request: Request):
         "nativeContactPropertiesWritten": native_contact_properties_written,
         "outputFields": output_fields,
     }
+
+    ticket_sync = sync_hubspot_ticket_for_alert(
+        {
+            **response_payload,
+            **output_fields,
+            "portalId": str(details.get("portalId") or ""),
+            "objectId": str(details.get("objectId") or ""),
+            "workflowId": str(details.get("workflowId") or ""),
+            "analystNote": str(details.get("analystNote") or ""),
+            "reason": delivery_reason,
+            "result": "accepted",
+        }
+    )
+    response_payload.update(ticket_sync)
+
+    return response_payload
