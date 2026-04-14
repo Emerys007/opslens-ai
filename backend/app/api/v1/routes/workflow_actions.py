@@ -517,7 +517,7 @@ async def notify(request: Request):
         "outputFields": output_fields,
     }
 
-        ticket_sync = sync_hubspot_ticket_for_alert(
+    ticket_sync = sync_hubspot_ticket_for_alert(
         {
             **response_payload,
             **output_fields,
