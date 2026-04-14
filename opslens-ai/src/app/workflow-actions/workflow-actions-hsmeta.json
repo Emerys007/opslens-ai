@@ -136,7 +136,7 @@
           "type": "string",
           "fieldType": "text"
         }
-      }
+      },
       {
         "typeDefinition": {
           "name": "ticketSyncStatus",
