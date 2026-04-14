@@ -9,8 +9,13 @@ from functools import lru_cache
 from typing import Any, Dict, Optional, Tuple
 
 HUBSPOT_API_BASE = "https://api.hubapi.com"
+
+# Defaults are safe for your current setup, but keep them overrideable in Render.
 HUBSPOT_TICKET_PIPELINE_ID = os.getenv("HUBSPOT_TICKET_PIPELINE_ID", "0")
 HUBSPOT_TICKET_STAGE_ID = os.getenv("HUBSPOT_TICKET_STAGE_ID", "1")
+
+# HubSpot-defined association type for Ticket -> Contact
+TICKET_TO_CONTACT_ASSOCIATION_TYPE_ID = 16
 
 
 def _clean(value: Any) -> str:
@@ -31,7 +36,7 @@ def _headers() -> Dict[str, str]:
     }
 
 
-def _parse_response_body(raw: str) -> Dict[str, Any]:
+def _parse_json_body(raw: str) -> Dict[str, Any]:
     raw = (raw or "").strip()
     if not raw:
         return {}
@@ -64,10 +69,10 @@ def _request(
     try:
         with urllib.request.urlopen(req, timeout=120) as resp:
             raw = resp.read().decode("utf-8", errors="replace")
-            return resp.getcode(), _parse_response_body(raw)
+            return resp.getcode(), _parse_json_body(raw)
     except urllib.error.HTTPError as exc:
         raw = exc.read().decode("utf-8", errors="replace")
-        return exc.code, _parse_response_body(raw)
+        return exc.code, _parse_json_body(raw)
     except Exception as exc:
         return 500, {"message": str(exc)}
 
@@ -81,7 +86,9 @@ def _humanize_delivery_status(value: str) -> str:
         "SLACK_SKIPPED_NO_WEBHOOK": "Slack Skipped No Webhook",
         "TICKET_CREATED": "Ticket Created",
         "TICKET_UPDATED": "Ticket Updated",
+        "TICKET_SYNCED": "Ticket Synced",
         "TICKET_FAILED": "Ticket Failed",
+        "TICKET_SKIPPED": "Ticket Skipped",
     }
     if raw in mapping:
         return mapping[raw]
@@ -95,6 +102,7 @@ def _build_ticket_subject(contact_id: str, workflow_id: str, severity_label: str
 
 
 def _build_ticket_description(
+    *,
     portal_id: str,
     contact_id: str,
     workflow_id: str,
@@ -129,8 +137,8 @@ def _ticket_properties_from_alert(
     callback_id = _clean(alert.get("callbackId"))
     analyst_note = _clean(alert.get("analystNote"))
     reason = _clean(
-        alert.get("reason")
-        or alert.get("ticketReason")
+        alert.get("ticketReason")
+        or alert.get("reason")
         or alert.get("deliveryReason")
         or alert.get("deliveryReasonUsed")
     )
@@ -145,7 +153,6 @@ def _ticket_properties_from_alert(
 
     delivery_raw = _clean(
         alert.get("deliveryStatus")
-        or alert.get("slackStatus")
         or alert.get("opslens_last_alert_delivery_status")
         or "SLACK_SENT"
     )
@@ -198,6 +205,46 @@ def _get_ticket_stage_state(pipeline_id: str, stage_id: str) -> str:
     return _clean(metadata.get("ticketState")).upper()
 
 
+def _search_ticket_by_callback_id(callback_id: str) -> Optional[Dict[str, Any]]:
+    callback_id = _clean(callback_id)
+    if not callback_id:
+        return None
+
+    body = {
+        "filterGroups": [
+            {
+                "filters": [
+                    {
+                        "propertyName": "opslens_ticket_callback_id",
+                        "operator": "EQ",
+                        "value": callback_id,
+                    }
+                ]
+            }
+        ],
+        "properties": [
+            "subject",
+            "hs_pipeline",
+            "hs_pipeline_stage",
+            "opslens_ticket_callback_id",
+            "opslens_ticket_workflow_id",
+            "opslens_ticket_severity",
+            "opslens_ticket_contact_id",
+            "opslens_ticket_delivery_status",
+            "opslens_ticket_reason",
+        ],
+        "sorts": ["-createdate"],
+        "limit": 10,
+    }
+
+    status, payload = _request("POST", "/crm/v3/objects/tickets/search", body)
+    if status < 200 or status >= 300:
+        return None
+
+    results = payload.get("results", [])
+    return results[0] if results else None
+
+
 def _find_matching_open_ticket(
     *,
     contact_id: str,
@@ -233,10 +280,10 @@ def _find_matching_open_ticket(
             "subject",
             "hs_pipeline",
             "hs_pipeline_stage",
-            "opslens_ticket_contact_id",
+            "opslens_ticket_callback_id",
             "opslens_ticket_workflow_id",
             "opslens_ticket_severity",
-            "opslens_ticket_callback_id",
+            "opslens_ticket_contact_id",
             "opslens_ticket_delivery_status",
             "opslens_ticket_reason",
         ],
@@ -252,18 +299,46 @@ def _find_matching_open_ticket(
         props = result.get("properties") or {}
         pipeline_id = _clean(props.get("hs_pipeline"))
         stage_id = _clean(props.get("hs_pipeline_stage"))
-
         stage_state = _get_ticket_stage_state(pipeline_id, stage_id)
 
-        # If HubSpot clearly says CLOSED, skip it.
+        # CLOSED should never be reused.
         if stage_state == "CLOSED":
             continue
 
-        # If HubSpot says OPEN, or the stage state could not be resolved,
-        # treat the newest matching ticket as reusable.
+        # OPEN is ideal. If HubSpot doesn't return stage state for some reason,
+        # reusing the newest match is still safer than creating duplicates.
         return result
 
     return None
+
+
+def _read_ticket_with_contact_associations(ticket_id: str) -> Tuple[int, Dict[str, Any]]:
+    safe_ticket = urllib.parse.quote(_clean(ticket_id), safe="")
+    return _request(
+        "GET",
+        f"/crm/v3/objects/tickets/{safe_ticket}?associations=contacts",
+    )
+
+
+def _association_exists(ticket_id: str, contact_id: str) -> bool:
+    ticket_id = _clean(ticket_id)
+    contact_id = _clean(contact_id)
+    if not ticket_id or not contact_id:
+        return False
+
+    status, payload = _read_ticket_with_contact_associations(ticket_id)
+    if status < 200 or status >= 300:
+        return False
+
+    associations = payload.get("associations") or {}
+    contacts_assoc = associations.get("contacts") or {}
+    results = contacts_assoc.get("results") or []
+
+    for item in results:
+        if _clean(item.get("id")) == contact_id:
+            return True
+
+    return False
 
 
 def _ensure_ticket_contact_association(ticket_id: str, contact_id: str) -> Tuple[bool, str]:
@@ -275,26 +350,54 @@ def _ensure_ticket_contact_association(ticket_id: str, contact_id: str) -> Tuple
     if not contact_id:
         return False, "Missing contact ID for association."
 
+    # Already linked counts as success.
+    if _association_exists(ticket_id, contact_id):
+        return True, ""
+
     safe_ticket = urllib.parse.quote(ticket_id, safe="")
     safe_contact = urllib.parse.quote(contact_id, safe="")
+
     status, payload = _request(
         "PUT",
         f"/crm/v4/objects/tickets/{safe_ticket}/associations/default/contact/{safe_contact}",
     )
 
     if status in (200, 201, 204):
+        if _association_exists(ticket_id, contact_id):
+            return True, ""
+        return False, "Association request succeeded but verification did not confirm the contact link."
+
+    message = _clean(payload.get("message") or payload.get("raw") or payload)
+
+    # Some odd cases can still already be associated even if the request response is not friendly.
+    if _association_exists(ticket_id, contact_id):
         return True, ""
 
-    error_message = _clean(payload.get("message") or payload.get("raw") or payload)
-    return False, error_message or f"Association request failed with status {status}."
+    return False, message or f"Association request failed with status {status}."
 
 
-def _create_ticket(properties: Dict[str, Any]) -> Tuple[bool, str, Dict[str, Any]]:
-    status, payload = _request(
-        "POST",
-        "/crm/v3/objects/tickets",
-        {"properties": properties},
-    )
+def _build_create_body(properties: Dict[str, Any], contact_id: str) -> Dict[str, Any]:
+    body: Dict[str, Any] = {"properties": properties}
+
+    contact_id = _clean(contact_id)
+    if contact_id:
+        body["associations"] = [
+            {
+                "to": {"id": contact_id},
+                "types": [
+                    {
+                        "associationCategory": "HUBSPOT_DEFINED",
+                        "associationTypeId": TICKET_TO_CONTACT_ASSOCIATION_TYPE_ID,
+                    }
+                ],
+            }
+        ]
+
+    return body
+
+
+def _create_ticket(body: Dict[str, Any]) -> Tuple[bool, str, Dict[str, Any]]:
+    status, payload = _request("POST", "/crm/v3/objects/tickets", body)
     if status in (200, 201):
         return True, "", payload
     message = _clean(payload.get("message") or payload.get("raw") or payload)
@@ -302,7 +405,7 @@ def _create_ticket(properties: Dict[str, Any]) -> Tuple[bool, str, Dict[str, Any
 
 
 def _update_ticket(ticket_id: str, properties: Dict[str, Any]) -> Tuple[bool, str, Dict[str, Any]]:
-    safe_ticket = urllib.parse.quote(ticket_id, safe="")
+    safe_ticket = urllib.parse.quote(_clean(ticket_id), safe="")
     status, payload = _request(
         "PATCH",
         f"/crm/v3/objects/tickets/{safe_ticket}",
@@ -324,6 +427,9 @@ def sync_hubspot_ticket_for_alert(alert: Dict[str, Any]) -> Dict[str, Any]:
         "ticketAssociationOk": False,
         "ticketReason": "",
         "ticketSyncError": "",
+        "matchedExistingTicket": False,
+        "matchedByCallbackId": False,
+        "matchedByOpenTicket": False,
     }
 
     if not _token():
@@ -343,27 +449,22 @@ def sync_hubspot_ticket_for_alert(alert: Dict[str, Any]) -> Dict[str, Any]:
 
     contact_id = _clean(alert.get("objectId") or alert.get("contactId"))
     workflow_id = _clean(alert.get("workflowId") or alert.get("workflow_id"))
+    callback_id = _clean(alert.get("callbackId"))
+    severity_label = severity_raw.capitalize()
+
     if not contact_id or not workflow_id:
         result["ticketReason"] = "HubSpot ticket sync was skipped because contact ID or workflow ID is missing."
         return result
 
-    severity_label = severity_raw.capitalize()
     result["ticketSyncAttempted"] = True
 
-    existing_ticket = _find_matching_open_ticket(
-        contact_id=contact_id,
-        workflow_id=workflow_id,
-        severity_label=severity_label,
-    )
-
+    # 1) Exact callbackId match = retry/idempotency path.
+    existing_ticket = _search_ticket_by_callback_id(callback_id) if callback_id else None
     if existing_ticket:
         ticket_id = _clean(existing_ticket.get("id"))
-        update_properties = _ticket_properties_from_alert(
-            alert,
-            include_stage_fields=False,
-        )
+        props = _ticket_properties_from_alert(alert, include_stage_fields=False)
 
-        ok, error_message, _ = _update_ticket(ticket_id, update_properties)
+        ok, error_message, _ = _update_ticket(ticket_id, props)
         if not ok:
             result["ticketId"] = ticket_id
             result["ticketSyncError"] = error_message
@@ -373,9 +474,11 @@ def sync_hubspot_ticket_for_alert(alert: Dict[str, Any]) -> Dict[str, Any]:
         association_ok, association_error = _ensure_ticket_contact_association(ticket_id, contact_id)
 
         result["ticketId"] = ticket_id
-        result["ticketUpdated"] = association_ok
+        result["ticketUpdated"] = True
         result["ticketAssociationOk"] = association_ok
         result["ticketSyncOk"] = association_ok
+        result["matchedExistingTicket"] = True
+        result["matchedByCallbackId"] = True
 
         if association_ok:
             result["ticketReason"] = "HubSpot ticket updated successfully."
@@ -386,22 +489,62 @@ def sync_hubspot_ticket_for_alert(alert: Dict[str, Any]) -> Dict[str, Any]:
 
         return result
 
-    create_properties = _ticket_properties_from_alert(
-        alert,
-        include_stage_fields=True,
+    # 2) Matching open ticket = reuse instead of duplicate create.
+    existing_ticket = _find_matching_open_ticket(
+        contact_id=contact_id,
+        workflow_id=workflow_id,
+        severity_label=severity_label,
     )
+    if existing_ticket:
+        ticket_id = _clean(existing_ticket.get("id"))
+        props = _ticket_properties_from_alert(alert, include_stage_fields=False)
 
-    ok, error_message, payload = _create_ticket(create_properties)
+        ok, error_message, _ = _update_ticket(ticket_id, props)
+        if not ok:
+            result["ticketId"] = ticket_id
+            result["ticketSyncError"] = error_message
+            result["ticketReason"] = error_message or "HubSpot ticket update failed."
+            return result
+
+        association_ok, association_error = _ensure_ticket_contact_association(ticket_id, contact_id)
+
+        result["ticketId"] = ticket_id
+        result["ticketUpdated"] = True
+        result["ticketAssociationOk"] = association_ok
+        result["ticketSyncOk"] = association_ok
+        result["matchedExistingTicket"] = True
+        result["matchedByOpenTicket"] = True
+
+        if association_ok:
+            result["ticketReason"] = "HubSpot ticket updated successfully."
+            result["ticketSyncError"] = ""
+        else:
+            result["ticketReason"] = "HubSpot ticket updated, but contact association failed."
+            result["ticketSyncError"] = association_error or "Unknown ticket association error."
+
+        return result
+
+    # 3) No existing candidate = create one new ticket.
+    props = _ticket_properties_from_alert(alert, include_stage_fields=True)
+    body = _build_create_body(props, contact_id)
+
+    ok, error_message, payload = _create_ticket(body)
     if not ok:
         result["ticketSyncError"] = error_message
         result["ticketReason"] = error_message or "HubSpot ticket create failed."
         return result
 
     ticket_id = _clean(payload.get("id"))
-    association_ok, association_error = _ensure_ticket_contact_association(ticket_id, contact_id)
+
+    # Association may already exist because we included it in create payload.
+    association_ok = _association_exists(ticket_id, contact_id)
+    association_error = ""
+
+    if not association_ok:
+        association_ok, association_error = _ensure_ticket_contact_association(ticket_id, contact_id)
 
     result["ticketId"] = ticket_id
-    result["ticketCreated"] = association_ok
+    result["ticketCreated"] = True
     result["ticketAssociationOk"] = association_ok
     result["ticketSyncOk"] = association_ok
 
