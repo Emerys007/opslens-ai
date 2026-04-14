@@ -74,13 +74,23 @@
           "deliveryReason": "Delivery reason",
           "severityUsed": "Severity used",
           "portalIdUsed": "Portal ID used",
-          "callbackId": "Callback ID"
+          "callbackId": "Callback ID",
+          "ticketSyncStatus": "Ticket Sync Status",
+          "ticketId": "Ticket ID",
+          "ticketCreated": "Ticket Created",
+          "ticketUpdated": "Ticket Updated",
+          "ticketAssociationOk": "Ticket Association OK",
+          "ticketReason": "Ticket Reason",
+          "ticketSyncError": "Ticket Sync Error"
         },
         "executionRules": {
           "slackSent": "Slack alert sent successfully.",
           "slackSkippedNoWebhook": "Slack alert skipped because no Slack webhook is configured.",
           "slackSkippedThreshold": "Slack alert skipped because severity {{ severityUsed }} is below the saved threshold.",
-          "slackFailed": "Slack alert failed. Reason: {{ deliveryReason }}"
+          "slackFailed": "Slack alert failed. Reason: {{ deliveryReason }}",
+          "ticketCreated": "HubSpot ticket created successfully.",
+          "ticketUpdated": "HubSpot ticket updated successfully.",
+          "ticketFailed": "HubSpot ticket sync failed: {{ ticketSyncError }}"
         }
       }
     },
@@ -127,8 +137,75 @@
           "fieldType": "text"
         }
       }
+      {
+        "typeDefinition": {
+          "name": "ticketSyncStatus",
+          "type": "string",
+          "fieldType": "text"
+        }
+      },
+      {
+        "typeDefinition": {
+          "name": "ticketId",
+          "type": "string",
+          "fieldType": "text"
+        }
+      },
+      {
+        "typeDefinition": {
+          "name": "ticketCreated",
+          "type": "string",
+          "fieldType": "text"
+        }
+      },
+      {
+        "typeDefinition": {
+          "name": "ticketUpdated",
+          "type": "string",
+          "fieldType": "text"
+        }
+      },
+      {
+        "typeDefinition": {
+          "name": "ticketAssociationOk",
+          "type": "string",
+          "fieldType": "text"
+        }
+      },
+      {
+        "typeDefinition": {
+          "name": "ticketReason",
+          "type": "string",
+          "fieldType": "text"
+        }
+      },
+      {
+        "typeDefinition": {
+          "name": "ticketSyncError",
+          "type": "string",
+          "fieldType": "text"
+        }
+      }
     ],
     "executionRules": [
+      {
+        "labelName": "ticketCreated",
+        "conditions": {
+          "ticketSyncStatus": ["TICKET_CREATED"]
+        }
+      },
+      {
+        "labelName": "ticketUpdated",
+        "conditions": {
+          "ticketSyncStatus": ["TICKET_UPDATED", "TICKET_SYNCED"]
+        }
+      },
+      {
+        "labelName": "ticketFailed",
+        "conditions": {
+          "ticketSyncStatus": ["TICKET_FAILED"]
+        }
+      },
       {
         "labelName": "slackSent",
         "conditions": {

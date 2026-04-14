@@ -517,7 +517,7 @@ async def notify(request: Request):
         "outputFields": output_fields,
     }
 
-    ticket_sync = sync_hubspot_ticket_for_alert(
+        ticket_sync = sync_hubspot_ticket_for_alert(
         {
             **response_payload,
             **output_fields,
@@ -529,6 +529,82 @@ async def notify(request: Request):
             "result": "accepted",
         }
     )
+
+    ticket_sync_attempted = bool(
+        ticket_sync.get("ticketSyncAttempted")
+        or ticket_sync.get("attempted")
+    )
+    ticket_sync_ok = bool(
+        ticket_sync.get("ticketSyncOk")
+        or ticket_sync.get("ok")
+    )
+    ticket_id = str(
+        ticket_sync.get("ticketId")
+        or ticket_sync.get("hubspotTicketId")
+        or ""
+    ).strip()
+    ticket_created = bool(
+        ticket_sync.get("ticketCreated")
+        or ticket_sync.get("created")
+    )
+    ticket_updated = bool(
+        ticket_sync.get("ticketUpdated")
+        or ticket_sync.get("updated")
+    )
+    ticket_association_ok = bool(
+        ticket_sync.get("ticketAssociationOk")
+        or ticket_sync.get("associationOk")
+    )
+    ticket_sync_error = str(
+        ticket_sync.get("ticketSyncError")
+        or ticket_sync.get("error")
+        or ""
+    ).strip()
+
+    if ticket_sync.get("ticketReason"):
+        ticket_reason = str(ticket_sync["ticketReason"]).strip()
+    elif ticket_sync_ok and ticket_created:
+        ticket_reason = "HubSpot ticket created successfully."
+    elif ticket_sync_ok and ticket_updated:
+        ticket_reason = "HubSpot ticket updated successfully."
+    elif ticket_sync_ok:
+        ticket_reason = "HubSpot ticket sync completed successfully."
+    elif ticket_sync_attempted:
+        ticket_reason = ticket_sync_error or "HubSpot ticket sync failed."
+    else:
+        ticket_reason = "HubSpot ticket sync was not attempted."
+
+    if ticket_sync_ok and ticket_created:
+        ticket_sync_status = "TICKET_CREATED"
+    elif ticket_sync_ok and ticket_updated:
+        ticket_sync_status = "TICKET_UPDATED"
+    elif ticket_sync_ok:
+        ticket_sync_status = "TICKET_SYNCED"
+    elif ticket_sync_attempted:
+        ticket_sync_status = "TICKET_FAILED"
+    else:
+        ticket_sync_status = "TICKET_SKIPPED"
+
+    output_fields.update(
+        {
+            "ticketSyncStatus": ticket_sync_status,
+            "ticketId": ticket_id,
+            "ticketCreated": str(ticket_created).lower(),
+            "ticketUpdated": str(ticket_updated).lower(),
+            "ticketAssociationOk": str(ticket_association_ok).lower(),
+            "ticketReason": ticket_reason,
+            "ticketSyncError": ticket_sync_error,
+        }
+    )
+
+    response_payload["outputFields"] = output_fields
     response_payload.update(ticket_sync)
+    response_payload["ticketSyncStatus"] = ticket_sync_status
+    response_payload["ticketId"] = ticket_id
+    response_payload["ticketCreated"] = ticket_created
+    response_payload["ticketUpdated"] = ticket_updated
+    response_payload["ticketAssociationOk"] = ticket_association_ok
+    response_payload["ticketReason"] = ticket_reason
+    response_payload["ticketSyncError"] = ticket_sync_error
 
     return response_payload
