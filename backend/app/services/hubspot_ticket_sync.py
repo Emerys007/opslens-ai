@@ -10,9 +10,12 @@ from typing import Any, Dict, Optional, Tuple
 
 HUBSPOT_API_BASE = "https://api.hubapi.com"
 
-# Defaults are safe for your current setup, but keep them overrideable in Render.
-HUBSPOT_TICKET_PIPELINE_ID = os.getenv("HUBSPOT_TICKET_PIPELINE_ID", "0")
-HUBSPOT_TICKET_STAGE_ID = os.getenv("HUBSPOT_TICKET_STAGE_ID", "1")
+OPSLENS_TICKET_PIPELINE_ID = "opslens_alerts"
+OPSLENS_TICKET_STAGE_NEW = "opslens_new_alert"
+OPSLENS_TICKET_STAGE_IN_PROGRESS = "opslens_in_progress"
+OPSLENS_TICKET_STAGE_WAITING = "opslens_waiting"
+OPSLENS_TICKET_STAGE_RESOLVED = "opslens_resolved"
+OPSLENS_TICKET_STAGE_DUPLICATE = "opslens_duplicate_closed"
 
 # HubSpot-defined association type for Ticket -> Contact
 TICKET_TO_CONTACT_ASSOCIATION_TYPE_ID = 16
@@ -190,8 +193,8 @@ def _ticket_properties_from_alert(
     }
 
     if include_stage_fields:
-        props["hs_pipeline"] = HUBSPOT_TICKET_PIPELINE_ID
-        props["hs_pipeline_stage"] = HUBSPOT_TICKET_STAGE_ID
+        props["hs_pipeline"] = OPSLENS_TICKET_PIPELINE_ID
+        props["hs_pipeline_stage"] = OPSLENS_TICKET_STAGE_NEW
 
     return props
 
@@ -295,6 +298,11 @@ def _find_existing_open_opslens_ticket(
                         "operator": "EQ",
                         "value": workflow_id,
                     },
+                    {
+                        "propertyName": "hs_pipeline",
+                        "operator": "EQ",
+                        "value": OPSLENS_TICKET_PIPELINE_ID,
+                    },
                 ]
             }
         ],
@@ -325,6 +333,10 @@ def _find_existing_open_opslens_ticket(
 
     for ticket in results:
         props = ticket.get("properties") or {}
+
+        ticket_pipeline = _safe_str(props.get("hs_pipeline"))
+        if ticket_pipeline != OPSLENS_TICKET_PIPELINE_ID:
+            continue
 
         # Extra guards so we do not accidentally reuse the wrong ticket.
         ticket_contact_id = _safe_str(props.get("opslens_ticket_contact_id"))
