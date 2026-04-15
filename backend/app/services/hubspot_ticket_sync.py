@@ -10,12 +10,14 @@ from typing import Any, Dict, Optional, Tuple
 
 HUBSPOT_API_BASE = "https://api.hubapi.com"
 
-OPSLENS_TICKET_PIPELINE_ID = "opslens_alerts"
-OPSLENS_TICKET_STAGE_NEW = "opslens_new_alert"
-OPSLENS_TICKET_STAGE_IN_PROGRESS = "opslens_in_progress"
-OPSLENS_TICKET_STAGE_WAITING = "opslens_waiting"
-OPSLENS_TICKET_STAGE_RESOLVED = "opslens_resolved"
-OPSLENS_TICKET_STAGE_DUPLICATE = "opslens_duplicate_closed"
+# OpsLens Alerts dedicated pipeline (HubSpot internal IDs)
+OPSLENS_TICKET_PIPELINE_ID = "890820374"
+
+OPSLENS_TICKET_STAGE_NEW = "1341759033"
+OPSLENS_TICKET_STAGE_IN_PROGRESS = "1341759034"
+OPSLENS_TICKET_STAGE_WAITING = "1341759035"
+OPSLENS_TICKET_STAGE_RESOLVED = "1341759036"
+OPSLENS_TICKET_STAGE_DUPLICATE = "1341759037"
 
 # HubSpot-defined association type for Ticket -> Contact
 TICKET_TO_CONTACT_ASSOCIATION_TYPE_ID = 16
