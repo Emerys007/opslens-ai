@@ -24,6 +24,10 @@ def _clean(value: Any) -> str:
     return str(value).strip()
 
 
+def _safe_str(value: Any) -> str:
+    return _clean(value)
+
+
 def _token() -> str:
     return _clean(os.getenv("HUBSPOT_PRIVATE_APP_TOKEN"))
 
@@ -176,7 +180,6 @@ def _ticket_properties_from_alert(
             reason=reason,
             analyst_note=analyst_note,
         ),
-
         # These MUST be internal option values, not labels
         "opslens_ticket_callback_id": callback_id,
         "opslens_ticket_workflow_id": workflow_id,
@@ -194,23 +197,32 @@ def _ticket_properties_from_alert(
 
 
 @lru_cache(maxsize=128)
-def _get_ticket_stage_state(pipeline_id: str, stage_id: str) -> str:
-    pipeline_id = _clean(pipeline_id)
-    stage_id = _clean(stage_id)
+def _hubspot_stage_state(
+    *,
+    pipeline_id: str,
+    stage_id: str,
+    object_type: str = "tickets",
+) -> str:
+    pipeline_id = _safe_str(pipeline_id)
+    stage_id = _safe_str(stage_id)
+    object_type = _safe_str(object_type) or "tickets"
+
     if not pipeline_id or not stage_id:
         return ""
 
+    safe_object_type = urllib.parse.quote(object_type, safe="")
     safe_pipeline = urllib.parse.quote(pipeline_id, safe="")
     safe_stage = urllib.parse.quote(stage_id, safe="")
+
     status, payload = _request(
         "GET",
-        f"/crm/v3/pipelines/tickets/{safe_pipeline}/stages/{safe_stage}",
+        f"/crm/v3/pipelines/{safe_object_type}/{safe_pipeline}/stages/{safe_stage}",
     )
     if status < 200 or status >= 300:
         return ""
 
-    metadata = payload.get("metadata") or {}
-    return _clean(metadata.get("ticketState")).upper()
+    metadata = (payload or {}).get("metadata") or {}
+    return _safe_str(metadata.get("ticketState")).upper()
 
 
 def _search_ticket_by_callback_id(callback_id: str) -> Optional[Dict[str, Any]]:
@@ -241,7 +253,12 @@ def _search_ticket_by_callback_id(callback_id: str) -> Optional[Dict[str, Any]]:
             "opslens_ticket_delivery_status",
             "opslens_ticket_reason",
         ],
-        "sorts": ["-createdate"],
+        "sorts": [
+            {
+                "propertyName": "createdate",
+                "direction": "DESCENDING",
+            }
+        ],
         "limit": 10,
     }
 
@@ -253,13 +270,15 @@ def _search_ticket_by_callback_id(callback_id: str) -> Optional[Dict[str, Any]]:
     return results[0] if results else None
 
 
-def _find_matching_open_ticket(
+def _find_existing_open_opslens_ticket(
     *,
     contact_id: str,
     workflow_id: str,
-    severity_label: str,
 ) -> Optional[Dict[str, Any]]:
-    if not contact_id or not workflow_id or not severity_label:
+    contact_id = _safe_str(contact_id)
+    workflow_id = _safe_str(workflow_id)
+
+    if not contact_id or not workflow_id:
         return None
 
     body = {
@@ -267,7 +286,7 @@ def _find_matching_open_ticket(
             {
                 "filters": [
                     {
-                        "propertyName": "opslens_ticket_contact_id",
+                        "propertyName": "associations.contact",
                         "operator": "EQ",
                         "value": contact_id,
                     },
@@ -276,26 +295,25 @@ def _find_matching_open_ticket(
                         "operator": "EQ",
                         "value": workflow_id,
                     },
-                    {
-                        "propertyName": "opslens_ticket_severity",
-                        "operator": "EQ",
-                        "value": severity_label,
-                    },
                 ]
             }
         ],
         "properties": [
-            "subject",
             "hs_pipeline",
             "hs_pipeline_stage",
-            "opslens_ticket_callback_id",
-            "opslens_ticket_workflow_id",
-            "opslens_ticket_severity",
             "opslens_ticket_contact_id",
+            "opslens_ticket_workflow_id",
+            "opslens_ticket_callback_id",
+            "opslens_ticket_severity",
             "opslens_ticket_delivery_status",
-            "opslens_ticket_reason",
+            "subject",
         ],
-        "sorts": ["-createdate"],
+        "sorts": [
+            {
+                "propertyName": "createdate",
+                "direction": "DESCENDING",
+            }
+        ],
         "limit": 100,
     }
 
@@ -303,19 +321,30 @@ def _find_matching_open_ticket(
     if status < 200 or status >= 300:
         return None
 
-    for result in payload.get("results", []):
-        props = result.get("properties") or {}
-        pipeline_id = _clean(props.get("hs_pipeline"))
-        stage_id = _clean(props.get("hs_pipeline_stage"))
-        stage_state = _get_ticket_stage_state(pipeline_id, stage_id)
+    results = (payload or {}).get("results") or []
 
-        # CLOSED should never be reused.
-        if stage_state == "CLOSED":
+    for ticket in results:
+        props = ticket.get("properties") or {}
+
+        # Extra guards so we do not accidentally reuse the wrong ticket.
+        ticket_contact_id = _safe_str(props.get("opslens_ticket_contact_id"))
+        ticket_workflow_id = _safe_str(props.get("opslens_ticket_workflow_id"))
+
+        if ticket_contact_id and ticket_contact_id != contact_id:
+            continue
+        if ticket_workflow_id and ticket_workflow_id != workflow_id:
             continue
 
-        # OPEN is ideal. If HubSpot doesn't return stage state for some reason,
-        # reusing the newest match is still safer than creating duplicates.
-        return result
+        pipeline_id = _safe_str(props.get("hs_pipeline"))
+        stage_id = _safe_str(props.get("hs_pipeline_stage"))
+        ticket_state = _hubspot_stage_state(
+            pipeline_id=pipeline_id,
+            stage_id=stage_id,
+            object_type="tickets",
+        )
+
+        if ticket_state == "OPEN":
+            return ticket
 
     return None
 
@@ -455,10 +484,9 @@ def sync_hubspot_ticket_for_alert(alert: Dict[str, Any]) -> Dict[str, Any]:
         result["ticketReason"] = "HubSpot ticket sync was skipped because the alert severity is not critical."
         return result
 
-    contact_id = _clean(alert.get("objectId") or alert.get("contactId"))
-    workflow_id = _clean(alert.get("workflowId") or alert.get("workflow_id"))
-    callback_id = _clean(alert.get("callbackId"))
-    severity_label = severity_raw.capitalize()
+    contact_id = _safe_str(alert.get("objectId") or alert.get("contactId"))
+    workflow_id = _safe_str(alert.get("workflowId") or alert.get("workflow_id"))
+    callback_id = _safe_str(alert.get("callbackId"))
 
     if not contact_id or not workflow_id:
         result["ticketReason"] = "HubSpot ticket sync was skipped because contact ID or workflow ID is missing."
@@ -469,7 +497,7 @@ def sync_hubspot_ticket_for_alert(alert: Dict[str, Any]) -> Dict[str, Any]:
     # 1) Exact callbackId match = retry/idempotency path.
     existing_ticket = _search_ticket_by_callback_id(callback_id) if callback_id else None
     if existing_ticket:
-        ticket_id = _clean(existing_ticket.get("id"))
+        ticket_id = _safe_str(existing_ticket.get("id"))
         props = _ticket_properties_from_alert(alert, include_stage_fields=False)
 
         ok, error_message, _ = _update_ticket(ticket_id, props)
@@ -497,14 +525,13 @@ def sync_hubspot_ticket_for_alert(alert: Dict[str, Any]) -> Dict[str, Any]:
 
         return result
 
-    # 2) Matching open ticket = reuse instead of duplicate create.
-    existing_ticket = _find_matching_open_ticket(
+    # 2) Existing OPEN OpsLens ticket for the same contact + workflow = reuse instead of duplicate create.
+    existing_ticket = _find_existing_open_opslens_ticket(
         contact_id=contact_id,
         workflow_id=workflow_id,
-        severity_label=severity_label,
     )
     if existing_ticket:
-        ticket_id = _clean(existing_ticket.get("id"))
+        ticket_id = _safe_str(existing_ticket.get("id"))
         props = _ticket_properties_from_alert(alert, include_stage_fields=False)
 
         ok, error_message, _ = _update_ticket(ticket_id, props)
@@ -524,15 +551,15 @@ def sync_hubspot_ticket_for_alert(alert: Dict[str, Any]) -> Dict[str, Any]:
         result["matchedByOpenTicket"] = True
 
         if association_ok:
-            result["ticketReason"] = "HubSpot ticket updated successfully."
+            result["ticketReason"] = "Existing open OpsLens ticket found and updated successfully."
             result["ticketSyncError"] = ""
         else:
-            result["ticketReason"] = "HubSpot ticket updated, but contact association failed."
+            result["ticketReason"] = "Existing open OpsLens ticket was updated, but contact association failed."
             result["ticketSyncError"] = association_error or "Unknown ticket association error."
 
         return result
 
-    # 3) No existing candidate = create one new ticket.
+    # 3) No matching OPEN ticket found = create a new ticket.
     props = _ticket_properties_from_alert(alert, include_stage_fields=True)
     body = _build_create_body(props, contact_id)
 
@@ -542,7 +569,7 @@ def sync_hubspot_ticket_for_alert(alert: Dict[str, Any]) -> Dict[str, Any]:
         result["ticketReason"] = error_message or "HubSpot ticket create failed."
         return result
 
-    ticket_id = _clean(payload.get("id"))
+    ticket_id = _safe_str(payload.get("id"))
 
     # Association may already exist because we included it in create payload.
     association_ok = _association_exists(ticket_id, contact_id)
