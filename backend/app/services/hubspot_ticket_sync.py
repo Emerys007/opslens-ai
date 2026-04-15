@@ -21,6 +21,11 @@ OPEN_STAGE_IDS = {
     OPSLENS_STAGE_WAITING,
 }
 
+CLOSED_STAGE_IDS = {
+    OPSLENS_STAGE_RESOLVED,
+    OPSLENS_STAGE_DUPLICATE,
+}
+
 # Default HubSpot-defined association IDs for ticket -> other object
 TICKET_TO_CONTACT_ASSOCIATION_TYPE_ID = 16
 TICKET_TO_COMPANY_ASSOCIATION_TYPE_ID = 339
@@ -95,6 +100,31 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(str(value).strip())
     except Exception:
         return default
+
+
+def _parse_repeat_count(value: Any) -> int:
+    parsed = _safe_int(value, 1)
+    return max(1, parsed)
+
+
+def _get_next_repeated_alert_stage(current_stage_id: str) -> str:
+    """
+    Progress an open OpsLens ticket one step deeper:
+    New Alert -> Investigating -> Waiting / Monitoring -> Waiting / Monitoring
+    """
+    current = str(current_stage_id or "").strip()
+
+    if current == OPSLENS_STAGE_NEW_ALERT:
+        return OPSLENS_STAGE_INVESTIGATING
+
+    if current == OPSLENS_STAGE_INVESTIGATING:
+        return OPSLENS_STAGE_WAITING
+
+    if current == OPSLENS_STAGE_WAITING:
+        return OPSLENS_STAGE_WAITING
+
+    # Safe fallback for unexpected open-state tickets
+    return OPSLENS_STAGE_INVESTIGATING
 
 
 def _subject_for_alert(workflow_id: str, contact_id: str) -> str:
@@ -312,14 +342,17 @@ def sync_hubspot_ticket_for_alert(payload: dict) -> dict:
             props = existing.get("properties", {}) or {}
 
             current_stage = str(props.get("hs_pipeline_stage") or "").strip()
-            current_repeat_count = _safe_int(props.get("opslens_ticket_repeat_count"), 1)
-            next_repeat_count = max(1, current_repeat_count + 1)
+            current_repeat_count = _parse_repeat_count(
+                props.get("opslens_ticket_repeat_count")
+            )
+            next_repeat_count = current_repeat_count + 1
+            next_stage = _get_next_repeated_alert_stage(current_stage)
 
-            if current_stage == OPSLENS_STAGE_NEW_ALERT:
-                next_stage = OPSLENS_STAGE_INVESTIGATING
+            if next_stage == OPSLENS_STAGE_INVESTIGATING:
                 ticket_reason = "Existing open OpsLens ticket found and moved to Investigating."
+            elif next_stage == OPSLENS_STAGE_WAITING:
+                ticket_reason = "Existing open OpsLens ticket found and moved to Waiting / Monitoring."
             else:
-                next_stage = current_stage or OPSLENS_STAGE_INVESTIGATING
                 ticket_reason = "Existing open OpsLens ticket found and updated successfully."
 
             first_alert_at_utc = str(
