@@ -143,19 +143,25 @@ def _ticket_properties_from_alert(
         or alert.get("deliveryReasonUsed")
     )
 
+    # INTERNAL enum value for HubSpot property
     severity_raw = _clean(
         alert.get("severityUsed")
         or alert.get("severity")
         or alert.get("severityOverride")
         or "critical"
     ).lower()
+
+    # Human-readable label for description/body only
     severity_label = severity_raw.capitalize() if severity_raw else "Critical"
 
+    # INTERNAL enum value for HubSpot property
     delivery_raw = _clean(
         alert.get("deliveryStatus")
         or alert.get("opslens_last_alert_delivery_status")
         or "SLACK_SENT"
-    )
+    ).upper()
+
+    # Human-readable label for description/body only
     delivery_label = _humanize_delivery_status(delivery_raw)
 
     props: Dict[str, Any] = {
@@ -170,10 +176,12 @@ def _ticket_properties_from_alert(
             reason=reason,
             analyst_note=analyst_note,
         ),
+
+        # These MUST be internal option values, not labels
         "opslens_ticket_callback_id": callback_id,
         "opslens_ticket_workflow_id": workflow_id,
-        "opslens_ticket_severity": severity_label,
-        "opslens_ticket_delivery_status": delivery_label,
+        "opslens_ticket_severity": severity_raw,
+        "opslens_ticket_delivery_status": delivery_raw,
         "opslens_ticket_contact_id": contact_id,
         "opslens_ticket_reason": reason,
     }
