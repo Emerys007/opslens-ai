@@ -5,7 +5,7 @@ services:
     region: ohio
     plan: starter
     branch: main
-    buildCommand: echo "No build required for cron curl job"
+    buildCommand: echo "No build required for cron curl job v2"
     startCommand: bash scripts/auto_resolve.sh
     schedule: "*/15 * * * *"
     envVars:
