@@ -3,6 +3,7 @@ import os
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 BASE_URL = "https://api.hubapi.com"
@@ -14,6 +15,9 @@ OPSLENS_STAGE_INVESTIGATING = os.getenv("HUBSPOT_OPSLENS_STAGE_INVESTIGATING", "
 OPSLENS_STAGE_WAITING = os.getenv("HUBSPOT_OPSLENS_STAGE_WAITING", "1341759035").strip()
 OPSLENS_STAGE_RESOLVED = os.getenv("HUBSPOT_OPSLENS_STAGE_RESOLVED", "1341759036").strip()
 OPSLENS_STAGE_DUPLICATE = os.getenv("HUBSPOT_OPSLENS_STAGE_DUPLICATE", "1341759037").strip()
+
+# Recently resolved tickets inside this window can be reopened instead of creating a brand-new ticket
+OPSLENS_REOPEN_WINDOW_HOURS = int(os.getenv("HUBSPOT_OPSLENS_REOPEN_WINDOW_HOURS", "168").strip() or "168")
 
 OPEN_STAGE_IDS = {
     OPSLENS_STAGE_NEW_ALERT,
@@ -29,6 +33,26 @@ CLOSED_STAGE_IDS = {
 # Default HubSpot-defined association IDs for ticket -> other object
 TICKET_TO_CONTACT_ASSOCIATION_TYPE_ID = 16
 TICKET_TO_COMPANY_ASSOCIATION_TYPE_ID = 339
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _parse_iso_datetime(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+
+    try:
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        parsed = datetime.fromisoformat(text)
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except Exception:
+        return None
 
 
 def _token() -> str:
@@ -197,7 +221,7 @@ def _ensure_ticket_company_association(ticket_id: str, company_id: str) -> bool:
     return status in (200, 201, 204)
 
 
-def _find_existing_open_ticket(contact_id: str, workflow_id: str) -> dict | None:
+def _search_matching_tickets(contact_id: str, workflow_id: str, limit: int = 20) -> list[dict]:
     payload = {
         "filterGroups": [
             {
@@ -224,6 +248,7 @@ def _find_existing_open_ticket(contact_id: str, workflow_id: str) -> dict | None
             "subject",
             "hs_pipeline",
             "hs_pipeline_stage",
+            "hs_lastmodifieddate",
             "opslens_ticket_callback_id",
             "opslens_ticket_workflow_id",
             "opslens_ticket_contact_id",
@@ -233,26 +258,50 @@ def _find_existing_open_ticket(contact_id: str, workflow_id: str) -> dict | None
             "opslens_ticket_first_alert_at",
             "opslens_ticket_last_alert_at",
             "opslens_ticket_repeat_count",
+            "opslens_ticket_resolved_at",
+            "opslens_ticket_resolution_reason",
         ],
-        "sorts": [
-            {
-                "propertyName": "hs_lastmodifieddate",
-                "direction": "DESCENDING",
-            }
-        ],
-        "limit": 20,
+        "sorts": ["-hs_lastmodifieddate"],
+        "limit": limit,
     }
 
     status, body = _request_json("POST", "/crm/v3/objects/tickets/search", payload)
     if status != 200:
-        return None
+        return []
 
-    for row in body.get("results", []):
+    return body.get("results", []) or []
+
+
+def _find_existing_open_ticket(contact_id: str, workflow_id: str) -> dict | None:
+    for row in _search_matching_tickets(contact_id, workflow_id, limit=20):
         props = row.get("properties", {}) or {}
         stage_id = str(props.get("hs_pipeline_stage") or "").strip()
         if stage_id in OPEN_STAGE_IDS:
             return row
+    return None
 
+
+def _is_recently_resolved_ticket(props: dict[str, Any]) -> bool:
+    stage_id = str(props.get("hs_pipeline_stage") or "").strip()
+    if stage_id not in CLOSED_STAGE_IDS:
+        return False
+
+    resolved_at = _parse_iso_datetime(props.get("opslens_ticket_resolved_at"))
+    if resolved_at is None:
+        resolved_at = _parse_iso_datetime(props.get("hs_lastmodifieddate"))
+
+    if resolved_at is None:
+        return False
+
+    age = _utcnow() - resolved_at
+    return age <= timedelta(hours=OPSLENS_REOPEN_WINDOW_HOURS)
+
+
+def _find_recently_resolved_matching_ticket(contact_id: str, workflow_id: str) -> dict | None:
+    for row in _search_matching_tickets(contact_id, workflow_id, limit=20):
+        props = row.get("properties", {}) or {}
+        if _is_recently_resolved_ticket(props):
+            return row
     return None
 
 
@@ -296,6 +345,71 @@ def _build_ticket_properties(
     }
 
 
+def _reopen_resolved_ticket(
+    *,
+    existing_ticket: dict,
+    portal_id: str,
+    contact_id: str,
+    workflow_id: str,
+    callback_id: str,
+    severity: str,
+    delivery_status: str,
+    delivery_reason: str,
+    analyst_note: str,
+    received_at_utc: str,
+) -> dict:
+    ticket_id = str(existing_ticket.get("id") or "").strip()
+    props = existing_ticket.get("properties", {}) or {}
+
+    previous_repeat_count = _parse_repeat_count(props.get("opslens_ticket_repeat_count"))
+    next_repeat_count = previous_repeat_count + 1
+    first_alert_at_utc = str(
+        props.get("opslens_ticket_first_alert_at") or received_at_utc
+    ).strip()
+
+    update_properties = _build_ticket_properties(
+        portal_id=portal_id,
+        contact_id=contact_id,
+        workflow_id=workflow_id,
+        callback_id=callback_id,
+        severity=severity,
+        delivery_status=delivery_status,
+        delivery_reason=delivery_reason,
+        analyst_note=analyst_note,
+        received_at_utc=received_at_utc,
+        stage_id=OPSLENS_STAGE_NEW_ALERT,
+        repeat_count=next_repeat_count,
+        first_alert_at_utc=first_alert_at_utc,
+    )
+
+    # Clear resolution metadata because this ticket is being reopened
+    update_properties["opslens_ticket_resolved_at"] = ""
+    update_properties["opslens_ticket_resolution_reason"] = ""
+
+    status, body = _request_json(
+        "PATCH",
+        f"/crm/v3/objects/tickets/{urllib.parse.quote(ticket_id)}",
+        {"properties": update_properties},
+    )
+
+    if status != 200:
+        return {
+            "ok": False,
+            "ticketId": ticket_id,
+            "error": body,
+            "repeatCount": next_repeat_count,
+            "stageUsed": OPSLENS_STAGE_NEW_ALERT,
+        }
+
+    return {
+        "ok": True,
+        "ticketId": ticket_id,
+        "error": {},
+        "repeatCount": next_repeat_count,
+        "stageUsed": OPSLENS_STAGE_NEW_ALERT,
+    }
+
+
 def sync_hubspot_ticket_for_alert(payload: dict) -> dict:
     result = {
         "ticketSyncAttempted": False,
@@ -335,8 +449,9 @@ def sync_hubspot_ticket_for_alert(payload: dict) -> dict:
         result["ticketSyncAttempted"] = True
 
         company_id = _get_contact_company_id(contact_id)
-        existing = _find_existing_open_ticket(contact_id, workflow_id)
 
+        # 1) Reuse matching open ticket when one already exists
+        existing = _find_existing_open_ticket(contact_id, workflow_id)
         if existing:
             ticket_id = str(existing.get("id") or "").strip()
             props = existing.get("properties", {}) or {}
@@ -404,6 +519,51 @@ def sync_hubspot_ticket_for_alert(payload: dict) -> dict:
             )
             return result
 
+        # 2) If no open ticket exists, reopen the most recent recently-resolved matching ticket
+        resolved_ticket = _find_recently_resolved_matching_ticket(contact_id, workflow_id)
+        if resolved_ticket:
+            reopened = _reopen_resolved_ticket(
+                existing_ticket=resolved_ticket,
+                portal_id=portal_id,
+                contact_id=contact_id,
+                workflow_id=workflow_id,
+                callback_id=callback_id,
+                severity=severity,
+                delivery_status=delivery_status,
+                delivery_reason=delivery_reason,
+                analyst_note=analyst_note,
+                received_at_utc=received_at_utc,
+            )
+
+            if not reopened.get("ok"):
+                body = reopened.get("error") or {}
+                result["ticketSyncError"] = json.dumps(body)
+                result["ticketReason"] = f"HubSpot ticket reopen failed: {body}"
+                return result
+
+            ticket_id = str(reopened.get("ticketId") or "").strip()
+
+            assoc_contact_ok = _ensure_ticket_contact_association(ticket_id, contact_id)
+            assoc_company_ok = True
+            if company_id:
+                assoc_company_ok = _ensure_ticket_company_association(ticket_id, company_id)
+
+            result.update(
+                {
+                    "ticketSyncOk": True,
+                    "ticketId": ticket_id,
+                    "ticketCreated": False,
+                    "ticketUpdated": True,
+                    "ticketAssociationOk": bool(assoc_contact_ok and assoc_company_ok),
+                    "ticketReason": "Recently resolved OpsLens ticket reopened and moved back to New Alert.",
+                    "ticketSyncError": "",
+                    "ticketStageUsed": str(reopened.get("stageUsed") or OPSLENS_STAGE_NEW_ALERT),
+                    "ticketRepeatCount": str(reopened.get("repeatCount") or ""),
+                }
+            )
+            return result
+
+        # 3) Otherwise create a new ticket
         create_properties = _build_ticket_properties(
             portal_id=portal_id,
             contact_id=contact_id,
