@@ -17,7 +17,9 @@ OPSLENS_STAGE_RESOLVED = os.getenv("HUBSPOT_OPSLENS_STAGE_RESOLVED", "1341759036
 OPSLENS_STAGE_DUPLICATE = os.getenv("HUBSPOT_OPSLENS_STAGE_DUPLICATE", "1341759037").strip()
 
 # Recently resolved tickets inside this window can be reopened instead of creating a brand-new ticket
-OPSLENS_REOPEN_WINDOW_HOURS = int(os.getenv("HUBSPOT_OPSLENS_REOPEN_WINDOW_HOURS", "168").strip() or "168")
+OPSLENS_REOPEN_WINDOW_HOURS = int(
+    os.getenv("HUBSPOT_OPSLENS_REOPEN_WINDOW_HOURS", "168").strip() or "168"
+)
 
 OPEN_STAGE_IDS = {
     OPSLENS_STAGE_NEW_ALERT,
@@ -34,9 +36,21 @@ CLOSED_STAGE_IDS = {
 TICKET_TO_CONTACT_ASSOCIATION_TYPE_ID = 16
 TICKET_TO_COMPANY_ASSOCIATION_TYPE_ID = 339
 
+# Notes association slugs supported by the notes association endpoint
+NOTE_TO_OBJECT_ASSOCIATION_SLUGS = {
+    "contact": "note_to_contact",
+    "company": "note_to_company",
+    "ticket": "note_to_ticket",
+}
+
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _isoformat_utc(value: datetime | None = None) -> str:
+    target = value or _utcnow()
+    return target.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _parse_iso_datetime(value: Any) -> datetime | None:
@@ -151,6 +165,17 @@ def _get_next_repeated_alert_stage(current_stage_id: str) -> str:
     return OPSLENS_STAGE_INVESTIGATING
 
 
+def _stage_label(stage_id: str) -> str:
+    mapping = {
+        OPSLENS_STAGE_NEW_ALERT: "New Alert",
+        OPSLENS_STAGE_INVESTIGATING: "Investigating",
+        OPSLENS_STAGE_WAITING: "Waiting / Monitoring",
+        OPSLENS_STAGE_RESOLVED: "Resolved",
+        OPSLENS_STAGE_DUPLICATE: "Closed as Duplicate",
+    }
+    return mapping.get(str(stage_id or "").strip(), str(stage_id or "").strip() or "Unknown")
+
+
 def _subject_for_alert(workflow_id: str, contact_id: str) -> str:
     return f"OpsLens critical alert | Workflow {workflow_id} | Contact {contact_id}"
 
@@ -176,6 +201,142 @@ def _description_for_alert(
     if note:
         lines.append(f"Analyst note: {note}")
     return "\n".join(lines)
+
+
+def _build_ticket_timeline_note_body(
+    *,
+    event_label: str,
+    portal_id: str,
+    contact_id: str,
+    workflow_id: str,
+    callback_id: str,
+    ticket_id: str,
+    ticket_stage_id: str,
+    repeat_count: int,
+    delivery_status: str,
+    delivery_reason: str,
+    sync_reason: str,
+    analyst_note: str,
+) -> str:
+    lines = [
+        f"OpsLens ticket event: {event_label}",
+        f"Ticket ID: {ticket_id}",
+        f"Ticket stage: {_stage_label(ticket_stage_id)} ({ticket_stage_id})",
+        f"Ticket repeat count: {max(1, repeat_count)}",
+        f"Portal ID: {portal_id}",
+        f"Contact ID: {contact_id}",
+        f"Workflow ID: {workflow_id}",
+        f"Callback ID: {callback_id}",
+        f"Delivery status: {delivery_status}",
+        f"Delivery reason: {delivery_reason}",
+        f"Sync reason: {sync_reason}",
+    ]
+
+    note = str(analyst_note or "").strip()
+    if note:
+        lines.append(f"Analyst note: {note}")
+
+    return "\n".join(lines)
+
+
+def _create_note(note_body: str, timestamp_utc: str) -> tuple[bool, str, str]:
+    payload = {
+        "properties": {
+            "hs_timestamp": timestamp_utc or _isoformat_utc(),
+            "hs_note_body": note_body,
+        }
+    }
+
+    status, body = _request_json("POST", "/crm/objects/2026-03/notes", payload)
+    if status not in (200, 201):
+        return False, "", json.dumps(body)
+
+    return True, str(body.get("id") or "").strip(), ""
+
+
+def _associate_note_to_record(note_id: str, to_object_type: str, to_object_id: str) -> bool:
+    if not note_id or not to_object_id:
+        return False
+
+    object_type = str(to_object_type or "").strip().lower()
+    association_slug = NOTE_TO_OBJECT_ASSOCIATION_SLUGS.get(object_type)
+    if not association_slug:
+        return False
+
+    path = (
+        f"/crm/objects/2026-03/notes/{urllib.parse.quote(note_id)}"
+        f"/associations/{urllib.parse.quote(object_type)}"
+        f"/{urllib.parse.quote(to_object_id)}"
+        f"/{urllib.parse.quote(association_slug)}"
+    )
+    status, _ = _request_json("PUT", path)
+    return status in (200, 201, 204)
+
+
+def _log_ticket_timeline_note(
+    *,
+    event_label: str,
+    portal_id: str,
+    contact_id: str,
+    workflow_id: str,
+    callback_id: str,
+    ticket_id: str,
+    ticket_stage_id: str,
+    repeat_count: int,
+    delivery_status: str,
+    delivery_reason: str,
+    sync_reason: str,
+    analyst_note: str,
+    received_at_utc: str,
+    company_id: str,
+) -> dict[str, Any]:
+    result = {
+        "timelineNoteCreated": False,
+        "timelineNoteId": "",
+        "timelineNoteAssociationOk": False,
+        "timelineNoteError": "",
+    }
+
+    note_body = _build_ticket_timeline_note_body(
+        event_label=event_label,
+        portal_id=portal_id,
+        contact_id=contact_id,
+        workflow_id=workflow_id,
+        callback_id=callback_id,
+        ticket_id=ticket_id,
+        ticket_stage_id=ticket_stage_id,
+        repeat_count=repeat_count,
+        delivery_status=delivery_status,
+        delivery_reason=delivery_reason,
+        sync_reason=sync_reason,
+        analyst_note=analyst_note,
+    )
+
+    note_timestamp = received_at_utc.strip() or _isoformat_utc()
+    created, note_id, note_error = _create_note(note_body, note_timestamp)
+    if not created:
+        result["timelineNoteError"] = note_error or "Timeline note creation failed."
+        return result
+
+    association_results = [
+        _associate_note_to_record(note_id, "ticket", ticket_id),
+        _associate_note_to_record(note_id, "contact", contact_id),
+    ]
+
+    if company_id:
+        association_results.append(_associate_note_to_record(note_id, "company", company_id))
+
+    association_ok = all(association_results) if association_results else False
+
+    result.update(
+        {
+            "timelineNoteCreated": True,
+            "timelineNoteId": note_id,
+            "timelineNoteAssociationOk": association_ok,
+            "timelineNoteError": "" if association_ok else "Timeline note created but one or more associations failed.",
+        }
+    )
+    return result
 
 
 def _get_contact_company_id(contact_id: str) -> str:
@@ -422,6 +583,10 @@ def sync_hubspot_ticket_for_alert(payload: dict) -> dict:
         "ticketSyncError": "",
         "ticketStageUsed": "",
         "ticketRepeatCount": "",
+        "timelineNoteCreated": False,
+        "timelineNoteId": "",
+        "timelineNoteAssociationOk": False,
+        "timelineNoteError": "",
     }
 
     try:
@@ -517,6 +682,25 @@ def sync_hubspot_ticket_for_alert(payload: dict) -> dict:
                     "ticketRepeatCount": str(next_repeat_count),
                 }
             )
+
+            result.update(
+                _log_ticket_timeline_note(
+                    event_label="Updated OpsLens ticket",
+                    portal_id=portal_id,
+                    contact_id=contact_id,
+                    workflow_id=workflow_id,
+                    callback_id=callback_id,
+                    ticket_id=ticket_id,
+                    ticket_stage_id=next_stage,
+                    repeat_count=next_repeat_count,
+                    delivery_status=delivery_status,
+                    delivery_reason=delivery_reason,
+                    sync_reason=ticket_reason,
+                    analyst_note=analyst_note,
+                    received_at_utc=received_at_utc,
+                    company_id=company_id,
+                )
+            )
             return result
 
         # 2) If no open ticket exists, reopen the most recent recently-resolved matching ticket
@@ -542,6 +726,8 @@ def sync_hubspot_ticket_for_alert(payload: dict) -> dict:
                 return result
 
             ticket_id = str(reopened.get("ticketId") or "").strip()
+            stage_used = str(reopened.get("stageUsed") or OPSLENS_STAGE_NEW_ALERT)
+            repeat_count = _safe_int(reopened.get("repeatCount"), 1)
 
             assoc_contact_ok = _ensure_ticket_contact_association(ticket_id, contact_id)
             assoc_company_ok = True
@@ -557,9 +743,28 @@ def sync_hubspot_ticket_for_alert(payload: dict) -> dict:
                     "ticketAssociationOk": bool(assoc_contact_ok and assoc_company_ok),
                     "ticketReason": "Recently resolved OpsLens ticket reopened and moved back to New Alert.",
                     "ticketSyncError": "",
-                    "ticketStageUsed": str(reopened.get("stageUsed") or OPSLENS_STAGE_NEW_ALERT),
-                    "ticketRepeatCount": str(reopened.get("repeatCount") or ""),
+                    "ticketStageUsed": stage_used,
+                    "ticketRepeatCount": str(repeat_count),
                 }
+            )
+
+            result.update(
+                _log_ticket_timeline_note(
+                    event_label="Reopened OpsLens ticket",
+                    portal_id=portal_id,
+                    contact_id=contact_id,
+                    workflow_id=workflow_id,
+                    callback_id=callback_id,
+                    ticket_id=ticket_id,
+                    ticket_stage_id=stage_used,
+                    repeat_count=repeat_count,
+                    delivery_status=delivery_status,
+                    delivery_reason=delivery_reason,
+                    sync_reason=result["ticketReason"],
+                    analyst_note=analyst_note,
+                    received_at_utc=received_at_utc,
+                    company_id=company_id,
+                )
             )
             return result
 
@@ -608,6 +813,25 @@ def sync_hubspot_ticket_for_alert(payload: dict) -> dict:
                 "ticketStageUsed": OPSLENS_STAGE_NEW_ALERT,
                 "ticketRepeatCount": "1",
             }
+        )
+
+        result.update(
+            _log_ticket_timeline_note(
+                event_label="Created OpsLens ticket",
+                portal_id=portal_id,
+                contact_id=contact_id,
+                workflow_id=workflow_id,
+                callback_id=callback_id,
+                ticket_id=ticket_id,
+                ticket_stage_id=OPSLENS_STAGE_NEW_ALERT,
+                repeat_count=1,
+                delivery_status=delivery_status,
+                delivery_reason=delivery_reason,
+                sync_reason=result["ticketReason"],
+                analyst_note=analyst_note,
+                received_at_utc=received_at_utc,
+                company_id=company_id,
+            )
         )
         return result
 
