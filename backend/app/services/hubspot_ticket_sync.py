@@ -36,11 +36,11 @@ CLOSED_STAGE_IDS = {
 TICKET_TO_CONTACT_ASSOCIATION_TYPE_ID = 16
 TICKET_TO_COMPANY_ASSOCIATION_TYPE_ID = 339
 
-# Notes association slugs supported by the notes association endpoint
+# Notes association slugs supported by HubSpot's notes association endpoint
 NOTE_TO_OBJECT_ASSOCIATION_SLUGS = {
+    "ticket": "note_to_ticket",
     "contact": "note_to_contact",
     "company": "note_to_company",
-    "ticket": "note_to_ticket",
 }
 
 
@@ -50,7 +50,12 @@ def _utcnow() -> datetime:
 
 def _isoformat_utc(value: datetime | None = None) -> str:
     target = value or _utcnow()
-    return target.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return (
+        target.astimezone(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
 
 def _parse_iso_datetime(value: Any) -> datetime | None:
