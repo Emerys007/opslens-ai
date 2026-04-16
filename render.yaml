@@ -1,0 +1,15 @@
+services:
+  - type: cron
+    name: opslens-auto-resolve
+    runtime: python
+    region: ohio
+    plan: starter
+    branch: main
+    buildCommand: pip install -r requirements.txt
+    startCommand: bash scripts/auto_resolve.sh
+    schedule: "*/15 * * * *"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.5
+      - key: OPSLENS_MAINTENANCE_KEY
+        sync: false
