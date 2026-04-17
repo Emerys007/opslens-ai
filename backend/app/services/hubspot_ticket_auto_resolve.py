@@ -314,6 +314,25 @@ def _create_auto_resolve_note(
     return True, note_id, ""
 
 
+def _pin_note_on_ticket(ticket_id: str, note_id: str) -> tuple[bool, str]:
+    if not ticket_id or not note_id:
+        return False, "Missing ticket ID or note ID."
+
+    status, body = _request_json(
+        "PATCH",
+        f"/crm/v3/objects/tickets/{urllib.parse.quote(ticket_id)}",
+        {
+            "properties": {
+                "hs_pinned_engagement_id": str(note_id),
+            }
+        },
+    )
+    if status != 200:
+        return False, json.dumps(body)
+
+    return True, ""
+
+
 def auto_resolve_waiting_tickets(
     *,
     quiet_hours: int | None = None,
@@ -329,9 +348,11 @@ def auto_resolve_waiting_tickets(
         "resolvedQuietPeriod": 0,
         "resolvedHealthySignal": 0,
         "notesCreated": 0,
+        "notesPinned": 0,
         "skipped": 0,
         "errors": [],
         "noteErrors": [],
+        "pinErrors": [],
         "resolvedTicketIds": [],
         "resolvedDetails": [],
     }
@@ -404,6 +425,11 @@ def auto_resolve_waiting_tickets(
             timestamp_utc=resolved_at_utc,
         )
 
+        pin_ok = False
+        pin_error = ""
+        if note_ok and note_id:
+            pin_ok, pin_error = _pin_note_on_ticket(ticket_id, note_id)
+
         summary["resolvedTicketIds"].append(ticket_id)
 
         if resolution_mode == "healthy_signal":
@@ -421,6 +447,17 @@ def auto_resolve_waiting_tickets(
                 }
             )
 
+        if pin_ok:
+            summary["notesPinned"] += 1
+        elif note_ok:
+            summary["pinErrors"].append(
+                {
+                    "ticketId": ticket_id,
+                    "noteId": note_id,
+                    "error": pin_error,
+                }
+            )
+
         summary["resolvedDetails"].append(
             {
                 "ticketId": ticket_id,
@@ -430,6 +467,8 @@ def auto_resolve_waiting_tickets(
                 "noteCreated": note_ok,
                 "noteId": note_id,
                 "noteError": note_error,
+                "notePinned": pin_ok,
+                "pinError": pin_error,
             }
         )
 

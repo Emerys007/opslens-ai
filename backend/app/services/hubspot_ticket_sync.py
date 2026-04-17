@@ -314,6 +314,25 @@ def _create_ticket_timeline_note(
     return True, note_id, ""
 
 
+def _pin_note_on_ticket(ticket_id: str, note_id: str) -> tuple[bool, str]:
+    if not ticket_id or not note_id:
+        return False, "Missing ticket ID or note ID."
+
+    status, body = _request_json(
+        "PATCH",
+        f"/crm/v3/objects/tickets/{urllib.parse.quote(ticket_id)}",
+        {
+            "properties": {
+                "hs_pinned_engagement_id": str(note_id),
+            }
+        },
+    )
+    if status != 200:
+        return False, json.dumps(body)
+
+    return True, ""
+
+
 def _get_contact_company_id(contact_id: str) -> str:
     path = f"/crm/v3/objects/contacts/{urllib.parse.quote(contact_id)}?associations=companies"
     status, body = _request_json("GET", path)
@@ -565,6 +584,8 @@ def sync_hubspot_ticket_for_alert(payload: dict) -> dict:
         "timelineNoteId": "",
         "timelineNoteAssociationOk": False,
         "timelineNoteError": "",
+        "timelineNotePinned": False,
+        "timelineNotePinError": "",
     }
 
     try:
@@ -647,20 +668,6 @@ def sync_hubspot_ticket_for_alert(payload: dict) -> dict:
             if company_id:
                 assoc_company_ok = _ensure_ticket_company_association(ticket_id, company_id)
 
-            result.update(
-                {
-                    "ticketSyncOk": True,
-                    "ticketId": ticket_id,
-                    "ticketCreated": False,
-                    "ticketUpdated": True,
-                    "ticketAssociationOk": bool(assoc_contact_ok and assoc_company_ok),
-                    "ticketReason": ticket_reason,
-                    "ticketSyncError": "",
-                    "ticketStageUsed": next_stage,
-                    "ticketRepeatCount": str(next_repeat_count),
-                }
-            )
-
             note_ok, note_id, note_error = _create_ticket_timeline_note(
                 ticket_id=ticket_id,
                 contact_id=contact_id,
@@ -677,12 +684,29 @@ def sync_hubspot_ticket_for_alert(payload: dict) -> dict:
                 event_label=ticket_reason,
                 timestamp_utc=received_at_utc,
             )
+
+            pin_ok = False
+            pin_error = ""
+            if note_ok and note_id:
+                pin_ok, pin_error = _pin_note_on_ticket(ticket_id, note_id)
+
             result.update(
                 {
+                    "ticketSyncOk": True,
+                    "ticketId": ticket_id,
+                    "ticketCreated": False,
+                    "ticketUpdated": True,
+                    "ticketAssociationOk": bool(assoc_contact_ok and assoc_company_ok),
+                    "ticketReason": ticket_reason,
+                    "ticketSyncError": "",
+                    "ticketStageUsed": next_stage,
+                    "ticketRepeatCount": str(next_repeat_count),
                     "timelineNoteCreated": note_ok,
                     "timelineNoteId": note_id,
                     "timelineNoteAssociationOk": note_ok,
                     "timelineNoteError": note_error,
+                    "timelineNotePinned": pin_ok,
+                    "timelineNotePinError": pin_error,
                 }
             )
             return result
@@ -718,19 +742,7 @@ def sync_hubspot_ticket_for_alert(payload: dict) -> dict:
             if company_id:
                 assoc_company_ok = _ensure_ticket_company_association(ticket_id, company_id)
 
-            result.update(
-                {
-                    "ticketSyncOk": True,
-                    "ticketId": ticket_id,
-                    "ticketCreated": False,
-                    "ticketUpdated": True,
-                    "ticketAssociationOk": bool(assoc_contact_ok and assoc_company_ok),
-                    "ticketReason": "Recently resolved OpsLens ticket reopened and moved back to New Alert.",
-                    "ticketSyncError": "",
-                    "ticketStageUsed": stage_used,
-                    "ticketRepeatCount": str(repeat_count),
-                }
-            )
+            ticket_reason = "Recently resolved OpsLens ticket reopened and moved back to New Alert."
 
             note_ok, note_id, note_error = _create_ticket_timeline_note(
                 ticket_id=ticket_id,
@@ -745,15 +757,32 @@ def sync_hubspot_ticket_for_alert(payload: dict) -> dict:
                 delivery_status=delivery_status,
                 delivery_reason=delivery_reason,
                 analyst_note=analyst_note,
-                event_label=result["ticketReason"],
+                event_label=ticket_reason,
                 timestamp_utc=received_at_utc,
             )
+
+            pin_ok = False
+            pin_error = ""
+            if note_ok and note_id:
+                pin_ok, pin_error = _pin_note_on_ticket(ticket_id, note_id)
+
             result.update(
                 {
+                    "ticketSyncOk": True,
+                    "ticketId": ticket_id,
+                    "ticketCreated": False,
+                    "ticketUpdated": True,
+                    "ticketAssociationOk": bool(assoc_contact_ok and assoc_company_ok),
+                    "ticketReason": ticket_reason,
+                    "ticketSyncError": "",
+                    "ticketStageUsed": stage_used,
+                    "ticketRepeatCount": str(repeat_count),
                     "timelineNoteCreated": note_ok,
                     "timelineNoteId": note_id,
                     "timelineNoteAssociationOk": note_ok,
                     "timelineNoteError": note_error,
+                    "timelineNotePinned": pin_ok,
+                    "timelineNotePinError": pin_error,
                 }
             )
             return result
@@ -791,20 +820,6 @@ def sync_hubspot_ticket_for_alert(payload: dict) -> dict:
         if company_id:
             assoc_company_ok = _ensure_ticket_company_association(ticket_id, company_id)
 
-        result.update(
-            {
-                "ticketSyncOk": True,
-                "ticketId": ticket_id,
-                "ticketCreated": True,
-                "ticketUpdated": False,
-                "ticketAssociationOk": bool(assoc_contact_ok and assoc_company_ok),
-                "ticketReason": "HubSpot ticket created successfully.",
-                "ticketSyncError": "",
-                "ticketStageUsed": OPSLENS_STAGE_NEW_ALERT,
-                "ticketRepeatCount": "1",
-            }
-        )
-
         note_ok, note_id, note_error = _create_ticket_timeline_note(
             ticket_id=ticket_id,
             contact_id=contact_id,
@@ -821,12 +836,29 @@ def sync_hubspot_ticket_for_alert(payload: dict) -> dict:
             event_label="HubSpot ticket created successfully.",
             timestamp_utc=received_at_utc,
         )
+
+        pin_ok = False
+        pin_error = ""
+        if note_ok and note_id:
+            pin_ok, pin_error = _pin_note_on_ticket(ticket_id, note_id)
+
         result.update(
             {
+                "ticketSyncOk": True,
+                "ticketId": ticket_id,
+                "ticketCreated": True,
+                "ticketUpdated": False,
+                "ticketAssociationOk": bool(assoc_contact_ok and assoc_company_ok),
+                "ticketReason": "HubSpot ticket created successfully.",
+                "ticketSyncError": "",
+                "ticketStageUsed": OPSLENS_STAGE_NEW_ALERT,
+                "ticketRepeatCount": "1",
                 "timelineNoteCreated": note_ok,
                 "timelineNoteId": note_id,
                 "timelineNoteAssociationOk": note_ok,
                 "timelineNoteError": note_error,
+                "timelineNotePinned": pin_ok,
+                "timelineNotePinError": pin_error,
             }
         )
         return result
