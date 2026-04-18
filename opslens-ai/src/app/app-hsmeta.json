@@ -1,4 +1,4 @@
-{
+﻿{
   "uid": "opslens_ai_app",
   "type": "app",
   "config": {
@@ -8,7 +8,7 @@
     "auth": {
       "type": "oauth",
       "redirectUrls": [
-        "http://localhost:3000/oauth-callback"
+        "https://api.app-sync.com/oauth-callback"
       ],
       "requiredScopes": [
         "oauth",
