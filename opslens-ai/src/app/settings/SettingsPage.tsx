@@ -22,6 +22,7 @@ hubspot.extend(({ context }) => {
 const SettingsPage = ({ context }) => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [hasLoadedSettings, setHasLoadedSettings] = useState(false);
   const [saveMessage, setSaveMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [slackWebhookUrl, setSlackWebhookUrl] = useState("");
@@ -61,6 +62,7 @@ const SettingsPage = ({ context }) => {
       setSlackWebhookUrl(nextSlackWebhookUrl);
       setAlertThreshold(nextAlertThreshold);
       setCriticalWorkflows(nextCriticalWorkflows);
+      setHasLoadedSettings(true);
 
       const lastSavedAt =
         data?.savedAtUtc ??
@@ -130,6 +132,8 @@ const SettingsPage = ({ context }) => {
     );
   }, [settingsUrl]);
 
+  const formLocked = loading || saving || !hasLoadedSettings;
+
   return (
     <Flex direction="column" gap="medium">
       <EmptyState title="OpsLens AI settings" layout="vertical">
@@ -149,7 +153,22 @@ const SettingsPage = ({ context }) => {
             ? `Error: ${errorMessage}`
             : "No settings fetch error detected."}
         </Text>
+        {!hasLoadedSettings ? (
+          <Text>Settings must load successfully before you can edit or save them.</Text>
+        ) : null}
         <Text>{saveMessage ? saveMessage : "No settings save event yet."}</Text>
+        {errorMessage ? (
+          <Button
+            onClick={() => {
+              loadSettings().catch((err) =>
+                console.error("Unexpected settings retry error", err)
+              );
+            }}
+            disabled={loading || saving}
+          >
+            Retry loading settings
+          </Button>
+        ) : null}
       </Box>
 
       <Divider />
@@ -169,6 +188,7 @@ const SettingsPage = ({ context }) => {
             value={slackWebhookUrl}
             onChange={(value) => setSlackWebhookUrl(String(value))}
             placeholder="https://hooks.slack.com/services/..."
+            readOnly={formLocked}
           />
 
           <Select
@@ -176,6 +196,7 @@ const SettingsPage = ({ context }) => {
             name="alertThreshold"
             value={alertThreshold}
             onChange={(value) => setAlertThreshold(String(value))}
+            readOnly={formLocked}
             options={[
               { label: "Critical", value: "critical" },
               { label: "High", value: "high" },
@@ -190,9 +211,10 @@ const SettingsPage = ({ context }) => {
             onChange={(value) => setCriticalWorkflows(String(value))}
             placeholder={"Quote Sync\nOwner Routing\nImport Cleanup"}
             description="One workflow name per line."
+            readOnly={formLocked}
           />
 
-          <Button type="submit" disabled={loading || saving}>
+          <Button type="submit" disabled={formLocked}>
             {saving ? "Saving..." : "Save settings"}
           </Button>
         </Flex>
