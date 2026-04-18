@@ -1,4 +1,4 @@
-
+﻿
 import React, { useEffect, useState } from "react";
 import {
   Box,
@@ -14,7 +14,7 @@ import {
   hubspot,
 } from "@hubspot/ui-extensions";
 
-const BACKEND_BASE_URL = "https://opslens.local";
+const BACKEND_BASE_URL = "https://api.app-sync.com";
 
 hubspot.extend(({ context }) => {
   return <SettingsPage context={context} />;
@@ -165,3 +165,4 @@ const SettingsPage = ({ context }) => {
     </Flex>
   );
 };
+
