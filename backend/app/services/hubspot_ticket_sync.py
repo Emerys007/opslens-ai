@@ -6,6 +6,9 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from app.db import get_session, init_db
+from app.services.hubspot_oauth import get_portal_access_token
+
 BASE_URL = "https://api.hubapi.com"
 
 # Dedicated OpsLens ticket pipeline and stage IDs
@@ -42,21 +45,49 @@ NOTE_TO_COMPANY_ASSOCIATION_TYPE_ID = 190
 NOTE_TO_TICKET_ASSOCIATION_TYPE_ID = 228
 
 
-def _token() -> str:
+def _fallback_private_app_token() -> str:
     return os.getenv("HUBSPOT_PRIVATE_APP_TOKEN", "").strip()
 
 
-def _headers() -> dict[str, str]:
-    token = _token()
-    if not token:
-        raise RuntimeError("HUBSPOT_PRIVATE_APP_TOKEN is not configured.")
+def _resolve_token_for_portal(portal_id: str) -> str:
+    cleaned_portal_id = str(portal_id or "").strip()
+    last_error = ""
+
+    if cleaned_portal_id and init_db():
+        session = get_session()
+        if session is not None:
+            try:
+                return get_portal_access_token(session, cleaned_portal_id)
+            except Exception as exc:
+                last_error = str(exc)
+            finally:
+                session.close()
+
+    fallback = _fallback_private_app_token()
+    if fallback:
+        return fallback
+
+    if cleaned_portal_id:
+        raise RuntimeError(
+            f"No HubSpot OAuth token is available for portal {cleaned_portal_id}. {last_error}".strip()
+        )
+
+    raise RuntimeError(
+        "No HubSpot OAuth token is available and HUBSPOT_PRIVATE_APP_TOKEN fallback is not configured."
+    )
+
+
+def _headers(token: str) -> dict[str, str]:
+    auth_token = str(token or "").strip()
+    if not auth_token:
+        raise RuntimeError("A HubSpot access token is required.")
     return {
-        "Authorization": f"Bearer {token}",
+        "Authorization": f"Bearer {auth_token}",
         "Content-Type": "application/json",
     }
 
 
-def _request_json(method: str, path: str, payload: dict | None = None) -> tuple[int, dict]:
+def _request_json(token: str, method: str, path: str, payload: dict | None = None) -> tuple[int, dict]:
     url = f"{BASE_URL}{path}"
     data = None
     if payload is not None:
@@ -65,7 +96,7 @@ def _request_json(method: str, path: str, payload: dict | None = None) -> tuple[
     req = urllib.request.Request(
         url,
         data=data,
-        headers=_headers(),
+        headers=_headers(token),
         method=method,
     )
 
@@ -232,6 +263,7 @@ def _timeline_note_body(
 
 def _create_ticket_timeline_note(
     *,
+    token: str,
     ticket_id: str,
     contact_id: str,
     company_id: str,
@@ -306,7 +338,7 @@ def _create_ticket_timeline_note(
         "associations": associations,
     }
 
-    status, body = _request_json("POST", "/crm/v3/objects/notes", payload)
+    status, body = _request_json(token, "POST", "/crm/v3/objects/notes", payload)
     if status not in (200, 201):
         return False, "", json.dumps(body)
 
@@ -314,11 +346,12 @@ def _create_ticket_timeline_note(
     return True, note_id, ""
 
 
-def _pin_note_on_ticket(ticket_id: str, note_id: str) -> tuple[bool, str]:
+def _pin_note_on_ticket(token: str, ticket_id: str, note_id: str) -> tuple[bool, str]:
     if not ticket_id or not note_id:
         return False, "Missing ticket ID or note ID."
 
     status, body = _request_json(
+        token,
         "PATCH",
         f"/crm/v3/objects/tickets/{urllib.parse.quote(ticket_id)}",
         {
@@ -333,9 +366,9 @@ def _pin_note_on_ticket(ticket_id: str, note_id: str) -> tuple[bool, str]:
     return True, ""
 
 
-def _get_contact_company_id(contact_id: str) -> str:
+def _get_contact_company_id(token: str, contact_id: str) -> str:
     path = f"/crm/v3/objects/contacts/{urllib.parse.quote(contact_id)}?associations=companies"
-    status, body = _request_json("GET", path)
+    status, body = _request_json(token, "GET", path)
     if status != 200:
         return ""
 
@@ -350,7 +383,7 @@ def _get_contact_company_id(contact_id: str) -> str:
     return str(companies[0].get("id") or "").strip()
 
 
-def _ensure_ticket_contact_association(ticket_id: str, contact_id: str) -> bool:
+def _ensure_ticket_contact_association(token: str, ticket_id: str, contact_id: str) -> bool:
     if not ticket_id or not contact_id:
         return False
 
@@ -359,11 +392,11 @@ def _ensure_ticket_contact_association(ticket_id: str, contact_id: str) -> bool:
         f"/associations/contacts/{urllib.parse.quote(contact_id)}"
         f"/{TICKET_TO_CONTACT_ASSOCIATION_TYPE_ID}"
     )
-    status, _ = _request_json("PUT", path)
+    status, _ = _request_json(token, "PUT", path)
     return status in (200, 201, 204)
 
 
-def _ensure_ticket_company_association(ticket_id: str, company_id: str) -> bool:
+def _ensure_ticket_company_association(token: str, ticket_id: str, company_id: str) -> bool:
     if not ticket_id or not company_id:
         return False
 
@@ -372,11 +405,11 @@ def _ensure_ticket_company_association(ticket_id: str, company_id: str) -> bool:
         f"/associations/companies/{urllib.parse.quote(company_id)}"
         f"/{TICKET_TO_COMPANY_ASSOCIATION_TYPE_ID}"
     )
-    status, _ = _request_json("PUT", path)
+    status, _ = _request_json(token, "PUT", path)
     return status in (200, 201, 204)
 
 
-def _search_matching_tickets(contact_id: str, workflow_id: str, limit: int = 20) -> list[dict]:
+def _search_matching_tickets(token: str, contact_id: str, workflow_id: str, limit: int = 20) -> list[dict]:
     payload = {
         "filterGroups": [
             {
@@ -420,15 +453,15 @@ def _search_matching_tickets(contact_id: str, workflow_id: str, limit: int = 20)
         "limit": limit,
     }
 
-    status, body = _request_json("POST", "/crm/v3/objects/tickets/search", payload)
+    status, body = _request_json(token, "POST", "/crm/v3/objects/tickets/search", payload)
     if status != 200:
         return []
 
     return body.get("results", []) or []
 
 
-def _find_existing_open_ticket(contact_id: str, workflow_id: str) -> dict | None:
-    for row in _search_matching_tickets(contact_id, workflow_id, limit=20):
+def _find_existing_open_ticket(token: str, contact_id: str, workflow_id: str) -> dict | None:
+    for row in _search_matching_tickets(token, contact_id, workflow_id, limit=20):
         props = row.get("properties", {}) or {}
         stage_id = str(props.get("hs_pipeline_stage") or "").strip()
         if stage_id in OPEN_STAGE_IDS:
@@ -452,8 +485,8 @@ def _is_recently_resolved_ticket(props: dict[str, Any]) -> bool:
     return age <= timedelta(hours=OPSLENS_REOPEN_WINDOW_HOURS)
 
 
-def _find_recently_resolved_matching_ticket(contact_id: str, workflow_id: str) -> dict | None:
-    for row in _search_matching_tickets(contact_id, workflow_id, limit=20):
+def _find_recently_resolved_matching_ticket(token: str, contact_id: str, workflow_id: str) -> dict | None:
+    for row in _search_matching_tickets(token, contact_id, workflow_id, limit=20):
         props = row.get("properties", {}) or {}
         if _is_recently_resolved_ticket(props):
             return row
@@ -505,6 +538,7 @@ def _build_ticket_properties(
 
 def _reopen_resolved_ticket(
     *,
+    token: str,
     existing_ticket: dict,
     portal_id: str,
     contact_id: str,
@@ -545,6 +579,7 @@ def _reopen_resolved_ticket(
     update_properties["opslens_ticket_resolution_reason"] = ""
 
     status, body = _request_json(
+        token,
         "PATCH",
         f"/crm/v3/objects/tickets/{urllib.parse.quote(ticket_id)}",
         {"properties": update_properties},
@@ -610,12 +645,13 @@ def sync_hubspot_ticket_for_alert(payload: dict) -> dict:
             result["ticketReason"] = "HubSpot ticket sync skipped because required alert fields were missing."
             return result
 
+        token = _resolve_token_for_portal(portal_id)
         result["ticketSyncAttempted"] = True
 
-        company_id = _get_contact_company_id(contact_id)
+        company_id = _get_contact_company_id(token, contact_id)
 
         # 1) Reuse matching open ticket when one already exists
-        existing = _find_existing_open_ticket(contact_id, workflow_id)
+        existing = _find_existing_open_ticket(token, contact_id, workflow_id)
         if existing:
             ticket_id = str(existing.get("id") or "").strip()
             props = existing.get("properties", {}) or {}
@@ -654,6 +690,7 @@ def sync_hubspot_ticket_for_alert(payload: dict) -> dict:
             )
 
             status, body = _request_json(
+                token,
                 "PATCH",
                 f"/crm/v3/objects/tickets/{urllib.parse.quote(ticket_id)}",
                 {"properties": update_properties},
@@ -663,12 +700,13 @@ def sync_hubspot_ticket_for_alert(payload: dict) -> dict:
                 result["ticketReason"] = f"HubSpot ticket update failed: {body}"
                 return result
 
-            assoc_contact_ok = _ensure_ticket_contact_association(ticket_id, contact_id)
+            assoc_contact_ok = _ensure_ticket_contact_association(token, ticket_id, contact_id)
             assoc_company_ok = True
             if company_id:
-                assoc_company_ok = _ensure_ticket_company_association(ticket_id, company_id)
+                assoc_company_ok = _ensure_ticket_company_association(token, ticket_id, company_id)
 
             note_ok, note_id, note_error = _create_ticket_timeline_note(
+                token=token,
                 ticket_id=ticket_id,
                 contact_id=contact_id,
                 company_id=company_id,
@@ -688,7 +726,7 @@ def sync_hubspot_ticket_for_alert(payload: dict) -> dict:
             pin_ok = False
             pin_error = ""
             if note_ok and note_id:
-                pin_ok, pin_error = _pin_note_on_ticket(ticket_id, note_id)
+                pin_ok, pin_error = _pin_note_on_ticket(token, ticket_id, note_id)
 
             result.update(
                 {
@@ -712,9 +750,10 @@ def sync_hubspot_ticket_for_alert(payload: dict) -> dict:
             return result
 
         # 2) If no open ticket exists, reopen the most recent recently-resolved matching ticket
-        resolved_ticket = _find_recently_resolved_matching_ticket(contact_id, workflow_id)
+        resolved_ticket = _find_recently_resolved_matching_ticket(token, contact_id, workflow_id)
         if resolved_ticket:
             reopened = _reopen_resolved_ticket(
+                token=token,
                 existing_ticket=resolved_ticket,
                 portal_id=portal_id,
                 contact_id=contact_id,
@@ -737,14 +776,15 @@ def sync_hubspot_ticket_for_alert(payload: dict) -> dict:
             stage_used = str(reopened.get("stageUsed") or OPSLENS_STAGE_NEW_ALERT)
             repeat_count = _safe_int(reopened.get("repeatCount"), 1)
 
-            assoc_contact_ok = _ensure_ticket_contact_association(ticket_id, contact_id)
+            assoc_contact_ok = _ensure_ticket_contact_association(token, ticket_id, contact_id)
             assoc_company_ok = True
             if company_id:
-                assoc_company_ok = _ensure_ticket_company_association(ticket_id, company_id)
+                assoc_company_ok = _ensure_ticket_company_association(token, ticket_id, company_id)
 
             ticket_reason = "Recently resolved OpsLens ticket reopened and moved back to New Alert."
 
             note_ok, note_id, note_error = _create_ticket_timeline_note(
+                token=token,
                 ticket_id=ticket_id,
                 contact_id=contact_id,
                 company_id=company_id,
@@ -764,7 +804,7 @@ def sync_hubspot_ticket_for_alert(payload: dict) -> dict:
             pin_ok = False
             pin_error = ""
             if note_ok and note_id:
-                pin_ok, pin_error = _pin_note_on_ticket(ticket_id, note_id)
+                pin_ok, pin_error = _pin_note_on_ticket(token, ticket_id, note_id)
 
             result.update(
                 {
@@ -804,6 +844,7 @@ def sync_hubspot_ticket_for_alert(payload: dict) -> dict:
         )
 
         status, body = _request_json(
+            token,
             "POST",
             "/crm/v3/objects/tickets",
             {"properties": create_properties},
@@ -815,12 +856,13 @@ def sync_hubspot_ticket_for_alert(payload: dict) -> dict:
 
         ticket_id = str(body.get("id") or "").strip()
 
-        assoc_contact_ok = _ensure_ticket_contact_association(ticket_id, contact_id)
+        assoc_contact_ok = _ensure_ticket_contact_association(token, ticket_id, contact_id)
         assoc_company_ok = True
         if company_id:
-            assoc_company_ok = _ensure_ticket_company_association(ticket_id, company_id)
+            assoc_company_ok = _ensure_ticket_company_association(token, ticket_id, company_id)
 
         note_ok, note_id, note_error = _create_ticket_timeline_note(
+            token=token,
             ticket_id=ticket_id,
             contact_id=contact_id,
             company_id=company_id,
@@ -840,7 +882,7 @@ def sync_hubspot_ticket_for_alert(payload: dict) -> dict:
         pin_ok = False
         pin_error = ""
         if note_ok and note_id:
-            pin_ok, pin_error = _pin_note_on_ticket(ticket_id, note_id)
+            pin_ok, pin_error = _pin_note_on_ticket(token, ticket_id, note_id)
 
         result.update(
             {

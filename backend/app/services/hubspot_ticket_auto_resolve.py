@@ -6,6 +6,12 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from sqlalchemy import select
+
+from app.db import get_session, init_db
+from app.models.hubspot_installation import HubSpotInstallation
+from app.services.hubspot_oauth import get_portal_access_token
+
 BASE_URL = "https://api.hubapi.com"
 
 OPSLENS_PIPELINE_ID = os.getenv("HUBSPOT_OPSLENS_PIPELINE_ID", "890820374").strip()
@@ -20,21 +26,73 @@ NOTE_TO_COMPANY_ASSOCIATION_TYPE_ID = 190
 NOTE_TO_TICKET_ASSOCIATION_TYPE_ID = 228
 
 
-def _token() -> str:
+def _fallback_private_app_token() -> str:
     return os.getenv("HUBSPOT_PRIVATE_APP_TOKEN", "").strip()
 
 
-def _headers() -> dict[str, str]:
-    token = _token()
-    if not token:
-        raise RuntimeError("HUBSPOT_PRIVATE_APP_TOKEN is not configured.")
+def _resolve_token_for_portal(portal_id: str) -> str:
+    cleaned_portal_id = str(portal_id or "").strip()
+    last_error = ""
+
+    if cleaned_portal_id and init_db():
+        session = get_session()
+        if session is not None:
+            try:
+                return get_portal_access_token(session, cleaned_portal_id)
+            except Exception as exc:
+                last_error = str(exc)
+            finally:
+                session.close()
+
+    fallback = _fallback_private_app_token()
+    if fallback:
+        return fallback
+
+    if cleaned_portal_id:
+        raise RuntimeError(
+            f"No HubSpot OAuth token is available for portal {cleaned_portal_id}. {last_error}".strip()
+        )
+
+    raise RuntimeError(
+        "No HubSpot OAuth token is available and HUBSPOT_PRIVATE_APP_TOKEN fallback is not configured."
+    )
+
+
+def _installed_portal_ids() -> list[str]:
+    if not init_db():
+        return []
+
+    session = get_session()
+    if session is None:
+        return []
+
+    try:
+        rows = session.execute(
+            select(HubSpotInstallation.portal_id).where(HubSpotInstallation.is_active.is_(True))
+        ).scalars().all()
+        values = []
+        seen = set()
+        for row in rows:
+            portal_id = str(row or "").strip()
+            if portal_id and portal_id not in seen:
+                seen.add(portal_id)
+                values.append(portal_id)
+        return values
+    finally:
+        session.close()
+
+
+def _headers(token: str) -> dict[str, str]:
+    auth_token = str(token or "").strip()
+    if not auth_token:
+        raise RuntimeError("A HubSpot access token is required.")
     return {
-        "Authorization": f"Bearer {token}",
+        "Authorization": f"Bearer {auth_token}",
         "Content-Type": "application/json",
     }
 
 
-def _request_json(method: str, path: str, payload: dict | None = None) -> tuple[int, dict]:
+def _request_json(token: str, method: str, path: str, payload: dict | None = None) -> tuple[int, dict]:
     url = f"{BASE_URL}{path}"
     data = None
     if payload is not None:
@@ -43,7 +101,7 @@ def _request_json(method: str, path: str, payload: dict | None = None) -> tuple[
     req = urllib.request.Request(
         url,
         data=data,
-        headers=_headers(),
+        headers=_headers(token),
         method=method,
     )
 
@@ -81,7 +139,7 @@ def _now_utc_iso() -> str:
     return _now_utc().replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def _get_contact_healthy_signal_at(contact_id: str) -> datetime | None:
+def _get_contact_healthy_signal_at(token: str, contact_id: str) -> datetime | None:
     if not contact_id:
         return None
 
@@ -89,7 +147,7 @@ def _get_contact_healthy_signal_at(contact_id: str) -> datetime | None:
         f"/crm/v3/objects/contacts/{urllib.parse.quote(contact_id)}"
         "?properties=opslens_healthy_signal_at"
     )
-    status, body = _request_json("GET", path)
+    status, body = _request_json(token, "GET", path)
     if status != 200:
         return None
 
@@ -97,12 +155,12 @@ def _get_contact_healthy_signal_at(contact_id: str) -> datetime | None:
     return _parse_dt(props.get("opslens_healthy_signal_at"))
 
 
-def _get_contact_company_id(contact_id: str) -> str:
+def _get_contact_company_id(token: str, contact_id: str) -> str:
     if not contact_id:
         return ""
 
     path = f"/crm/v3/objects/contacts/{urllib.parse.quote(contact_id)}?associations=companies"
-    status, body = _request_json("GET", path)
+    status, body = _request_json(token, "GET", path)
     if status != 200:
         return ""
 
@@ -117,7 +175,7 @@ def _get_contact_company_id(contact_id: str) -> str:
     return str(companies[0].get("id") or "").strip()
 
 
-def _search_waiting_tickets(limit: int = 100) -> list[dict]:
+def _search_waiting_tickets(token: str, limit: int = 100) -> list[dict]:
     payload = {
         "filterGroups": [
             {
@@ -160,14 +218,14 @@ def _search_waiting_tickets(limit: int = 100) -> list[dict]:
         "limit": max(1, min(limit, 200)),
     }
 
-    status, body = _request_json("POST", "/crm/v3/objects/tickets/search", payload)
+    status, body = _request_json(token, "POST", "/crm/v3/objects/tickets/search", payload)
     if status != 200:
         raise RuntimeError(f"Ticket search failed: {body}")
 
     return body.get("results", []) or []
 
 
-def _resolve_ticket(ticket_id: str, reason: str, resolved_at_utc: str) -> tuple[bool, str]:
+def _resolve_ticket(token: str, ticket_id: str, reason: str, resolved_at_utc: str) -> tuple[bool, str]:
     payload = {
         "properties": {
             "hs_pipeline": OPSLENS_PIPELINE_ID,
@@ -178,6 +236,7 @@ def _resolve_ticket(ticket_id: str, reason: str, resolved_at_utc: str) -> tuple[
     }
 
     status, body = _request_json(
+        token,
         "PATCH",
         f"/crm/v3/objects/tickets/{urllib.parse.quote(ticket_id)}",
         payload,
@@ -232,6 +291,7 @@ def _build_auto_resolve_note_body(
 
 def _create_auto_resolve_note(
     *,
+    token: str,
     ticket_id: str,
     contact_id: str,
     company_id: str,
@@ -306,7 +366,7 @@ def _create_auto_resolve_note(
         "associations": associations,
     }
 
-    status, body = _request_json("POST", "/crm/v3/objects/notes", payload)
+    status, body = _request_json(token, "POST", "/crm/v3/objects/notes", payload)
     if status not in (200, 201):
         return False, "", json.dumps(body)
 
@@ -314,11 +374,12 @@ def _create_auto_resolve_note(
     return True, note_id, ""
 
 
-def _pin_note_on_ticket(ticket_id: str, note_id: str) -> tuple[bool, str]:
+def _pin_note_on_ticket(token: str, ticket_id: str, note_id: str) -> tuple[bool, str]:
     if not ticket_id or not note_id:
         return False, "Missing ticket ID or note ID."
 
     status, body = _request_json(
+        token,
         "PATCH",
         f"/crm/v3/objects/tickets/{urllib.parse.quote(ticket_id)}",
         {
@@ -357,119 +418,162 @@ def auto_resolve_waiting_tickets(
         "resolvedDetails": [],
     }
 
-    tickets = _search_waiting_tickets(limit=max_records)
-    summary["searched"] = len(tickets)
+    portal_ids = _installed_portal_ids()
+    portal_tokens: list[tuple[str, str]] = []
 
-    for row in tickets:
-        ticket_id = str(row.get("id") or "").strip()
-        props = row.get("properties", {}) or {}
-
-        contact_id = str(props.get("opslens_ticket_contact_id") or "").strip()
-        workflow_id = str(props.get("opslens_ticket_workflow_id") or "").strip()
-        callback_id = str(props.get("opslens_ticket_callback_id") or "").strip()
-        severity = str(props.get("opslens_ticket_severity") or "").strip().lower() or "critical"
-        delivery_status = str(props.get("opslens_ticket_delivery_status") or "").strip().upper() or "SLACK_SENT"
-        delivery_reason = str(props.get("opslens_ticket_reason") or "").strip()
-        repeat_count = max(1, int(str(props.get("opslens_ticket_repeat_count") or "1").strip() or "1"))
-
-        latest_alert_text = str(props.get("opslens_ticket_last_alert_at") or "").strip()
-        last_alert_at = _parse_dt(latest_alert_text)
-
-        healthy_signal_at = _get_contact_healthy_signal_at(contact_id)
-        healthy_signal_text = (
-            healthy_signal_at.replace(microsecond=0).isoformat().replace("+00:00", "Z")
-            if healthy_signal_at
-            else ""
-        )
-
-        reason = ""
-        resolution_mode = ""
-
-        if healthy_signal_at and last_alert_at and healthy_signal_at > last_alert_at:
-            reason = "Healthy follow-up signal received after the latest alert."
-            resolution_mode = "healthy_signal"
-        elif last_alert_at and now_utc >= (last_alert_at + timedelta(hours=quiet_hours)):
-            reason = f"No repeat alert received for {quiet_hours} hours while ticket was in Waiting / Monitoring."
-            resolution_mode = "quiet_period"
-        else:
-            summary["skipped"] += 1
-            continue
-
-        resolved_at_utc = _now_utc_iso()
-        ok, err = _resolve_ticket(ticket_id, reason, resolved_at_utc)
-        if not ok:
+    for portal_id in portal_ids:
+        try:
+            portal_tokens.append((portal_id, _resolve_token_for_portal(portal_id)))
+        except Exception as exc:
             summary["errors"].append(
                 {
-                    "ticketId": ticket_id,
-                    "error": err,
+                    "portalId": portal_id,
+                    "error": str(exc),
+                }
+            )
+
+    if not portal_tokens:
+        fallback = _fallback_private_app_token()
+        if fallback:
+            portal_tokens.append(("fallback-private-app", fallback))
+        else:
+            summary["errors"].append(
+                {
+                    "portalId": "",
+                    "error": "No active HubSpot OAuth installations were found and no HUBSPOT_PRIVATE_APP_TOKEN fallback is configured.",
+                }
+            )
+            return summary
+
+    for portal_id, token in portal_tokens:
+        try:
+            tickets = _search_waiting_tickets(token, limit=max_records)
+        except Exception as exc:
+            summary["errors"].append(
+                {
+                    "portalId": portal_id,
+                    "error": str(exc),
                 }
             )
             continue
 
-        company_id = _get_contact_company_id(contact_id)
+        summary["searched"] += len(tickets)
 
-        note_ok, note_id, note_error = _create_auto_resolve_note(
-            ticket_id=ticket_id,
-            contact_id=contact_id,
-            company_id=company_id,
-            workflow_id=workflow_id,
-            callback_id=callback_id,
-            severity=severity,
-            delivery_status=delivery_status,
-            delivery_reason=delivery_reason,
-            repeat_count=repeat_count,
-            resolution_mode=resolution_mode,
-            resolution_reason=reason,
-            latest_alert_at_utc=latest_alert_text,
-            healthy_signal_at_utc=healthy_signal_text,
-            timestamp_utc=resolved_at_utc,
-        )
+        for row in tickets:
+            ticket_id = str(row.get("id") or "").strip()
+            props = row.get("properties", {}) or {}
 
-        pin_ok = False
-        pin_error = ""
-        if note_ok and note_id:
-            pin_ok, pin_error = _pin_note_on_ticket(ticket_id, note_id)
+            contact_id = str(props.get("opslens_ticket_contact_id") or "").strip()
+            workflow_id = str(props.get("opslens_ticket_workflow_id") or "").strip()
+            callback_id = str(props.get("opslens_ticket_callback_id") or "").strip()
+            severity = str(props.get("opslens_ticket_severity") or "").strip().lower() or "critical"
+            delivery_status = str(props.get("opslens_ticket_delivery_status") or "").strip().upper() or "SLACK_SENT"
+            delivery_reason = str(props.get("opslens_ticket_reason") or "").strip()
+            repeat_count = max(1, int(str(props.get("opslens_ticket_repeat_count") or "1").strip() or "1"))
 
-        summary["resolvedTicketIds"].append(ticket_id)
+            latest_alert_text = str(props.get("opslens_ticket_last_alert_at") or "").strip()
+            last_alert_at = _parse_dt(latest_alert_text)
 
-        if resolution_mode == "healthy_signal":
-            summary["resolvedHealthySignal"] += 1
-        else:
-            summary["resolvedQuietPeriod"] += 1
-
-        if note_ok:
-            summary["notesCreated"] += 1
-        else:
-            summary["noteErrors"].append(
-                {
-                    "ticketId": ticket_id,
-                    "error": note_error,
-                }
+            healthy_signal_at = _get_contact_healthy_signal_at(token, contact_id)
+            healthy_signal_text = (
+                healthy_signal_at.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+                if healthy_signal_at
+                else ""
             )
 
-        if pin_ok:
-            summary["notesPinned"] += 1
-        elif note_ok:
-            summary["pinErrors"].append(
+            reason = ""
+            resolution_mode = ""
+
+            if healthy_signal_at and last_alert_at and healthy_signal_at > last_alert_at:
+                reason = "Healthy follow-up signal received after the latest alert."
+                resolution_mode = "healthy_signal"
+            elif last_alert_at and now_utc >= (last_alert_at + timedelta(hours=quiet_hours)):
+                reason = f"No repeat alert received for {quiet_hours} hours while ticket was in Waiting / Monitoring."
+                resolution_mode = "quiet_period"
+            else:
+                summary["skipped"] += 1
+                continue
+
+            resolved_at_utc = _now_utc_iso()
+            ok, err = _resolve_ticket(token, ticket_id, reason, resolved_at_utc)
+            if not ok:
+                summary["errors"].append(
+                    {
+                        "portalId": portal_id,
+                        "ticketId": ticket_id,
+                        "error": err,
+                    }
+                )
+                continue
+
+            company_id = _get_contact_company_id(token, contact_id)
+
+            note_ok, note_id, note_error = _create_auto_resolve_note(
+                token=token,
+                ticket_id=ticket_id,
+                contact_id=contact_id,
+                company_id=company_id,
+                workflow_id=workflow_id,
+                callback_id=callback_id,
+                severity=severity,
+                delivery_status=delivery_status,
+                delivery_reason=delivery_reason,
+                repeat_count=repeat_count,
+                resolution_mode=resolution_mode,
+                resolution_reason=reason,
+                latest_alert_at_utc=latest_alert_text,
+                healthy_signal_at_utc=healthy_signal_text,
+                timestamp_utc=resolved_at_utc,
+            )
+
+            pin_ok = False
+            pin_error = ""
+            if note_ok and note_id:
+                pin_ok, pin_error = _pin_note_on_ticket(token, ticket_id, note_id)
+
+            summary["resolvedTicketIds"].append(ticket_id)
+
+            if resolution_mode == "healthy_signal":
+                summary["resolvedHealthySignal"] += 1
+            else:
+                summary["resolvedQuietPeriod"] += 1
+
+            if note_ok:
+                summary["notesCreated"] += 1
+            else:
+                summary["noteErrors"].append(
+                    {
+                        "portalId": portal_id,
+                        "ticketId": ticket_id,
+                        "error": note_error,
+                    }
+                )
+
+            if pin_ok:
+                summary["notesPinned"] += 1
+            elif note_ok:
+                summary["pinErrors"].append(
+                    {
+                        "portalId": portal_id,
+                        "ticketId": ticket_id,
+                        "noteId": note_id,
+                        "error": pin_error,
+                    }
+                )
+
+            summary["resolvedDetails"].append(
                 {
+                    "portalId": portal_id,
                     "ticketId": ticket_id,
+                    "resolutionMode": resolution_mode,
+                    "resolutionReason": reason,
+                    "resolvedAt": resolved_at_utc,
+                    "noteCreated": note_ok,
                     "noteId": note_id,
-                    "error": pin_error,
+                    "noteError": note_error,
+                    "notePinned": pin_ok,
+                    "pinError": pin_error,
                 }
             )
-
-        summary["resolvedDetails"].append(
-            {
-                "ticketId": ticket_id,
-                "resolutionMode": resolution_mode,
-                "resolutionReason": reason,
-                "resolvedAt": resolved_at_utc,
-                "noteCreated": note_ok,
-                "noteId": note_id,
-                "noteError": note_error,
-                "notePinned": pin_ok,
-                "pinError": pin_error,
-            }
-        )
 
     return summary

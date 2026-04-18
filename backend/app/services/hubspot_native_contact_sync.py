@@ -6,6 +6,12 @@ import os
 import urllib.error
 import urllib.request
 
+from sqlalchemy import desc, select
+
+from app.db import get_session, init_db
+from app.models.alert_event import AlertEvent
+from app.services.hubspot_oauth import get_portal_access_token
+
 
 HUBSPOT_API_BASE = "https://api.hubapi.com"
 
@@ -22,6 +28,92 @@ def _to_epoch_ms(value: str) -> str:
     return str(int(dt.timestamp() * 1000))
 
 
+def _fallback_private_app_token() -> str:
+    return str(os.getenv("HUBSPOT_PRIVATE_APP_TOKEN", "") or "").strip()
+
+
+def _lookup_portal_id_from_alert_event(
+    *,
+    callback_id: str,
+    contact_id: str,
+    workflow_id: str,
+) -> str:
+    if not init_db():
+        return ""
+
+    session = get_session()
+    if session is None:
+        return ""
+
+    try:
+        if callback_id:
+            stmt = (
+                select(AlertEvent)
+                .where(AlertEvent.callback_id == str(callback_id).strip())
+                .order_by(desc(AlertEvent.received_at_utc))
+                .limit(1)
+            )
+            row = session.execute(stmt).scalars().first()
+            if row and str(row.portal_id or "").strip():
+                return str(row.portal_id).strip()
+
+        if contact_id and workflow_id:
+            stmt = (
+                select(AlertEvent)
+                .where(AlertEvent.object_id == str(contact_id).strip())
+                .where(AlertEvent.workflow_id == str(workflow_id).strip())
+                .order_by(desc(AlertEvent.received_at_utc))
+                .limit(1)
+            )
+            row = session.execute(stmt).scalars().first()
+            if row and str(row.portal_id or "").strip():
+                return str(row.portal_id).strip()
+
+        return ""
+    finally:
+        session.close()
+
+
+def _resolve_token(
+    *,
+    portal_id: str,
+    callback_id: str,
+    contact_id: str,
+    workflow_id: str,
+) -> tuple[str, str]:
+    resolved_portal_id = str(portal_id or "").strip()
+
+    if not resolved_portal_id:
+        resolved_portal_id = _lookup_portal_id_from_alert_event(
+            callback_id=callback_id,
+            contact_id=contact_id,
+            workflow_id=workflow_id,
+        )
+
+    if resolved_portal_id and init_db():
+        session = get_session()
+        if session is not None:
+            try:
+                return get_portal_access_token(session, resolved_portal_id), resolved_portal_id
+            except Exception:
+                pass
+            finally:
+                session.close()
+
+    fallback = _fallback_private_app_token()
+    if fallback:
+        return fallback, resolved_portal_id
+
+    if resolved_portal_id:
+        raise RuntimeError(
+            f"No HubSpot OAuth token is available for portal {resolved_portal_id} and no private-app fallback is configured."
+        )
+
+    raise RuntimeError(
+        "No portal_id could be resolved for this contact sync and HUBSPOT_PRIVATE_APP_TOKEN fallback is not configured."
+    )
+
+
 def sync_latest_alert_to_hubspot_contact(
     *,
     contact_id: str,
@@ -33,14 +125,21 @@ def sync_latest_alert_to_hubspot_contact(
     reason: str,
     analyst_note: str,
     delivery_status: str,
+    portal_id: str = "",
 ) -> tuple[bool, str, list[str]]:
-    token = str(os.getenv("HUBSPOT_PRIVATE_APP_TOKEN", "") or "").strip()
-    if not token:
-        return False, "HUBSPOT_PRIVATE_APP_TOKEN is not configured.", []
-
     contact_id = str(contact_id or "").strip()
     if not contact_id:
         return False, "No contact_id was provided.", []
+
+    try:
+        token, _ = _resolve_token(
+            portal_id=portal_id,
+            callback_id=callback_id,
+            contact_id=contact_id,
+            workflow_id=workflow_id,
+        )
+    except Exception as exc:
+        return False, str(exc), []
 
     properties = {
         "opslens_last_alert_at": _to_epoch_ms(received_at_utc),
