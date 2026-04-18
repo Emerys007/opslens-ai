@@ -11,7 +11,6 @@ from app.services.hubspot_oauth import get_portal_access_token
 
 BASE_URL = "https://api.hubapi.com"
 
-# Dedicated OpsLens ticket pipeline and stage IDs
 OPSLENS_PIPELINE_ID = os.getenv("HUBSPOT_OPSLENS_PIPELINE_ID", "890820374").strip()
 OPSLENS_STAGE_NEW_ALERT = os.getenv("HUBSPOT_OPSLENS_STAGE_NEW_ALERT", "1341759033").strip()
 OPSLENS_STAGE_INVESTIGATING = os.getenv("HUBSPOT_OPSLENS_STAGE_INVESTIGATING", "1341759034").strip()
@@ -19,7 +18,6 @@ OPSLENS_STAGE_WAITING = os.getenv("HUBSPOT_OPSLENS_STAGE_WAITING", "1341759035")
 OPSLENS_STAGE_RESOLVED = os.getenv("HUBSPOT_OPSLENS_STAGE_RESOLVED", "1341759036").strip()
 OPSLENS_STAGE_DUPLICATE = os.getenv("HUBSPOT_OPSLENS_STAGE_DUPLICATE", "1341759037").strip()
 
-# Recently resolved tickets inside this window can be reopened instead of creating a brand-new ticket
 OPSLENS_REOPEN_WINDOW_HOURS = int(
     os.getenv("HUBSPOT_OPSLENS_REOPEN_WINDOW_HOURS", "168").strip() or "168"
 )
@@ -35,46 +33,30 @@ CLOSED_STAGE_IDS = {
     OPSLENS_STAGE_DUPLICATE,
 }
 
-# Default HubSpot-defined association IDs for ticket -> other object
 TICKET_TO_CONTACT_ASSOCIATION_TYPE_ID = 16
 TICKET_TO_COMPANY_ASSOCIATION_TYPE_ID = 339
 
-# Default HubSpot-defined association IDs for note -> other object
 NOTE_TO_CONTACT_ASSOCIATION_TYPE_ID = 202
 NOTE_TO_COMPANY_ASSOCIATION_TYPE_ID = 190
 NOTE_TO_TICKET_ASSOCIATION_TYPE_ID = 228
 
 
-def _fallback_private_app_token() -> str:
-    return os.getenv("HUBSPOT_PRIVATE_APP_TOKEN", "").strip()
-
-
 def _resolve_token_for_portal(portal_id: str) -> str:
     cleaned_portal_id = str(portal_id or "").strip()
-    last_error = ""
+    if not cleaned_portal_id:
+        raise RuntimeError("portal_id is required to resolve a HubSpot OAuth token.")
 
-    if cleaned_portal_id and init_db():
-        session = get_session()
-        if session is not None:
-            try:
-                return get_portal_access_token(session, cleaned_portal_id)
-            except Exception as exc:
-                last_error = str(exc)
-            finally:
-                session.close()
+    if not init_db():
+        raise RuntimeError("Database is not available, so the OAuth installation token could not be resolved.")
 
-    fallback = _fallback_private_app_token()
-    if fallback:
-        return fallback
+    session = get_session()
+    if session is None:
+        raise RuntimeError("Database session could not be created, so the OAuth installation token could not be resolved.")
 
-    if cleaned_portal_id:
-        raise RuntimeError(
-            f"No HubSpot OAuth token is available for portal {cleaned_portal_id}. {last_error}".strip()
-        )
-
-    raise RuntimeError(
-        "No HubSpot OAuth token is available and HUBSPOT_PRIVATE_APP_TOKEN fallback is not configured."
-    )
+    try:
+        return get_portal_access_token(session, cleaned_portal_id)
+    finally:
+        session.close()
 
 
 def _headers(token: str) -> dict[str, str]:
@@ -168,10 +150,6 @@ def _parse_repeat_count(value: Any) -> int:
 
 
 def _get_next_repeated_alert_stage(current_stage_id: str) -> str:
-    """
-    Progress an open OpsLens ticket one step deeper:
-    New Alert -> Investigating -> Waiting / Monitoring -> Waiting / Monitoring
-    """
     current = str(current_stage_id or "").strip()
 
     if current == OPSLENS_STAGE_NEW_ALERT:
@@ -183,7 +161,6 @@ def _get_next_repeated_alert_stage(current_stage_id: str) -> str:
     if current == OPSLENS_STAGE_WAITING:
         return OPSLENS_STAGE_WAITING
 
-    # Safe fallback for unexpected open-state tickets
     return OPSLENS_STAGE_INVESTIGATING
 
 
@@ -279,10 +256,6 @@ def _create_ticket_timeline_note(
     event_label: str,
     timestamp_utc: str,
 ) -> tuple[bool, str, str]:
-    """
-    Create one native HubSpot note and associate it to the ticket, contact,
-    and optionally company in the same request.
-    """
     associations: list[dict[str, Any]] = [
         {
             "to": {"id": ticket_id},
@@ -574,7 +547,6 @@ def _reopen_resolved_ticket(
         first_alert_at_utc=first_alert_at_utc,
     )
 
-    # Clear resolution metadata because this ticket is being reopened
     update_properties["opslens_ticket_resolved_at"] = ""
     update_properties["opslens_ticket_resolution_reason"] = ""
 
@@ -650,7 +622,6 @@ def sync_hubspot_ticket_for_alert(payload: dict) -> dict:
 
         company_id = _get_contact_company_id(token, contact_id)
 
-        # 1) Reuse matching open ticket when one already exists
         existing = _find_existing_open_ticket(token, contact_id, workflow_id)
         if existing:
             ticket_id = str(existing.get("id") or "").strip()
@@ -749,7 +720,6 @@ def sync_hubspot_ticket_for_alert(payload: dict) -> dict:
             )
             return result
 
-        # 2) If no open ticket exists, reopen the most recent recently-resolved matching ticket
         resolved_ticket = _find_recently_resolved_matching_ticket(token, contact_id, workflow_id)
         if resolved_ticket:
             reopened = _reopen_resolved_ticket(
@@ -827,7 +797,6 @@ def sync_hubspot_ticket_for_alert(payload: dict) -> dict:
             )
             return result
 
-        # 3) Otherwise create a new ticket
         create_properties = _build_ticket_properties(
             portal_id=portal_id,
             contact_id=contact_id,

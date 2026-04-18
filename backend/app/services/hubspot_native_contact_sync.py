@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
-import os
 import urllib.error
 import urllib.request
 
@@ -26,10 +25,6 @@ def _to_epoch_ms(value: str) -> str:
         dt = dt.replace(tzinfo=timezone.utc)
 
     return str(int(dt.timestamp() * 1000))
-
-
-def _fallback_private_app_token() -> str:
-    return str(os.getenv("HUBSPOT_PRIVATE_APP_TOKEN", "") or "").strip()
 
 
 def _lookup_portal_id_from_alert_event(
@@ -90,28 +85,26 @@ def _resolve_token(
             workflow_id=workflow_id,
         )
 
-    if resolved_portal_id and init_db():
-        session = get_session()
-        if session is not None:
-            try:
-                return get_portal_access_token(session, resolved_portal_id), resolved_portal_id
-            except Exception:
-                pass
-            finally:
-                session.close()
-
-    fallback = _fallback_private_app_token()
-    if fallback:
-        return fallback, resolved_portal_id
-
-    if resolved_portal_id:
+    if not resolved_portal_id:
         raise RuntimeError(
-            f"No HubSpot OAuth token is available for portal {resolved_portal_id} and no private-app fallback is configured."
+            "No portal_id could be resolved for this contact sync."
         )
 
-    raise RuntimeError(
-        "No portal_id could be resolved for this contact sync and HUBSPOT_PRIVATE_APP_TOKEN fallback is not configured."
-    )
+    if not init_db():
+        raise RuntimeError(
+            "Database is not available, so the OAuth installation token could not be resolved."
+        )
+
+    session = get_session()
+    if session is None:
+        raise RuntimeError(
+            "Database session could not be created, so the OAuth installation token could not be resolved."
+        )
+
+    try:
+        return get_portal_access_token(session, resolved_portal_id), resolved_portal_id
+    finally:
+        session.close()
 
 
 def sync_latest_alert_to_hubspot_contact(

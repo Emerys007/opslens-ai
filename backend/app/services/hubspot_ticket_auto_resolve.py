@@ -20,42 +20,27 @@ OPSLENS_STAGE_RESOLVED = os.getenv("HUBSPOT_OPSLENS_STAGE_RESOLVED", "1341759036
 
 DEFAULT_QUIET_HOURS = int(os.getenv("OPSLENS_AUTO_RESOLVE_QUIET_HOURS", "24").strip() or "24")
 
-# HubSpot-defined note association type IDs
 NOTE_TO_CONTACT_ASSOCIATION_TYPE_ID = 202
 NOTE_TO_COMPANY_ASSOCIATION_TYPE_ID = 190
 NOTE_TO_TICKET_ASSOCIATION_TYPE_ID = 228
 
 
-def _fallback_private_app_token() -> str:
-    return os.getenv("HUBSPOT_PRIVATE_APP_TOKEN", "").strip()
-
-
 def _resolve_token_for_portal(portal_id: str) -> str:
     cleaned_portal_id = str(portal_id or "").strip()
-    last_error = ""
+    if not cleaned_portal_id:
+        raise RuntimeError("portal_id is required to resolve a HubSpot OAuth token.")
 
-    if cleaned_portal_id and init_db():
-        session = get_session()
-        if session is not None:
-            try:
-                return get_portal_access_token(session, cleaned_portal_id)
-            except Exception as exc:
-                last_error = str(exc)
-            finally:
-                session.close()
+    if not init_db():
+        raise RuntimeError("Database is not available, so the OAuth installation token could not be resolved.")
 
-    fallback = _fallback_private_app_token()
-    if fallback:
-        return fallback
+    session = get_session()
+    if session is None:
+        raise RuntimeError("Database session could not be created, so the OAuth installation token could not be resolved.")
 
-    if cleaned_portal_id:
-        raise RuntimeError(
-            f"No HubSpot OAuth token is available for portal {cleaned_portal_id}. {last_error}".strip()
-        )
-
-    raise RuntimeError(
-        "No HubSpot OAuth token is available and HUBSPOT_PRIVATE_APP_TOKEN fallback is not configured."
-    )
+    try:
+        return get_portal_access_token(session, cleaned_portal_id)
+    finally:
+        session.close()
 
 
 def _installed_portal_ids() -> list[str]:
@@ -433,17 +418,13 @@ def auto_resolve_waiting_tickets(
             )
 
     if not portal_tokens:
-        fallback = _fallback_private_app_token()
-        if fallback:
-            portal_tokens.append(("fallback-private-app", fallback))
-        else:
-            summary["errors"].append(
-                {
-                    "portalId": "",
-                    "error": "No active HubSpot OAuth installations were found and no HUBSPOT_PRIVATE_APP_TOKEN fallback is configured.",
-                }
-            )
-            return summary
+        summary["errors"].append(
+            {
+                "portalId": "",
+                "error": "No active HubSpot OAuth installations were found.",
+            }
+        )
+        return summary
 
     for portal_id, token in portal_tokens:
         try:
