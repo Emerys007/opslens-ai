@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from app.api.v1.router import api_router
 from app.config import settings
 from app.core.logging import configure_logging, logger
+from app.routes.oauth import router as oauth_router
 
 configure_logging()
 
@@ -31,6 +32,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Top-level OAuth routes must not sit behind /api/v1 because the configured
+# HubSpot redirect URL is https://api.app-sync.com/oauth-callback
+app.include_router(oauth_router)
+
 app.include_router(api_router, prefix="/api/v1")
 
 
@@ -41,4 +46,6 @@ def root():
         "environment": settings.app_env,
         "docs": "/docs",
         "health": "/api/v1/health",
+        "oauthStart": "/oauth/start",
+        "oauthCallback": "/oauth-callback",
     }

@@ -59,6 +59,7 @@ def init_db() -> bool:
         return False
 
     from app.models.alert_event import AlertEvent  # noqa: F401
+    from app.models.hubspot_installation import HubSpotInstallation  # noqa: F401
     from app.models.portal_setting import PortalSetting  # noqa: F401
     from app.models.webhook_event import WebhookEvent  # noqa: F401
 

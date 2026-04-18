@@ -1,5 +1,6 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+
 class Settings(BaseSettings):
     app_name: str = "OpsLens AI"
     app_env: str = "development"
@@ -13,10 +14,16 @@ class Settings(BaseSettings):
     hubspot_app_id: str = ""
     hubspot_webhook_secret: str = ""
 
+    hubspot_scopes: str = "oauth crm.objects.contacts.read crm.objects.contacts.write"
+    hubspot_optional_scopes: str = ""
+    oauth_state_secret: str = ""
+    oauth_state_ttl_seconds: int = 900
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
 
 settings = Settings()
