@@ -1,5 +1,4 @@
-﻿
-import React, { useEffect, useState } from "react";
+﻿import React, { useEffect, useMemo, useState } from "react";
 import {
   Box,
   Button,
@@ -22,11 +21,20 @@ hubspot.extend(({ context }) => {
 
 const SettingsPage = ({ context }) => {
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [slackWebhookUrl, setSlackWebhookUrl] = useState("");
   const [alertThreshold, setAlertThreshold] = useState("high");
   const [criticalWorkflows, setCriticalWorkflows] = useState("");
+
+  const portalId = String(context?.portal?.id ?? "unknown");
+  const userId = String(context?.user?.id ?? "unknown");
+  const userEmail = String(context?.user?.email ?? "unknown");
+
+  const settingsUrl = useMemo(() => {
+    return `${BACKEND_BASE_URL}/api/v1/settings-store`;
+  }, []);
 
   const loadSettings = async () => {
     setLoading(true);
@@ -34,22 +42,44 @@ const SettingsPage = ({ context }) => {
     setSaveMessage("");
 
     try {
-      const response = await hubspot.fetch(
-  `${BACKEND_BASE_URL}/api/v1/settings-store`,
-  {
-    method: "GET",
-    timeout: 3000,
-  }
-);
+      const response = await hubspot.fetch(settingsUrl, {
+        method: "GET",
+        timeout: 8000,
+      });
 
       if (!response.ok) {
         throw new Error(`Backend returned status ${response.status}`);
       }
 
       const data = await response.json();
-      setSlackWebhookUrl(data?.settings?.slackWebhookUrl ?? "");
-      setAlertThreshold(data?.settings?.alertThreshold ?? "high");
-      setCriticalWorkflows(data?.settings?.criticalWorkflows ?? "");
+      const settings = data?.settings ?? {};
+
+      const nextSlackWebhookUrl = String(settings?.slackWebhookUrl ?? "");
+      const nextAlertThreshold = String(settings?.alertThreshold ?? "high");
+      const nextCriticalWorkflows = String(settings?.criticalWorkflows ?? "");
+
+      setSlackWebhookUrl(nextSlackWebhookUrl);
+      setAlertThreshold(nextAlertThreshold);
+      setCriticalWorkflows(nextCriticalWorkflows);
+
+      const lastSavedAt =
+        data?.savedAtUtc ??
+        settings?.updatedAtUtc ??
+        settings?.loadedAtUtc ??
+        "";
+
+      const hasLoadedValues =
+        nextSlackWebhookUrl.trim() !== "" ||
+        nextCriticalWorkflows.trim() !== "" ||
+        nextAlertThreshold.trim() !== "";
+
+      if (lastSavedAt) {
+        setSaveMessage(`Last saved at ${lastSavedAt}`);
+      } else if (hasLoadedValues) {
+        setSaveMessage("Settings loaded from hosted backend.");
+      } else {
+        setSaveMessage("");
+      }
     } catch (err) {
       console.error("Failed to load settings", err);
       setErrorMessage(err instanceof Error ? err.message : "Unknown error");
@@ -59,32 +89,38 @@ const SettingsPage = ({ context }) => {
   };
 
   const saveSettings = async () => {
+    setSaving(true);
     setErrorMessage("");
     setSaveMessage("");
 
     try {
-      const response = await hubspot.fetch(
-  `${BACKEND_BASE_URL}/api/v1/settings-store`,
-  {
-    method: "POST",
-    timeout: 3000,
-    body: {
-      slackWebhookUrl,
-      alertThreshold,
-      criticalWorkflows,
-    },
-  }
-);
+      const response = await hubspot.fetch(settingsUrl, {
+        method: "POST",
+        timeout: 8000,
+        body: {
+          slackWebhookUrl,
+          alertThreshold,
+          criticalWorkflows,
+        },
+      });
 
       if (!response.ok) {
         throw new Error(`Backend returned status ${response.status}`);
       }
 
       const data = await response.json();
-      setSaveMessage(`Saved at ${data.savedAtUtc}`);
+      const savedAt =
+        data?.savedAtUtc ??
+        data?.settings?.updatedAtUtc ??
+        data?.settings?.loadedAtUtc ??
+        "";
+
+      setSaveMessage(savedAt ? `Saved at ${savedAt}` : "Settings saved.");
     } catch (err) {
       console.error("Failed to save settings", err);
       setErrorMessage(err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -92,13 +128,14 @@ const SettingsPage = ({ context }) => {
     loadSettings().catch((err) =>
       console.error("Unexpected settings load error", err)
     );
-  }, []);
+  }, [settingsUrl]);
 
   return (
     <Flex direction="column" gap="medium">
       <EmptyState title="OpsLens AI settings" layout="vertical">
         <Text>
-          This page now loads and saves portal-level OpsLens settings through the local Python backend.
+          This page now loads and saves portal-level OpsLens settings through
+          the hosted Python backend.
         </Text>
       </EmptyState>
 
@@ -106,8 +143,12 @@ const SettingsPage = ({ context }) => {
 
       <Box>
         <Text format={{ fontWeight: "bold" }}>Backend status</Text>
-        <Text>{loading ? "Loading settings..." : "Ready"}</Text>
-        <Text>{errorMessage ? `Error: ${errorMessage}` : "No settings fetch error detected."}</Text>
+        <Text>{loading ? "Loading settings..." : saving ? "Saving..." : "Ready"}</Text>
+        <Text>
+          {errorMessage
+            ? `Error: ${errorMessage}`
+            : "No settings fetch error detected."}
+        </Text>
         <Text>{saveMessage ? saveMessage : "No settings save event yet."}</Text>
       </Box>
 
@@ -126,7 +167,7 @@ const SettingsPage = ({ context }) => {
             label="Slack webhook URL"
             name="slackWebhookUrl"
             value={slackWebhookUrl}
-            onChange={(value) => setSlackWebhookUrl(value)}
+            onChange={(value) => setSlackWebhookUrl(String(value))}
             placeholder="https://hooks.slack.com/services/..."
           />
 
@@ -146,12 +187,14 @@ const SettingsPage = ({ context }) => {
             label="Critical workflows"
             name="criticalWorkflows"
             value={criticalWorkflows}
-            onChange={(value) => setCriticalWorkflows(value)}
+            onChange={(value) => setCriticalWorkflows(String(value))}
             placeholder={"Quote Sync\nOwner Routing\nImport Cleanup"}
             description="One workflow name per line."
           />
 
-          <Button type="submit">Save settings</Button>
+          <Button type="submit" disabled={loading || saving}>
+            {saving ? "Saving..." : "Save settings"}
+          </Button>
         </Flex>
       </Form>
 
@@ -159,10 +202,13 @@ const SettingsPage = ({ context }) => {
 
       <Box>
         <Text format={{ fontWeight: "bold" }}>Debug context</Text>
-        <Text>Portal ID: {String(context?.portal?.id ?? "unknown")}</Text>
-        <Text>User ID: {String(context?.user?.id ?? "unknown")}</Text>
+        <Text>Portal ID: {portalId}</Text>
+        <Text>User ID: {userId}</Text>
+        <Text>User Email: {userEmail}</Text>
+        <Text>Settings URL: {settingsUrl}</Text>
       </Box>
     </Flex>
   );
 };
 
+export default SettingsPage;
