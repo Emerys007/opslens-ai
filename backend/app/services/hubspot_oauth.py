@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import base64
 import hashlib
@@ -210,12 +210,15 @@ def introspect_access_token(access_token: str) -> dict[str, Any]:
             "client_id": settings.hubspot_client_id,
             "client_secret": settings.hubspot_client_secret,
             "token_type_hint": "access_token",
-            "access_token": token,
+            "token": token,
         },
     )
 
     if not payload:
         raise RuntimeError("HubSpot token introspection returned an empty response.")
+
+    if payload.get("active") is False:
+        raise RuntimeError("HubSpot token introspection reported an inactive token.")
 
     return payload
 
