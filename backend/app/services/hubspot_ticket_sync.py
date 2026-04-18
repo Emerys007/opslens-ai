@@ -109,6 +109,10 @@ def _parse_iso_datetime(value: Any) -> datetime | None:
     if not text:
         return None
     try:
+        if text.isdigit():
+            raw = int(text)
+            timestamp = raw / 1000 if raw > 10_000_000_000 else raw
+            return datetime.fromtimestamp(timestamp, tz=timezone.utc)
         if text.endswith("Z"):
             text = text[:-1] + "+00:00"
         dt = datetime.fromisoformat(text)
@@ -141,7 +145,10 @@ def _safe_int(value: Any, default: int = 0) -> int:
     try:
         return int(str(value).strip())
     except Exception:
-        return default
+        try:
+            return int(float(str(value).strip()))
+        except Exception:
+            return default
 
 
 def _parse_repeat_count(value: Any) -> int:

@@ -109,11 +109,25 @@ def _parse_dt(value: Any) -> datetime | None:
         return None
 
     try:
+        if text.isdigit():
+            raw = int(text)
+            timestamp = raw / 1000 if raw > 10_000_000_000 else raw
+            return datetime.fromtimestamp(timestamp, tz=timezone.utc)
         if text.endswith("Z"):
             text = text[:-1] + "+00:00"
         return datetime.fromisoformat(text).astimezone(timezone.utc)
     except Exception:
         return None
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(str(value).strip())
+    except Exception:
+        try:
+            return int(float(str(value).strip()))
+        except Exception:
+            return default
 
 
 def _now_utc() -> datetime:
@@ -450,7 +464,7 @@ def auto_resolve_waiting_tickets(
             severity = str(props.get("opslens_ticket_severity") or "").strip().lower() or "critical"
             delivery_status = str(props.get("opslens_ticket_delivery_status") or "").strip().upper() or "SLACK_SENT"
             delivery_reason = str(props.get("opslens_ticket_reason") or "").strip()
-            repeat_count = max(1, int(str(props.get("opslens_ticket_repeat_count") or "1").strip() or "1"))
+            repeat_count = max(1, _safe_int(props.get("opslens_ticket_repeat_count"), 1))
 
             latest_alert_text = str(props.get("opslens_ticket_last_alert_at") or "").strip()
             last_alert_at = _parse_dt(latest_alert_text)
