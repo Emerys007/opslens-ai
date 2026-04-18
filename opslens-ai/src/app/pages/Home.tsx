@@ -43,21 +43,17 @@ type OverviewResponse = {
       affectedRecords?: number;
       recommendation?: string;
     }>;
-    settingsStorage?: string;
+  };
+  debug?: {
+    portalId?: string;
+    userId?: string;
+    userEmail?: string;
+    appId?: string;
+    dbConfigured?: boolean;
     savedAlertRows?: number;
     visibleRowsAtThreshold?: number;
-    dbConfigured?: boolean;
+    settingsStorage?: string;
   };
-  recentAlerts?: Array<{
-    severity?: string;
-    result?: string;
-    receivedAtUtc?: string;
-    objectType?: string;
-    objectId?: string;
-    workflowId?: string;
-    callbackId?: string;
-    analystNote?: string;
-  }>;
 };
 
 type WebhookEvent = {
@@ -91,6 +87,12 @@ const HomePage = ({ context }: HomePageProps) => {
   const [webhookError, setWebhookError] = useState("");
   const [overviewData, setOverviewData] = useState<OverviewResponse | null>(null);
   const [recentWebhookActivity, setRecentWebhookActivity] = useState<WebhookEvent[]>([]);
+  const [webhookDbConfigured, setWebhookDbConfigured] = useState<boolean | null>(null);
+
+  const portalId = String(context?.portal?.id ?? "");
+  const userId = String(context?.user?.id ?? "");
+  const userEmail = String(context?.user?.email ?? "");
+  const appId = String(context?.app?.id ?? context?.appId ?? "");
 
   const formatDate = (value?: string | null) => {
     if (!value) return "-";
@@ -101,11 +103,29 @@ const HomePage = ({ context }: HomePageProps) => {
     }
   };
 
+  const buildUrl = (path: string, params: Record<string, string>) => {
+    const query = new URLSearchParams();
+
+    Object.entries(params).forEach(([key, value]) => {
+      if (value) {
+        query.set(key, value);
+      }
+    });
+
+    const queryString = query.toString();
+    return `${BACKEND_BASE_URL}${path}${queryString ? `?${queryString}` : ""}`;
+  };
+
   const loadOverview = async () => {
     setOverviewError("");
 
     const response = await hubspot.fetch(
-      `${BACKEND_BASE_URL}/api/v1/dashboard/overview`,
+      buildUrl("/api/v1/dashboard/overview", {
+        portalId,
+        userId,
+        userEmail,
+        appId,
+      }),
       {
         method: "GET",
         timeout: 5000,
@@ -124,7 +144,9 @@ const HomePage = ({ context }: HomePageProps) => {
     setWebhookError("");
 
     const response = await hubspot.fetch(
-      `${BACKEND_BASE_URL}/api/v1/webhooks/recent`,
+      buildUrl("/api/v1/webhooks/recent", {
+        portalId,
+      }),
       {
         method: "GET",
         timeout: 5000,
@@ -136,6 +158,9 @@ const HomePage = ({ context }: HomePageProps) => {
     }
 
     const data = (await response.json()) as RecentWebhooksResponse;
+    setWebhookDbConfigured(
+      typeof data?.dbConfigured === "boolean" ? data.dbConfigured : null
+    );
     setRecentWebhookActivity(Array.isArray(data?.events) ? data.events : []);
   };
 
@@ -167,18 +192,18 @@ const HomePage = ({ context }: HomePageProps) => {
 
   useEffect(() => {
     refreshAll().catch((err) => console.error("Unexpected Home load error", err));
-  }, []);
+  }, [portalId, userId, userEmail, appId]);
 
   const settings = overviewData?.settings ?? {};
   const summary = overviewData?.summary ?? {};
+  const debug = overviewData?.debug ?? {};
   const activeIncidents = Array.isArray(summary?.activeIncidents) ? summary.activeIncidents : [];
-  const recentAlerts = Array.isArray(overviewData?.recentAlerts) ? overviewData.recentAlerts : [];
 
   return (
     <Flex direction="column" gap="medium">
       <EmptyState title="OpsLens AI is connected" layout="vertical">
         <Text>
-          This page is now loading live summary, recent alerts, and recent webhook activity from the hosted backend.
+          This page is now loading live summary and recent webhook activity from the hosted backend.
         </Text>
       </EmptyState>
 
@@ -199,6 +224,7 @@ const HomePage = ({ context }: HomePageProps) => {
         <Text>{loading ? "Loading..." : "ok"}</Text>
         <Text>{overviewError ? `Overview error: ${overviewError}` : "No fetch error detected."}</Text>
         <Text>{webhookError ? `Webhook feed error: ${webhookError}` : "No webhook feed error detected."}</Text>
+        <Text>Database configured: {String(debug?.dbConfigured ?? "-")}</Text>
       </Box>
 
       <Divider />
@@ -207,6 +233,7 @@ const HomePage = ({ context }: HomePageProps) => {
         <Text format={{ fontWeight: "bold" }}>Applied settings</Text>
         <Text>Alert threshold: {String(settings?.alertThreshold ?? "-")}</Text>
         <Text>Critical workflows: {String(settings?.criticalWorkflows ?? "-")}</Text>
+        <Text>Settings storage: {String(settings?.storage ?? debug?.settingsStorage ?? "-")}</Text>
       </Box>
 
       <Divider />
@@ -244,34 +271,18 @@ const HomePage = ({ context }: HomePageProps) => {
       <Divider />
 
       <Box>
-        <Text format={{ fontWeight: "bold" }}>Recent captured alerts</Text>
-        {recentAlerts.length === 0 ? (
-          <Text>No recent alerts found in Postgres for this portal.</Text>
-        ) : (
-          <Flex direction="column" gap="small">
-            {recentAlerts.map((alert, idx) => (
-              <Box key={alert?.callbackId ?? idx}>
-                <Text>
-                  {String(alert?.severity ?? "-").toUpperCase()} - {String(alert?.result ?? "-")}
-                </Text>
-                <Text>Received: {formatDate(alert?.receivedAtUtc)}</Text>
-                <Text>
-                  Object: {String(alert?.objectType ?? "-")} / {String(alert?.objectId ?? "-")}
-                </Text>
-                <Text>Workflow ID: {String(alert?.workflowId ?? "-")}</Text>
-                <Text>Callback ID: {String(alert?.callbackId ?? "-")}</Text>
-                <Text>Analyst note: {String(alert?.analystNote ?? "-")}</Text>
-              </Box>
-            ))}
-          </Flex>
-        )}
+        <Text format={{ fontWeight: "bold" }}>Saved alert status</Text>
+        <Text>Saved alert rows: {String(debug?.savedAlertRows ?? "-")}</Text>
+        <Text>Visible rows at threshold: {String(debug?.visibleRowsAtThreshold ?? "-")}</Text>
       </Box>
 
       <Divider />
 
       <Box>
         <Text format={{ fontWeight: "bold" }}>Recent webhook activity</Text>
-        {recentWebhookActivity.length === 0 ? (
+        {webhookDbConfigured === false ? (
+          <Text>Webhook database is not configured.</Text>
+        ) : recentWebhookActivity.length === 0 ? (
           <Text>No recent webhook events found for this portal.</Text>
         ) : (
           <Flex direction="column" gap="small">
@@ -297,11 +308,12 @@ const HomePage = ({ context }: HomePageProps) => {
 
       <Box>
         <Text format={{ fontWeight: "bold" }}>Debug context</Text>
-        <Text>Portal ID: {String(context?.portal?.id ?? "unknown")}</Text>
-        <Text>User ID: {String(context?.user?.id ?? "unknown")}</Text>
-        <Text>User Email: {String(context?.user?.email ?? "unknown")}</Text>
-        <Text>Overview URL: {BACKEND_BASE_URL}/api/v1/dashboard/overview</Text>
-        <Text>Webhook URL: {BACKEND_BASE_URL}/api/v1/webhooks/recent</Text>
+        <Text>Portal ID: {portalId || "unknown"}</Text>
+        <Text>User ID: {userId || "unknown"}</Text>
+        <Text>User Email: {userEmail || "unknown"}</Text>
+        <Text>App ID: {appId || "unknown"}</Text>
+        <Text>Overview URL: {buildUrl("/api/v1/dashboard/overview", { portalId, userId, userEmail, appId })}</Text>
+        <Text>Webhook URL: {buildUrl("/api/v1/webhooks/recent", { portalId })}</Text>
       </Box>
     </Flex>
   );
