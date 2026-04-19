@@ -11,5 +11,11 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.13.5
+      - key: OPSLENS_API_BASE_URL
+        value: https://api.app-sync.com
+      - key: OPSLENS_AUTO_RESOLVE_QUIET_HOURS
+        value: "24"
+      - key: OPSLENS_AUTO_RESOLVE_MAX_RECORDS
+        value: "200"
       - key: OPSLENS_MAINTENANCE_KEY
         sync: false
