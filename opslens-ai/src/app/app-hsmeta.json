@@ -14,6 +14,7 @@
         "oauth",
         "crm.objects.contacts.read",
         "crm.objects.contacts.write",
+        "crm.schemas.contacts.write",
         "tickets"
       ],
       "optionalScopes": [],
