@@ -3,6 +3,7 @@ from sqlalchemy import desc, select
 
 from app.db import get_session, init_db
 from app.models.alert_event import AlertEvent
+from app.services.hubspot_ticket_visibility import load_ticket_visibility
 from app.services.portal_settings import (
     SEVERITY_ORDER,
     load_portal_settings,
@@ -124,3 +125,21 @@ def dashboard_overview(request: Request):
         }
     finally:
         session.close()
+
+
+@router.get("/ticket-automation")
+def dashboard_ticket_automation(request: Request):
+    query = request.query_params
+
+    portal_id = str(query.get("portalId", "")).strip()
+    raw_limit = str(query.get("limit", "4")).strip()
+
+    try:
+        limit = int(raw_limit or "4")
+    except Exception:
+        limit = 4
+
+    return load_ticket_visibility(
+        portal_id=portal_id,
+        limit=max(1, min(limit, 20)),
+    )
