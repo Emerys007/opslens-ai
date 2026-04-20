@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     hubspot_app_id: str = ""
     hubspot_webhook_secret: str = ""
 
-    hubspot_scopes: str = "oauth crm.objects.contacts.read crm.objects.contacts.write tickets"
+    hubspot_scopes: str = "oauth crm.objects.contacts.read crm.objects.contacts.write crm.schemas.contacts.write tickets"
     hubspot_optional_scopes: str = ""
     oauth_state_secret: str = ""
     oauth_state_ttl_seconds: int = 900

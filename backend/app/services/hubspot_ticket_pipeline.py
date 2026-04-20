@@ -21,6 +21,25 @@ STAGE_LABEL_RESOLVED = "Resolved"
 STAGE_LABEL_DUPLICATE = "Closed as Duplicate"
 
 
+class PortalProvisioningRequiredError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class RequiredTicketStage:
+    label: str
+    ticket_state: str
+
+
+REQUIRED_TICKET_STAGES = (
+    RequiredTicketStage(label=STAGE_LABEL_NEW_ALERT, ticket_state="OPEN"),
+    RequiredTicketStage(label=STAGE_LABEL_INVESTIGATING, ticket_state="OPEN"),
+    RequiredTicketStage(label=STAGE_LABEL_WAITING, ticket_state="OPEN"),
+    RequiredTicketStage(label=STAGE_LABEL_RESOLVED, ticket_state="CLOSED"),
+    RequiredTicketStage(label=STAGE_LABEL_DUPLICATE, ticket_state="CLOSED"),
+)
+
+
 @dataclass(frozen=True)
 class TicketPipelineConfig:
     portal_id: str
@@ -110,7 +129,7 @@ def _pipeline_label(pipeline: dict) -> str:
     return str(pipeline.get("label") or "").strip()
 
 
-def _select_pipeline(
+def select_ticket_pipeline(
     pipelines: list[dict],
     *,
     preferred_pipeline_id: str = DEFAULT_PIPELINE_ID,
@@ -128,12 +147,33 @@ def _select_pipeline(
     return None
 
 
-def _stage_id_by_label(pipeline: dict, label: str) -> str:
+def stage_id_by_label(pipeline: dict, label: str) -> str:
     stages = pipeline.get("stages") or []
     for stage in stages:
         if str(stage.get("label") or "").strip() == label:
             return str(stage.get("id") or stage.get("stageId") or "").strip()
     return ""
+
+
+def stage_ticket_state(pipeline: dict, label: str) -> str:
+    stages = pipeline.get("stages") or []
+    for stage in stages:
+        if str(stage.get("label") or "").strip() == label:
+            metadata = stage.get("metadata") or {}
+            return str(metadata.get("ticketState") or "").strip().upper()
+    return ""
+
+
+def fetch_ticket_pipelines(token: str) -> list[dict]:
+    status, payload = _request_json(
+        token,
+        "GET",
+        f"/crm/pipelines/{PIPELINES_API_VERSION}/{PIPELINE_OBJECT_TYPE}",
+    )
+    if status != 200:
+        raise RuntimeError(f"Failed to load HubSpot ticket pipelines: {payload}")
+
+    return payload.get("results") or payload.get("pipelines") or []
 
 
 def build_ticket_pipeline_config(portal_id: str, pipeline: dict) -> TicketPipelineConfig:
@@ -143,11 +183,11 @@ def build_ticket_pipeline_config(portal_id: str, pipeline: dict) -> TicketPipeli
 
     pipeline_label = _pipeline_label(pipeline) or DEFAULT_PIPELINE_LABEL
 
-    stage_new_alert = _stage_id_by_label(pipeline, STAGE_LABEL_NEW_ALERT)
-    stage_investigating = _stage_id_by_label(pipeline, STAGE_LABEL_INVESTIGATING)
-    stage_waiting = _stage_id_by_label(pipeline, STAGE_LABEL_WAITING)
-    stage_resolved = _stage_id_by_label(pipeline, STAGE_LABEL_RESOLVED)
-    stage_duplicate = _stage_id_by_label(pipeline, STAGE_LABEL_DUPLICATE)
+    stage_new_alert = stage_id_by_label(pipeline, STAGE_LABEL_NEW_ALERT)
+    stage_investigating = stage_id_by_label(pipeline, STAGE_LABEL_INVESTIGATING)
+    stage_waiting = stage_id_by_label(pipeline, STAGE_LABEL_WAITING)
+    stage_resolved = stage_id_by_label(pipeline, STAGE_LABEL_RESOLVED)
+    stage_duplicate = stage_id_by_label(pipeline, STAGE_LABEL_DUPLICATE)
 
     missing_labels = [
         label
@@ -162,7 +202,7 @@ def build_ticket_pipeline_config(portal_id: str, pipeline: dict) -> TicketPipeli
     ]
     if missing_labels:
         labels_text = ", ".join(missing_labels)
-        raise RuntimeError(
+        raise PortalProvisioningRequiredError(
             f"OpsLens ticket pipeline for portal {portal_id} is missing expected stages: {labels_text}."
         )
 
@@ -179,20 +219,10 @@ def build_ticket_pipeline_config(portal_id: str, pipeline: dict) -> TicketPipeli
 
 
 def load_portal_ticket_pipeline_config(*, token: str, portal_id: str) -> TicketPipelineConfig:
-    status, payload = _request_json(
-        token,
-        "GET",
-        f"/crm/pipelines/{PIPELINES_API_VERSION}/{PIPELINE_OBJECT_TYPE}",
-    )
-    if status != 200:
-        raise RuntimeError(
-            f"Failed to load HubSpot ticket pipelines for portal {portal_id}: {payload}"
-        )
-
-    pipelines = payload.get("results") or payload.get("pipelines") or []
-    pipeline = _select_pipeline(pipelines)
+    pipelines = fetch_ticket_pipelines(token)
+    pipeline = select_ticket_pipeline(pipelines)
     if pipeline is None:
-        raise RuntimeError(
+        raise PortalProvisioningRequiredError(
             f"OpsLens Alerts ticket pipeline was not found for portal {portal_id}."
         )
 

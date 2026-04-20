@@ -20,6 +20,14 @@ HUBSPOT_AUTHORIZE_URL = "https://app.hubspot.com/oauth/authorize"
 HUBSPOT_TOKEN_URL = "https://api.hubapi.com/oauth/2026-03/token"
 HUBSPOT_INTROSPECT_URL = "https://api.hubapi.com/oauth/2026-03/token/introspect"
 
+REQUIRED_HUBSPOT_SCOPES = (
+    "oauth",
+    "crm.objects.contacts.read",
+    "crm.objects.contacts.write",
+    "crm.schemas.contacts.write",
+    "tickets",
+)
+
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -31,7 +39,22 @@ def _normalized_scopes(value: str) -> str:
 
 
 def _required_scopes() -> str:
-    scopes = _normalized_scopes(settings.hubspot_scopes)
+    configured_scopes = [
+        part.strip()
+        for part in str(settings.hubspot_scopes or "").replace(",", " ").split()
+        if part.strip()
+    ]
+    merged_scopes: list[str] = []
+    seen = set()
+
+    for scope in (*configured_scopes, *REQUIRED_HUBSPOT_SCOPES):
+        cleaned = str(scope or "").strip()
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        merged_scopes.append(cleaned)
+
+    scopes = " ".join(merged_scopes)
     if not scopes:
         raise RuntimeError("HUBSPOT_SCOPES is not configured.")
     return scopes

@@ -1,6 +1,6 @@
 import unittest
 
-from app.services.hubspot_ticket_pipeline import _select_pipeline, build_ticket_pipeline_config
+from app.services.hubspot_ticket_pipeline import build_ticket_pipeline_config, select_ticket_pipeline
 
 
 def _portal_8886743_pipeline() -> dict:
@@ -24,7 +24,7 @@ class HubSpotTicketPipelineTests(unittest.TestCase):
             _portal_8886743_pipeline(),
         ]
 
-        selected = _select_pipeline(pipelines, preferred_pipeline_id="890820374")
+        selected = select_ticket_pipeline(pipelines, preferred_pipeline_id="890820374")
 
         self.assertIsNotNone(selected)
         self.assertEqual("892158537", selected["id"])

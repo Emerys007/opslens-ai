@@ -11,6 +11,7 @@ from sqlalchemy import select
 from app.db import get_session, init_db
 from app.models.hubspot_installation import HubSpotInstallation
 from app.services.hubspot_ticket_pipeline import (
+    PortalProvisioningRequiredError,
     TicketPipelineConfig,
     load_portal_ticket_pipeline_config,
 )
@@ -420,6 +421,7 @@ def auto_resolve_waiting_tickets(
         "notesCreated": 0,
         "notesPinned": 0,
         "skipped": 0,
+        "skippedPortals": [],
         "errors": [],
         "noteErrors": [],
         "pinErrors": [],
@@ -438,6 +440,13 @@ def auto_resolve_waiting_tickets(
                 portal_id=portal_id,
             )
             portal_tokens.append((portal_id, token, pipeline_config))
+        except PortalProvisioningRequiredError as exc:
+            summary["skippedPortals"].append(
+                {
+                    "portalId": portal_id,
+                    "reason": str(exc),
+                }
+            )
         except Exception as exc:
             summary["errors"].append(
                 {
@@ -446,13 +455,16 @@ def auto_resolve_waiting_tickets(
                 }
             )
 
-    if not portal_tokens:
+    if not portal_ids:
         summary["errors"].append(
             {
                 "portalId": "",
                 "error": "No active HubSpot OAuth installations were found.",
             }
         )
+        return summary
+
+    if not portal_tokens:
         return summary
 
     for portal_id, token, pipeline_config in portal_tokens:

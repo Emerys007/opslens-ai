@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app.db import get_session, init_db
+from app.services.hubspot_portal_bootstrap import ensure_portal_bootstrap
 from app.services.hubspot_oauth import (
     build_authorization_url,
     exchange_code_for_tokens,
@@ -69,7 +70,7 @@ def _success_html(
   <body>
     <div class="card">
       <h1>OpsLens installation complete</h1>
-      <p>HubSpot OAuth completed successfully and the installation was saved in Postgres.</p>
+      <p>HubSpot OAuth completed successfully, the installation was saved in Postgres, and the OpsLens HubSpot schema was verified.</p>
       <p><strong>Portal ID:</strong> <code>{html.escape(portal_id)}</code></p>
       <p><strong>Hub domain:</strong> <code>{html.escape(hub_domain or "-")}</code></p>
       <p><strong>Installing user:</strong> <code>{html.escape(installing_user_email or "-")}</code></p>
@@ -156,6 +157,7 @@ def oauth_callback(
         return HTMLResponse(_error_html("Missing OAuth state."), status_code=400)
 
     try:
+        bootstrap_started = False
         state_payload = parse_signed_state(signed_state)
         token_payload = exchange_code_for_tokens(auth_code)
 
@@ -182,6 +184,12 @@ def oauth_callback(
         finally:
             session.close()
 
+        bootstrap_started = True
+        ensure_portal_bootstrap(
+            token=access_token,
+            portal_id=installation.portal_id,
+        )
+
         return HTMLResponse(
             _success_html(
                 portal_id=installation.portal_id,
@@ -192,4 +200,10 @@ def oauth_callback(
             status_code=200,
         )
     except Exception as exc:
-        return HTMLResponse(_error_html(str(exc)), status_code=400)
+        message = str(exc)
+        if "bootstrap_started" in locals() and bootstrap_started:
+            message = f"HubSpot install completed, but OpsLens bootstrap failed: {exc}"
+        return HTMLResponse(
+            _error_html(message),
+            status_code=400,
+        )
