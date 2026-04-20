@@ -19,7 +19,6 @@ from app.services.hubspot_ticket_pipeline import (
 
 
 BASE_URL = "https://api.hubapi.com"
-PROPERTIES_API_VERSION = "2026-03"
 
 
 @dataclass(frozen=True)
@@ -42,14 +41,14 @@ class PropertySpec:
 
 CONTACT_GROUP = PropertyGroupSpec(
     object_type="contacts",
-    name="opslens_contact_properties",
-    label="OpsLens Contact Properties",
+    name="opslens_ai",
+    label="OpsLens AI",
 )
 
 TICKET_GROUP = PropertyGroupSpec(
     object_type="tickets",
-    name="opslens_ticket_properties",
-    label="OpsLens Ticket Properties",
+    name="opslens_ai_tickets",
+    label="OpsLens AI Tickets",
 )
 
 
@@ -312,10 +311,23 @@ def _ensure_group(
     portal_id: str,
     spec: PropertyGroupSpec,
 ) -> bool:
+    read_status, read_body = _request_json(
+        token,
+        "GET",
+        f"/crm/v3/properties/{spec.object_type}/groups/{spec.name}",
+    )
+    if read_status == 200:
+        return False
+    if read_status != 404:
+        raise RuntimeError(
+            f"Failed to read HubSpot property group {spec.name} for portal {portal_id}. "
+            f"This step requires the `{_scope_hint(spec.object_type)}` scope. Response: {read_body}"
+        )
+
     status, body = _request_json(
         token,
         "POST",
-        f"/crm/properties/{PROPERTIES_API_VERSION}/{spec.object_type}/groups",
+        f"/crm/v3/properties/{spec.object_type}/groups",
         {
             "name": spec.name,
             "label": spec.label,
@@ -352,7 +364,7 @@ def _ensure_property(
     status, body = _request_json(
         token,
         "POST",
-        f"/crm/properties/{PROPERTIES_API_VERSION}/{spec.object_type}",
+        f"/crm/v3/properties/{spec.object_type}",
         payload,
     )
     if status in (200, 201):

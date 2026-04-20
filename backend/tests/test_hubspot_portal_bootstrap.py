@@ -13,6 +13,7 @@ from app.services.hubspot_ticket_pipeline import PortalProvisioningRequiredError
 
 class FakeBootstrapApi:
     def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
         self.groups = {
             "contacts": set(),
             "tickets": set(),
@@ -35,6 +36,16 @@ class FakeBootstrapApi:
         return stage
 
     def request_json(self, token: str, method: str, path: str, payload: dict | None = None) -> tuple[int, dict]:
+        self.calls.append((method, path))
+
+        if method == "GET" and "/crm/v3/properties/" in path and "/groups/" in path:
+            parts = path.strip("/").split("/")
+            object_type = parts[3]
+            group_name = parts[5]
+            if group_name in self.groups[object_type]:
+                return 200, {"name": group_name}
+            return 404, {"message": "group missing"}
+
         if method == "POST" and path.endswith("/groups"):
             object_type = path.strip("/").split("/")[3]
             group_name = str(payload.get("name") or "").strip()
@@ -43,7 +54,7 @@ class FakeBootstrapApi:
             self.groups[object_type].add(group_name)
             return 201, {"name": group_name}
 
-        if method == "POST" and "/crm/properties/" in path and not path.endswith("/groups"):
+        if method == "POST" and "/crm/v3/properties/" in path and not path.endswith("/groups"):
             object_type = path.strip("/").split("/")[3]
             property_name = str(payload.get("name") or "").strip()
             if property_name in self.properties[object_type]:
@@ -115,6 +126,12 @@ class HubSpotPortalBootstrapTests(unittest.TestCase):
         self.assertEqual([], summary["stagesCreated"])
         self.assertEqual([], summary["stagesUpdated"])
         self.assertEqual("9001", summary["pipelineId"])
+        self.assertIn(("GET", "/crm/v3/properties/contacts/groups/opslens_ai"), fake_api.calls)
+        self.assertIn(("POST", "/crm/v3/properties/contacts/groups"), fake_api.calls)
+        self.assertIn(("POST", "/crm/v3/properties/contacts"), fake_api.calls)
+        self.assertIn(("GET", "/crm/v3/properties/tickets/groups/opslens_ai_tickets"), fake_api.calls)
+        self.assertIn(("POST", "/crm/v3/properties/tickets/groups"), fake_api.calls)
+        self.assertIn(("POST", "/crm/v3/properties/tickets"), fake_api.calls)
 
     def test_bootstrap_is_idempotent(self) -> None:
         fake_api = FakeBootstrapApi()
@@ -135,6 +152,30 @@ class HubSpotPortalBootstrapTests(unittest.TestCase):
         self.assertEqual([], second["stagesCreated"])
         self.assertEqual([], second["stagesUpdated"])
         self.assertEqual("9001", second["pipelineId"])
+        self.assertEqual(1, fake_api.calls.count(("POST", "/crm/v3/properties/contacts/groups")))
+        self.assertEqual(1, fake_api.calls.count(("POST", "/crm/v3/properties/tickets/groups")))
+
+    def test_bootstrap_treats_group_conflicts_as_success(self) -> None:
+        fake_api = FakeBootstrapApi()
+
+        def request_json(token: str, method: str, path: str, payload: dict | None = None) -> tuple[int, dict]:
+            if method == "POST" and path in {
+                "/crm/v3/properties/contacts/groups",
+                "/crm/v3/properties/tickets/groups",
+            }:
+                fake_api.calls.append((method, path))
+                return 409, {"message": "already exists"}
+            return fake_api.request_json(token, method, path, payload)
+
+        with (
+            patch("app.services.hubspot_portal_bootstrap._request_json", side_effect=request_json),
+            patch("app.services.hubspot_portal_bootstrap.fetch_ticket_pipelines", side_effect=fake_api.fetch_ticket_pipelines),
+        ):
+            summary = ensure_portal_bootstrap(token="token", portal_id="8886743")
+
+        self.assertFalse(summary["contactPropertyGroupCreated"])
+        self.assertFalse(summary["ticketPropertyGroupCreated"])
+        self.assertTrue(summary["pipelineCreated"])
 
 
 class HubSpotBootstrapScopeTests(unittest.TestCase):
