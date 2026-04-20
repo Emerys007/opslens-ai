@@ -13,7 +13,6 @@ import {
 } from "@hubspot/ui-extensions";
 
 const BACKEND_BASE_URL = "https://api.app-sync.com";
-const HUBSPOT_API_BASE_URL = "https://api.hubapi.com";
 
 const TICKET_STAGE_LABELS: Record<string, string> = {
   "1341759033": "New Alert",
@@ -22,23 +21,6 @@ const TICKET_STAGE_LABELS: Record<string, string> = {
   "1341759036": "Resolved",
   "1341759037": "Closed as Duplicate",
 };
-
-const OPSLENS_TICKET_PROPERTIES = [
-  "subject",
-  "hs_pipeline_stage",
-  "hs_lastmodifieddate",
-  "opslens_ticket_callback_id",
-  "opslens_ticket_workflow_id",
-  "opslens_ticket_contact_id",
-  "opslens_ticket_severity",
-  "opslens_ticket_delivery_status",
-  "opslens_ticket_reason",
-  "opslens_ticket_first_alert_at",
-  "opslens_ticket_last_alert_at",
-  "opslens_ticket_repeat_count",
-  "opslens_ticket_resolved_at",
-  "opslens_ticket_resolution_reason",
-];
 
 hubspot.extend(({ context }) => {
   return <HomePage context={context} />;
@@ -127,22 +109,22 @@ type TicketProperties = {
   opslens_ticket_resolution_reason?: string;
 };
 
-type TicketSearchResult = {
+type TicketAutomationTicket = {
   id?: string;
   properties?: TicketProperties;
+  createdAt?: string;
+  updatedAt?: string;
+  archived?: boolean;
+  url?: string;
 };
 
-type TicketSearchResponse = {
+type TicketAutomationResponse = {
+  status?: string;
+  portalId?: string;
+  provisioned?: boolean;
+  pipelineId?: string;
   total?: number;
-  results?: TicketSearchResult[];
-};
-
-type TicketSearchFilter = {
-  propertyName: string;
-  operator: string;
-  value?: string;
-  highValue?: string;
-  values?: string[];
+  results?: TicketAutomationTicket[];
 };
 
 type MetricTileProps = {
@@ -228,8 +210,10 @@ const HomePage = ({ context }: HomePageProps) => {
   const [webhookDbConfigured, setWebhookDbConfigured] = useState<boolean | null>(null);
   const [webhookEventCount, setWebhookEventCount] = useState(0);
   const [ticketLoading, setTicketLoading] = useState(false);
-  const [ticketActivity, setTicketActivity] = useState<TicketSearchResult[]>([]);
+  const [ticketActivity, setTicketActivity] = useState<TicketAutomationTicket[]>([]);
   const [ticketActivityTotal, setTicketActivityTotal] = useState(0);
+  const [ticketAutomationProvisioned, setTicketAutomationProvisioned] = useState<boolean | null>(null);
+  const [ticketPipelineId, setTicketPipelineId] = useState("");
 
   const portalId = String(context?.portal?.id ?? "");
   const userId = String(context?.user?.id ?? "");
@@ -259,39 +243,10 @@ const HomePage = ({ context }: HomePageProps) => {
     return `${BACKEND_BASE_URL}${path}${queryString ? `?${queryString}` : ""}`;
   };
 
-  const searchTickets = async (filters: TicketSearchFilter[]) => {
-    const response = await hubspot.fetch(
-      `${HUBSPOT_API_BASE_URL}/crm/v3/objects/tickets/search`,
-      {
-        method: "POST",
-        timeout: 5000,
-        body: {
-          filterGroups: [
-            {
-              filters,
-            },
-          ],
-          properties: OPSLENS_TICKET_PROPERTIES,
-          sorts: ["-hs_lastmodifieddate"],
-          limit: 4,
-        },
-      }
-    );
-
-    if (!response.ok) {
-      throw new Error(`Ticket search failed with status ${response.status}`);
-    }
-
-    return (await response.json()) as TicketSearchResponse;
-  };
-
   const loadOverview = async () => {
     const response = await hubspot.fetch(
       buildUrl("/api/v1/dashboard/overview", {
         portalId,
-        userId,
-        userEmail,
-        appId,
       }),
       {
         method: "GET",
@@ -336,20 +291,40 @@ const HomePage = ({ context }: HomePageProps) => {
 
   const loadTicketAutomation = async () => {
     setTicketLoading(true);
+    setTicketActivity([]);
+    setTicketActivityTotal(0);
+    setTicketAutomationProvisioned(null);
+    setTicketPipelineId("");
 
     try {
-      const data = await searchTickets([
+      const response = await hubspot.fetch(
+        buildUrl("/api/v1/dashboard/ticket-automation", {
+          portalId,
+          limit: "4",
+        }),
         {
-          propertyName: "opslens_ticket_contact_id",
-          operator: "HAS_PROPERTY",
-        },
-      ]);
+          method: "GET",
+          timeout: 5000,
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error(
+          `Ticket automation request failed with status ${response.status}`
+        );
+      }
+
+      const data = (await response.json()) as TicketAutomationResponse;
       const results = Array.isArray(data?.results) ? data.results : [];
 
       setTicketActivity(results);
       setTicketActivityTotal(
         typeof data?.total === "number" ? data.total : results.length
       );
+      setTicketAutomationProvisioned(
+        typeof data?.provisioned === "boolean" ? data.provisioned : null
+      );
+      setTicketPipelineId(String(data?.pipelineId ?? ""));
     } finally {
       setTicketLoading(false);
     }
@@ -425,6 +400,8 @@ const HomePage = ({ context }: HomePageProps) => {
     ? { label: "Refreshing", variant: "info" }
     : ticketError
       ? { label: "Visibility issue", variant: "warning" }
+      : ticketAutomationProvisioned === false
+        ? { label: "Not provisioned", variant: "default" }
       : ticketActivityTotal === 0
         ? { label: "No tickets", variant: "default" }
         : recentActiveTickets > 0
@@ -437,6 +414,11 @@ const HomePage = ({ context }: HomePageProps) => {
       : webhookPreview.length > 0
         ? { label: `${webhookPreview.length} recent`, variant: "info" }
         : { label: "Quiet", variant: "default" };
+
+  const ticketAutomationUrl = buildUrl("/api/v1/dashboard/ticket-automation", {
+    portalId,
+    limit: "4",
+  });
 
   return (
     <Flex direction="column" gap="small">
@@ -615,6 +597,8 @@ const HomePage = ({ context }: HomePageProps) => {
 
             {ticketError ? (
               <Text>Ticket visibility is limited right now: {ticketError}</Text>
+            ) : ticketAutomationProvisioned === false ? (
+              <Text>OpsLens ticket automation is not provisioned for this portal yet.</Text>
             ) : ticketActivityTotal === 0 ? (
               <Text>No OpsLens tickets have been found for this portal yet.</Text>
             ) : (
@@ -634,7 +618,14 @@ const HomePage = ({ context }: HomePageProps) => {
                   />
                   <DetailField
                     label="Latest ticket update"
-                    value={formatDate(ticketPreview[0]?.properties?.hs_lastmodifieddate)}
+                    value={formatDate(
+                      ticketPreview[0]?.properties?.hs_lastmodifieddate ??
+                        ticketPreview[0]?.updatedAt
+                    )}
+                  />
+                  <DetailField
+                    label="Pipeline ID"
+                    value={ticketPipelineId || "Not returned"}
                   />
                 </AutoGrid>
 
@@ -741,9 +732,6 @@ const HomePage = ({ context }: HomePageProps) => {
                 label="Overview URL"
                 value={buildUrl("/api/v1/dashboard/overview", {
                   portalId,
-                  userId,
-                  userEmail,
-                  appId,
                 })}
               />
               <DetailField
@@ -751,8 +739,12 @@ const HomePage = ({ context }: HomePageProps) => {
                 value={buildUrl("/api/v1/webhooks/recent", { portalId })}
               />
               <DetailField
-                label="Ticket search"
-                value={`${HUBSPOT_API_BASE_URL}/crm/v3/objects/tickets/search`}
+                label="Ticket automation route"
+                value={ticketAutomationUrl}
+              />
+              <DetailField
+                label="Ticket pipeline"
+                value={ticketPipelineId || "Not returned"}
               />
             </AutoGrid>
           </Tile>
