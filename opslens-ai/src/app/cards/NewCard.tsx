@@ -139,6 +139,14 @@ type TicketSearchResponse = {
   results?: TicketSearchResult[];
 };
 
+type TicketSearchFilter = {
+  propertyName: string;
+  operator: string;
+  value?: string;
+  highValue?: string;
+  values?: string[];
+};
+
 type DetailFieldProps = {
   label: string;
   value: string;
@@ -153,6 +161,10 @@ const DetailField = ({ label, value }: DetailFieldProps) => {
       <Text>{value}</Text>
     </Box>
   );
+};
+
+const getErrorMessage = (error: unknown) => {
+  return error instanceof Error ? error.message : "Unknown error";
 };
 
 const getRiskVariant = (level?: string | null): StatusVariant => {
@@ -198,6 +210,7 @@ const NewCard = ({ context }: { context: any }) => {
 
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState("");
+  const [webhookError, setWebhookError] = useState("");
   const [recordRisk, setRecordRisk] = useState<RecordRiskResponse | null>(null);
   const [recentWebhookActivity, setRecentWebhookActivity] = useState<WebhookEvent[]>([]);
   const [webhookDbConfigured, setWebhookDbConfigured] = useState<boolean | null>(null);
@@ -228,7 +241,7 @@ const NewCard = ({ context }: { context: any }) => {
     return `${BACKEND_BASE_URL}${path}${queryString ? `?${queryString}` : ""}`;
   };
 
-  const searchTickets = async (filters: Array<Record<string, string>>) => {
+  const searchTickets = async (filters: TicketSearchFilter[]) => {
     const response = await hubspot.fetch(
       `${HUBSPOT_API_BASE_URL}/crm/v3/objects/tickets/search`,
       {
@@ -320,7 +333,7 @@ const NewCard = ({ context }: { context: any }) => {
     setTicketError("");
 
     try {
-      const baseFilters = [
+      const baseFilters: TicketSearchFilter[] = [
         {
           propertyName: "opslens_ticket_contact_id",
           operator: "EQ",
@@ -349,7 +362,7 @@ const NewCard = ({ context }: { context: any }) => {
     } catch (err) {
       console.error("Ticket visibility load failed", err);
       setTicketRecord(null);
-      setTicketError(err instanceof Error ? err.message : "Unknown ticket error");
+      setTicketError(getErrorMessage(err));
     } finally {
       setTicketLoading(false);
     }
@@ -358,23 +371,31 @@ const NewCard = ({ context }: { context: any }) => {
   const refreshAll = async () => {
     if (!recordId) {
       setErrorMessage("No recordId was provided by HubSpot context.");
+      setRecordRisk(null);
+      setTicketRecord(null);
+      setRecentWebhookActivity([]);
       setLoading(false);
       return;
     }
 
     setLoading(true);
     setErrorMessage("");
+    setWebhookError("");
+    setTicketError("");
 
     try {
       const riskData = await loadRecordRisk();
-
-      await Promise.all([
+      const results = await Promise.allSettled([
         loadRecentWebhooks(),
         loadTicketRecord(riskData?.latestAlert?.workflowId),
       ]);
+
+      if (results[0].status === "rejected") {
+        setWebhookError(getErrorMessage(results[0].reason));
+      }
     } catch (err) {
       console.error("New Card refresh failed", err);
-      setErrorMessage(err instanceof Error ? err.message : "Unknown error");
+      setErrorMessage(getErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -392,9 +413,10 @@ const NewCard = ({ context }: { context: any }) => {
   const debug = recordRisk?.debug ?? {};
   const ticketProperties = ticketRecord?.properties ?? {};
   const webhookPreview = recentWebhookActivity.slice(0, 3);
+  const hasAnyIssue = Boolean(errorMessage || webhookError || ticketError);
   const cardStatus: { label: string; variant: StatusVariant } = loading
     ? { label: "Refreshing", variant: "info" }
-    : errorMessage
+    : hasAnyIssue
       ? { label: "Needs attention", variant: "warning" }
       : { label: "Ready", variant: "success" };
   const ticketStatus: { label: string; variant: StatusVariant } = ticketLoading
@@ -413,6 +435,11 @@ const NewCard = ({ context }: { context: any }) => {
       : ticketRecord
         ? { label: "Active", variant: "info" }
         : { label: "Unavailable", variant: "default" };
+  const visibilityLabel = visibility?.visible
+    ? "Visible at threshold"
+    : latestAlert
+      ? "Below threshold"
+      : "No alert yet";
 
   return (
     <Flex direction="column" gap="small">
@@ -445,177 +472,253 @@ const NewCard = ({ context }: { context: any }) => {
 
           {errorMessage ? (
             <Text>Error: {errorMessage}</Text>
+          ) : webhookError ? (
+            <Text>Webhook activity is limited right now: {webhookError}</Text>
+          ) : ticketError ? (
+            <Text>Ticket visibility is limited right now: {ticketError}</Text>
           ) : (
             <Text>
               Latest event {formatDate(latestAlert?.receivedAtUtc)}. Threshold{" "}
               {String(visibility?.threshold ?? settings?.alertThreshold ?? "-").toUpperCase()}.
             </Text>
           )}
-        </Flex>
-      </Tile>
 
-      <Tile compact>
-        <Flex direction="column" gap="small">
-          <Flex justify="between" align="center" wrap gap="small">
-            <Heading inline={true}>Latest alert</Heading>
-            <StatusTag variant={visibility?.visible ? "success" : "default"}>
-              {visibility?.visible ? "Visible at threshold" : "Below threshold"}
-            </StatusTag>
-          </Flex>
-
-          <AutoGrid columnWidth={190} flexible={true} gap="small">
-            <DetailField
-              label="Incident title"
-              value={String(recordRisk?.risk?.incidentTitle ?? "-")}
-            />
+          <AutoGrid columnWidth={150} flexible={true} gap="small">
             <DetailField
               label="Risk level"
               value={String(recordRisk?.risk?.level ?? "-").toUpperCase()}
             />
-            <DetailField
-              label="Workflow ID"
-              value={String(latestAlert?.workflowId ?? "-")}
-            />
-            <DetailField
-              label="Callback ID"
-              value={String(latestAlert?.callbackId ?? "-")}
-            />
-            <DetailField
-              label="Latest event"
-              value={formatDate(latestAlert?.receivedAtUtc)}
-            />
-            <DetailField
-              label="Reason"
-              value={String(latestAlert?.reason ?? "-")}
-            />
-            <DetailField
-              label="Analyst note"
-              value={String(latestAlert?.analystNote ?? "-")}
-            />
-            <DetailField
-              label="Object"
-              value={`${String(latestAlert?.objectType ?? "-")} / ${String(
-                latestAlert?.objectId ?? "-"
-              )}`}
-            />
+            <DetailField label="Alert visibility" value={visibilityLabel} />
+            <DetailField label="Ticket sync" value={ticketStatus.label} />
+            <DetailField label="Auto-resolve" value={autoResolveStatus.label} />
           </AutoGrid>
-
-          <Text>
-            Recommendation: {String(recordRisk?.risk?.recommendation ?? "-")}
-          </Text>
         </Flex>
       </Tile>
 
-      <Tile compact>
-        <Flex direction="column" gap="small">
-          <Flex justify="between" align="center" wrap gap="small">
-            <Heading inline={true}>Ticket sync</Heading>
-            <StatusTag variant={ticketStatus.variant}>{ticketStatus.label}</StatusTag>
+      <AutoGrid columnWidth={250} flexible={true} gap="small">
+        <Tile compact>
+          <Flex direction="column" gap="small">
+            <Flex justify="between" align="center" wrap gap="small">
+              <Box flex="auto">
+                <Heading inline={true}>Latest alert</Heading>
+                <Text>Most recent saved alert and operator-facing guidance.</Text>
+              </Box>
+              <StatusTag variant={visibility?.visible ? "success" : "default"}>
+                {visibilityLabel}
+              </StatusTag>
+            </Flex>
+
+            {!latestAlert ? (
+              <Text>No saved alert is available for this contact yet.</Text>
+            ) : (
+              <>
+                <AutoGrid columnWidth={170} flexible={true} gap="small">
+                  <DetailField
+                    label="Incident title"
+                    value={String(recordRisk?.risk?.incidentTitle ?? "-")}
+                  />
+                  <DetailField
+                    label="Latest event"
+                    value={formatDate(latestAlert?.receivedAtUtc)}
+                  />
+                  <DetailField
+                    label="Alert threshold"
+                    value={String(
+                      visibility?.threshold ?? settings?.alertThreshold ?? "-"
+                    ).toUpperCase()}
+                  />
+                  <DetailField
+                    label="Reason"
+                    value={String(latestAlert?.reason ?? "-")}
+                  />
+                </AutoGrid>
+
+                <Text>
+                  Recommendation: {String(recordRisk?.risk?.recommendation ?? "-")}
+                </Text>
+              </>
+            )}
           </Flex>
+        </Tile>
 
-          {ticketError ? (
-            <Text>Ticket visibility error: {ticketError}</Text>
-          ) : !ticketRecord ? (
-            <Text>No OpsLens ticket was found for this contact.</Text>
-          ) : (
-            <AutoGrid columnWidth={180} flexible={true} gap="small">
-              <DetailField label="Ticket ID" value={String(ticketRecord?.id ?? "-")} />
-              <DetailField
-                label="Ticket stage"
-                value={getTicketStageLabel(ticketProperties?.hs_pipeline_stage)}
-              />
-              <DetailField
-                label="Severity"
-                value={String(ticketProperties?.opslens_ticket_severity ?? "-")}
-              />
-              <DetailField
-                label="Delivery status"
-                value={String(ticketProperties?.opslens_ticket_delivery_status ?? "-")}
-              />
-              <DetailField
-                label="Repeat count"
-                value={String(ticketProperties?.opslens_ticket_repeat_count ?? "-")}
-              />
-              <DetailField
-                label="Last alert at"
-                value={formatDate(ticketProperties?.opslens_ticket_last_alert_at)}
-              />
-              <DetailField
-                label="Workflow ID"
-                value={String(ticketProperties?.opslens_ticket_workflow_id ?? "-")}
-              />
-              <DetailField
-                label="Ticket reason"
-                value={String(ticketProperties?.opslens_ticket_reason ?? "-")}
-              />
-            </AutoGrid>
-          )}
-        </Flex>
-      </Tile>
+        <Tile compact>
+          <Flex direction="column" gap="small">
+            <Flex justify="between" align="center" wrap gap="small">
+              <Box flex="auto">
+                <Heading inline={true}>Ticket sync</Heading>
+                <Text>Latest synced OpsLens ticket for this contact.</Text>
+              </Box>
+              <StatusTag variant={ticketStatus.variant}>{ticketStatus.label}</StatusTag>
+            </Flex>
 
-      <Tile compact>
-        <Flex direction="column" gap="small">
-          <Flex justify="between" align="center" wrap gap="small">
-            <Heading inline={true}>Auto-resolve</Heading>
-            <StatusTag variant={autoResolveStatus.variant}>
-              {autoResolveStatus.label}
-            </StatusTag>
+            {ticketError ? (
+              <Text>Ticket visibility error: {ticketError}</Text>
+            ) : !ticketRecord ? (
+              <Text>No OpsLens ticket was found for this contact.</Text>
+            ) : (
+              <AutoGrid columnWidth={170} flexible={true} gap="small">
+                <DetailField label="Ticket ID" value={String(ticketRecord?.id ?? "-")} />
+                <DetailField
+                  label="Stage"
+                  value={getTicketStageLabel(ticketProperties?.hs_pipeline_stage)}
+                />
+                <DetailField
+                  label="Delivery status"
+                  value={String(ticketProperties?.opslens_ticket_delivery_status ?? "-")}
+                />
+                <DetailField
+                  label="Repeat count"
+                  value={String(ticketProperties?.opslens_ticket_repeat_count ?? "-")}
+                />
+                <DetailField
+                  label="Last alert at"
+                  value={formatDate(ticketProperties?.opslens_ticket_last_alert_at)}
+                />
+                <DetailField
+                  label="Subject"
+                  value={String(ticketProperties?.subject ?? "-")}
+                />
+              </AutoGrid>
+            )}
           </Flex>
+        </Tile>
 
-          {ticketError ? (
-            <Text>Auto-resolve details depend on ticket visibility.</Text>
-          ) : !ticketRecord ? (
-            <Text>Auto-resolve details appear after an OpsLens ticket exists for this contact.</Text>
-          ) : ticketProperties?.opslens_ticket_resolved_at ? (
-            <AutoGrid columnWidth={180} flexible={true} gap="small">
-              <DetailField
-                label="Resolved at"
-                value={formatDate(ticketProperties?.opslens_ticket_resolved_at)}
-              />
-              <DetailField
-                label="Resolution reason"
-                value={String(ticketProperties?.opslens_ticket_resolution_reason ?? "-")}
-              />
-              <DetailField
-                label="First alert at"
-                value={formatDate(ticketProperties?.opslens_ticket_first_alert_at)}
-              />
-              <DetailField
-                label="Last updated"
-                value={formatDate(ticketProperties?.hs_lastmodifieddate)}
-              />
-            </AutoGrid>
-          ) : (
-            <Text>This ticket is active and has not been auto-resolved.</Text>
-          )}
-        </Flex>
-      </Tile>
+        <Tile compact>
+          <Flex direction="column" gap="small">
+            <Flex justify="between" align="center" wrap gap="small">
+              <Box flex="auto">
+                <Heading inline={true}>Auto-resolve</Heading>
+                <Text>Read-only state for resolution timing and outcome.</Text>
+              </Box>
+              <StatusTag variant={autoResolveStatus.variant}>
+                {autoResolveStatus.label}
+              </StatusTag>
+            </Flex>
 
-      <Accordion title="Activity & technical details" size="small">
+            {ticketError ? (
+              <Text>Auto-resolve details depend on ticket visibility.</Text>
+            ) : !ticketRecord ? (
+              <Text>Auto-resolve appears after an OpsLens ticket exists for this contact.</Text>
+            ) : ticketProperties?.opslens_ticket_resolved_at ? (
+              <AutoGrid columnWidth={170} flexible={true} gap="small">
+                <DetailField
+                  label="Resolved at"
+                  value={formatDate(ticketProperties?.opslens_ticket_resolved_at)}
+                />
+                <DetailField
+                  label="Resolution reason"
+                  value={String(ticketProperties?.opslens_ticket_resolution_reason ?? "-")}
+                />
+                <DetailField
+                  label="First alert at"
+                  value={formatDate(ticketProperties?.opslens_ticket_first_alert_at)}
+                />
+                <DetailField
+                  label="Last updated"
+                  value={formatDate(ticketProperties?.hs_lastmodifieddate)}
+                />
+              </AutoGrid>
+            ) : (
+              <>
+                <AutoGrid columnWidth={170} flexible={true} gap="small">
+                  <DetailField
+                    label="First alert at"
+                    value={formatDate(ticketProperties?.opslens_ticket_first_alert_at)}
+                  />
+                  <DetailField
+                    label="Last alert at"
+                    value={formatDate(ticketProperties?.opslens_ticket_last_alert_at)}
+                  />
+                  <DetailField
+                    label="Last updated"
+                    value={formatDate(ticketProperties?.hs_lastmodifieddate)}
+                  />
+                  <DetailField
+                    label="Repeat count"
+                    value={String(ticketProperties?.opslens_ticket_repeat_count ?? "-")}
+                  />
+                </AutoGrid>
+                <Text>This ticket is active and has not been auto-resolved.</Text>
+              </>
+            )}
+          </Flex>
+        </Tile>
+      </AutoGrid>
+
+      <Accordion title="Activity and advanced details" size="small">
         <Flex direction="column" gap="small">
           <Tile compact>
             <Flex direction="column" gap="small">
               <Heading inline={true}>Recent webhook activity</Heading>
-              {webhookDbConfigured === false ? (
+              {webhookError ? (
+                <Text>Webhook activity is unavailable right now: {webhookError}</Text>
+              ) : webhookDbConfigured === false ? (
                 <Text>Webhook database is not configured.</Text>
               ) : webhookPreview.length === 0 ? (
                 <Text>No recent webhook events were found for this record.</Text>
               ) : (
-                <AutoGrid columnWidth={220} flexible={true} gap="small">
+                <Flex direction="column" gap="small">
                   {webhookPreview.map((event, idx) => (
                     <Tile compact key={event?.eventId ?? `${event?.subscriptionType ?? "event"}-${idx}`}>
                       <Flex direction="column" gap="flush">
                         <Text format={{ fontWeight: "bold" }}>
                           {String(event?.subscriptionType ?? "-")}
                         </Text>
-                        <Text>Object {String(event?.objectId ?? "-")}</Text>
-                        <Text>Received {formatDate(event?.receivedAtUtc)}</Text>
-                        <Text>Property {String(event?.propertyName ?? "-")}</Text>
+                        <Text>
+                          Object {String(event?.objectId ?? "-")} • Property{" "}
+                          {String(event?.propertyName ?? "-")}
+                        </Text>
+                        <Text>
+                          Received {formatDate(event?.receivedAtUtc)} • Occurred{" "}
+                          {formatDate(event?.occurredAtUtc)}
+                        </Text>
                       </Flex>
                     </Tile>
                   ))}
-                </AutoGrid>
+                </Flex>
               )}
+            </Flex>
+          </Tile>
+
+          <Tile compact>
+            <Flex direction="column" gap="small">
+              <Heading inline={true}>Alert and ticket details</Heading>
+              <AutoGrid columnWidth={180} flexible={true} gap="small">
+                <DetailField
+                  label="Workflow ID"
+                  value={String(latestAlert?.workflowId ?? ticketProperties?.opslens_ticket_workflow_id ?? "-")}
+                />
+                <DetailField
+                  label="Callback ID"
+                  value={String(latestAlert?.callbackId ?? ticketProperties?.opslens_ticket_callback_id ?? "-")}
+                />
+                <DetailField
+                  label="Object"
+                  value={`${String(latestAlert?.objectType ?? "-")} / ${String(
+                    latestAlert?.objectId ?? "-"
+                  )}`}
+                />
+                <DetailField
+                  label="Analyst note"
+                  value={String(latestAlert?.analystNote ?? "-")}
+                />
+                <DetailField
+                  label="Ticket contact ID"
+                  value={String(ticketProperties?.opslens_ticket_contact_id ?? "-")}
+                />
+                <DetailField
+                  label="Ticket reason"
+                  value={String(ticketProperties?.opslens_ticket_reason ?? "-")}
+                />
+                <DetailField
+                  label="Ticket severity"
+                  value={String(ticketProperties?.opslens_ticket_severity ?? "-")}
+                />
+                <DetailField
+                  label="Ticket stage ID"
+                  value={String(ticketProperties?.hs_pipeline_stage ?? "-")}
+                />
+              </AutoGrid>
             </Flex>
           </Tile>
 
@@ -632,8 +735,8 @@ const NewCard = ({ context }: { context: any }) => {
                 value={String(debug?.dbConfigured ?? "-")}
               />
               <DetailField
-                label="Ticket stage ID"
-                value={String(ticketProperties?.hs_pipeline_stage ?? "-")}
+                label="Settings storage"
+                value={String(debug?.settingsStorage ?? settings?.storage ?? "-")}
               />
             </AutoGrid>
           </Tile>

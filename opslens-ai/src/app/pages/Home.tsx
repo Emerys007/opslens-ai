@@ -13,6 +13,32 @@ import {
 } from "@hubspot/ui-extensions";
 
 const BACKEND_BASE_URL = "https://api.app-sync.com";
+const HUBSPOT_API_BASE_URL = "https://api.hubapi.com";
+
+const TICKET_STAGE_LABELS: Record<string, string> = {
+  "1341759033": "New Alert",
+  "1341759034": "Investigating",
+  "1341759035": "Waiting / Monitoring",
+  "1341759036": "Resolved",
+  "1341759037": "Closed as Duplicate",
+};
+
+const OPSLENS_TICKET_PROPERTIES = [
+  "subject",
+  "hs_pipeline_stage",
+  "hs_lastmodifieddate",
+  "opslens_ticket_callback_id",
+  "opslens_ticket_workflow_id",
+  "opslens_ticket_contact_id",
+  "opslens_ticket_severity",
+  "opslens_ticket_delivery_status",
+  "opslens_ticket_reason",
+  "opslens_ticket_first_alert_at",
+  "opslens_ticket_last_alert_at",
+  "opslens_ticket_repeat_count",
+  "opslens_ticket_resolved_at",
+  "opslens_ticket_resolution_reason",
+];
 
 hubspot.extend(({ context }) => {
   return <HomePage context={context} />;
@@ -84,10 +110,50 @@ type RecentWebhooksResponse = {
   events?: WebhookEvent[];
 };
 
+type TicketProperties = {
+  subject?: string;
+  hs_pipeline_stage?: string;
+  hs_lastmodifieddate?: string;
+  opslens_ticket_callback_id?: string;
+  opslens_ticket_workflow_id?: string;
+  opslens_ticket_contact_id?: string;
+  opslens_ticket_severity?: string;
+  opslens_ticket_delivery_status?: string;
+  opslens_ticket_reason?: string;
+  opslens_ticket_first_alert_at?: string;
+  opslens_ticket_last_alert_at?: string;
+  opslens_ticket_repeat_count?: string;
+  opslens_ticket_resolved_at?: string;
+  opslens_ticket_resolution_reason?: string;
+};
+
+type TicketSearchResult = {
+  id?: string;
+  properties?: TicketProperties;
+};
+
+type TicketSearchResponse = {
+  total?: number;
+  results?: TicketSearchResult[];
+};
+
+type TicketSearchFilter = {
+  propertyName: string;
+  operator: string;
+  value?: string;
+  highValue?: string;
+  values?: string[];
+};
+
 type MetricTileProps = {
   label: string;
   value: string | number;
   note?: string;
+};
+
+type DetailFieldProps = {
+  label: string;
+  value: string;
 };
 
 type StatusVariant = "danger" | "warning" | "info" | "success" | "default";
@@ -104,11 +170,6 @@ const MetricTile = ({ label, value, note }: MetricTileProps) => {
   );
 };
 
-type DetailFieldProps = {
-  label: string;
-  value: string;
-};
-
 const DetailField = ({ label, value }: DetailFieldProps) => {
   return (
     <Box>
@@ -116,6 +177,10 @@ const DetailField = ({ label, value }: DetailFieldProps) => {
       <Text>{value}</Text>
     </Box>
   );
+};
+
+const getErrorMessage = (error: unknown) => {
+  return error instanceof Error ? error.message : "Unknown error";
 };
 
 const getStatusVariant = (
@@ -137,13 +202,34 @@ const getSeverityVariant = (severity?: string | null): StatusVariant => {
   return "default";
 };
 
+const getTicketStageLabel = (stageId?: string | null) => {
+  const value = String(stageId || "").trim();
+  return TICKET_STAGE_LABELS[value] || value || "Unknown";
+};
+
+const getTicketStageVariant = (stageId?: string | null): StatusVariant => {
+  const value = String(stageId || "").trim();
+
+  if (value === "1341759033") return "danger";
+  if (value === "1341759034") return "warning";
+  if (value === "1341759035") return "info";
+  if (value === "1341759036") return "success";
+
+  return "default";
+};
+
 const HomePage = ({ context }: HomePageProps) => {
   const [loading, setLoading] = useState(true);
   const [overviewError, setOverviewError] = useState("");
   const [webhookError, setWebhookError] = useState("");
+  const [ticketError, setTicketError] = useState("");
   const [overviewData, setOverviewData] = useState<OverviewResponse | null>(null);
   const [recentWebhookActivity, setRecentWebhookActivity] = useState<WebhookEvent[]>([]);
   const [webhookDbConfigured, setWebhookDbConfigured] = useState<boolean | null>(null);
+  const [webhookEventCount, setWebhookEventCount] = useState(0);
+  const [ticketLoading, setTicketLoading] = useState(false);
+  const [ticketActivity, setTicketActivity] = useState<TicketSearchResult[]>([]);
+  const [ticketActivityTotal, setTicketActivityTotal] = useState(0);
 
   const portalId = String(context?.portal?.id ?? "");
   const userId = String(context?.user?.id ?? "");
@@ -173,9 +259,33 @@ const HomePage = ({ context }: HomePageProps) => {
     return `${BACKEND_BASE_URL}${path}${queryString ? `?${queryString}` : ""}`;
   };
 
-  const loadOverview = async () => {
-    setOverviewError("");
+  const searchTickets = async (filters: TicketSearchFilter[]) => {
+    const response = await hubspot.fetch(
+      `${HUBSPOT_API_BASE_URL}/crm/v3/objects/tickets/search`,
+      {
+        method: "POST",
+        timeout: 5000,
+        body: {
+          filterGroups: [
+            {
+              filters,
+            },
+          ],
+          properties: OPSLENS_TICKET_PROPERTIES,
+          sorts: ["-hs_lastmodifieddate"],
+          limit: 4,
+        },
+      }
+    );
 
+    if (!response.ok) {
+      throw new Error(`Ticket search failed with status ${response.status}`);
+    }
+
+    return (await response.json()) as TicketSearchResponse;
+  };
+
+  const loadOverview = async () => {
     const response = await hubspot.fetch(
       buildUrl("/api/v1/dashboard/overview", {
         portalId,
@@ -198,8 +308,6 @@ const HomePage = ({ context }: HomePageProps) => {
   };
 
   const loadRecentWebhookActivity = async () => {
-    setWebhookError("");
-
     const response = await hubspot.fetch(
       buildUrl("/api/v1/webhooks/recent", {
         portalId,
@@ -215,33 +323,63 @@ const HomePage = ({ context }: HomePageProps) => {
     }
 
     const data = (await response.json()) as RecentWebhooksResponse;
+    const nextEvents = Array.isArray(data?.events) ? data.events : [];
+
     setWebhookDbConfigured(
       typeof data?.dbConfigured === "boolean" ? data.dbConfigured : null
     );
-    setRecentWebhookActivity(Array.isArray(data?.events) ? data.events : []);
+    setWebhookEventCount(
+      typeof data?.count === "number" ? data.count : nextEvents.length
+    );
+    setRecentWebhookActivity(nextEvents);
+  };
+
+  const loadTicketAutomation = async () => {
+    setTicketLoading(true);
+
+    try {
+      const data = await searchTickets([
+        {
+          propertyName: "opslens_ticket_contact_id",
+          operator: "HAS_PROPERTY",
+        },
+      ]);
+      const results = Array.isArray(data?.results) ? data.results : [];
+
+      setTicketActivity(results);
+      setTicketActivityTotal(
+        typeof data?.total === "number" ? data.total : results.length
+      );
+    } finally {
+      setTicketLoading(false);
+    }
   };
 
   const refreshAll = async () => {
     setLoading(true);
     setOverviewError("");
     setWebhookError("");
+    setTicketError("");
 
-    try {
-      await Promise.all([loadOverview(), loadRecentWebhookActivity()]);
-    } catch (err) {
-      console.error("App Home refresh failed", err);
-      const message = err instanceof Error ? err.message : "Unknown refresh error";
+    const results = await Promise.allSettled([
+      loadOverview(),
+      loadRecentWebhookActivity(),
+      loadTicketAutomation(),
+    ]);
 
-      if (message.toLowerCase().includes("webhook")) {
-        setWebhookError(message);
-      } else if (message.toLowerCase().includes("overview")) {
-        setOverviewError(message);
-      } else {
-        setOverviewError(message);
-      }
-    } finally {
-      setLoading(false);
+    if (results[0].status === "rejected") {
+      setOverviewError(getErrorMessage(results[0].reason));
     }
+
+    if (results[1].status === "rejected") {
+      setWebhookError(getErrorMessage(results[1].reason));
+    }
+
+    if (results[2].status === "rejected") {
+      setTicketError(getErrorMessage(results[2].reason));
+    }
+
+    setLoading(false);
   };
 
   useEffect(() => {
@@ -254,22 +392,47 @@ const HomePage = ({ context }: HomePageProps) => {
   const activeIncidents = Array.isArray(summary?.activeIncidents)
     ? summary.activeIncidents
     : [];
-  const criticalWorkflowCount = String(settings?.criticalWorkflows ?? "")
+  const monitoredWorkflows = String(settings?.criticalWorkflows ?? "")
     .split("\n")
     .map((value) => value.trim())
-    .filter(Boolean).length;
-  const webhookPreview = recentWebhookActivity.slice(0, 4);
+    .filter(Boolean);
+  const criticalWorkflowCount = monitoredWorkflows.length;
+  const incidentPreview = activeIncidents.slice(0, 3);
+  const webhookPreview = recentWebhookActivity.slice(0, 3);
+  const ticketPreview = ticketActivity.slice(0, 3);
+  const recentActiveTickets = ticketPreview.filter(
+    (ticket) => !ticket?.properties?.opslens_ticket_resolved_at
+  ).length;
+  const recentResolvedTickets = ticketPreview.filter(
+    (ticket) => Boolean(ticket?.properties?.opslens_ticket_resolved_at)
+  ).length;
   const pageStatus: { label: string; variant: StatusVariant } = loading
     ? { label: "Refreshing", variant: getStatusVariant("loading") }
-    : overviewError || webhookError
+    : overviewError || webhookError || ticketError
       ? { label: "Needs attention", variant: getStatusVariant("error") }
       : { label: "Live", variant: getStatusVariant("success") };
-  const incidentStatus: { label: string; variant: StatusVariant } =
-    Number(summary?.openIncidents ?? 0) > 0
+  const incidentStatus: { label: string; variant: StatusVariant } = overviewError
+    ? { label: "Overview issue", variant: "warning" }
+    : Number(summary?.openIncidents ?? 0) > 0
       ? { label: `${String(summary?.openIncidents ?? 0)} open`, variant: "warning" }
       : { label: "Stable", variant: "success" };
-  const webhookStatus: { label: string; variant: StatusVariant } =
-    webhookDbConfigured === false
+  const savedAlertStatus: { label: string; variant: StatusVariant } = overviewError
+    ? { label: "Unavailable", variant: "warning" }
+    : Number(debug?.visibleRowsAtThreshold ?? 0) > 0
+      ? { label: `${String(debug?.visibleRowsAtThreshold ?? 0)} visible`, variant: "info" }
+      : { label: "Quiet", variant: "default" };
+  const ticketStatus: { label: string; variant: StatusVariant } = ticketLoading
+    ? { label: "Refreshing", variant: "info" }
+    : ticketError
+      ? { label: "Visibility issue", variant: "warning" }
+      : ticketActivityTotal === 0
+        ? { label: "No tickets", variant: "default" }
+        : recentActiveTickets > 0
+          ? { label: `${recentActiveTickets} active`, variant: "warning" }
+          : { label: "Resolved recently", variant: "success" };
+  const webhookStatus: { label: string; variant: StatusVariant } = webhookError
+    ? { label: "Feed issue", variant: "warning" }
+    : webhookDbConfigured === false
       ? { label: "Database unavailable", variant: "warning" }
       : webhookPreview.length > 0
         ? { label: `${webhookPreview.length} recent`, variant: "info" }
@@ -281,9 +444,10 @@ const HomePage = ({ context }: HomePageProps) => {
         <Flex direction="column" gap="small">
           <Flex justify="between" align="center" wrap gap="small">
             <Box flex="auto">
-              <Heading>OpsLens AI</Heading>
+              <Heading>OpsLens control center</Heading>
               <Text>
-                Portal operations view for incidents, saved alerts, and webhook health.
+                Compact portal view for incidents, saved alerts, ticket automation,
+                and webhook activity.
               </Text>
             </Box>
             <Flex align="center" gap="small" wrap>
@@ -301,190 +465,313 @@ const HomePage = ({ context }: HomePageProps) => {
             </Flex>
           </Flex>
 
-          {overviewError || webhookError ? (
+          {overviewError || webhookError || ticketError ? (
             <Flex direction="column" gap="flush">
               {overviewError ? <Text>Overview: {overviewError}</Text> : null}
+              {ticketError ? <Text>Ticket automation: {ticketError}</Text> : null}
               {webhookError ? <Text>Webhooks: {webhookError}</Text> : null}
             </Flex>
           ) : (
             <Text>
               Last backend check {formatDate(summary?.lastCheckedUtc)}. Threshold{" "}
-              {String(settings?.alertThreshold ?? "-").toUpperCase()}.
+              {String(settings?.alertThreshold ?? "-").toUpperCase()} for portal{" "}
+              {portalId || "unknown"}.
             </Text>
           )}
         </Flex>
       </Tile>
 
-      <AutoGrid columnWidth={170} flexible={true} gap="small">
+      <AutoGrid columnWidth={160} flexible={true} gap="small">
         <MetricTile
           label="Open incidents"
           value={String(summary?.openIncidents ?? "-")}
-          note="Above the current alert threshold"
+          note="Above the current threshold"
         />
         <MetricTile
           label="Critical issues"
           value={String(summary?.criticalIssues ?? "-")}
-          note="Escalated incident count"
-        />
-        <MetricTile
-          label="Monitored workflows"
-          value={String(summary?.monitoredWorkflows ?? "-")}
-          note={`${criticalWorkflowCount} marked critical`}
+          note="Highest-severity incident count"
         />
         <MetricTile
           label="Saved alerts"
-          value={String(debug?.savedAlertRows ?? "-")}
-          note={`${String(debug?.visibleRowsAtThreshold ?? "-")} visible now`}
+          value={String(debug?.visibleRowsAtThreshold ?? "-")}
+          note={`${String(debug?.savedAlertRows ?? "-")} rows stored`}
+        />
+        <MetricTile
+          label="Tracked tickets"
+          value={String(ticketActivityTotal)}
+          note="OpsLens tickets in this portal"
+        />
+        <MetricTile
+          label="Webhook events"
+          value={String(webhookEventCount)}
+          note="Most recent activity sample"
         />
       </AutoGrid>
 
-      <Tile compact>
-        <Flex direction="column" gap="small">
-          <Flex justify="between" align="center" wrap gap="small">
-            <Heading inline={true}>Incidents</Heading>
-            <StatusTag variant={incidentStatus.variant}>{incidentStatus.label}</StatusTag>
-          </Flex>
-
-          {activeIncidents.length === 0 ? (
-            <Text>No incidents are above the current alert threshold.</Text>
-          ) : (
-            <AutoGrid columnWidth={260} flexible={true} gap="small">
-              {activeIncidents.map((incident, idx) => (
-                <Tile compact key={incident?.id ?? idx}>
-                  <Flex direction="column" gap="flush">
-                    <Flex justify="between" align="center" wrap gap="small">
-                      <Text format={{ fontWeight: "bold" }}>
-                        {String(incident?.title ?? "Untitled incident")}
-                      </Text>
-                      <StatusTag
-                        variant={getSeverityVariant(incident?.severity)}
-                      >
-                        {String(incident?.severity ?? "unknown").toUpperCase()}
-                      </StatusTag>
-                    </Flex>
-                    <Text>ID: {String(incident?.id ?? "-")}</Text>
-                    <Text>
-                      Affected records: {String(incident?.affectedRecords ?? "-")}
-                    </Text>
-                    <Text>
-                      Recommendation: {String(incident?.recommendation ?? "-")}
-                    </Text>
-                  </Flex>
-                </Tile>
-              ))}
-            </AutoGrid>
-          )}
-        </Flex>
-      </Tile>
-
-      <Tile compact>
-        <Flex direction="column" gap="small">
-          <Flex justify="between" align="center" wrap gap="small">
-            <Heading inline={true}>Saved alerts</Heading>
-            <StatusTag variant="info">
-              Threshold {String(settings?.alertThreshold ?? "-").toUpperCase()}
-            </StatusTag>
-          </Flex>
-
-          <AutoGrid columnWidth={220} flexible={true} gap="small">
-            <DetailField
-              label="Saved alert rows"
-              value={String(debug?.savedAlertRows ?? "-")}
-            />
-            <DetailField
-              label="Visible at threshold"
-              value={String(debug?.visibleRowsAtThreshold ?? "-")}
-            />
-            <DetailField
-              label="Critical workflows"
-              value={criticalWorkflowCount > 0 ? String(criticalWorkflowCount) : "None configured"}
-            />
-            <DetailField
-              label="Settings storage"
-              value={String(settings?.storage ?? debug?.settingsStorage ?? "-")}
-            />
-            <DetailField
-              label="Workflow list"
-              value={
-                criticalWorkflowCount > 0
-                  ? String(settings?.criticalWorkflows ?? "")
-                      .split("\n")
-                      .map((value) => value.trim())
-                      .filter(Boolean)
-                      .slice(0, 3)
-                      .join(", ")
-                  : "No critical workflow names saved"
-              }
-            />
-            <DetailField
-              label="Settings updated"
-              value={formatDate(settings?.updatedAtUtc)}
-            />
-          </AutoGrid>
-        </Flex>
-      </Tile>
-
-      <Tile compact>
-        <Flex direction="column" gap="small">
-          <Flex justify="between" align="center" wrap gap="small">
-            <Heading inline={true}>Webhook activity</Heading>
-            <StatusTag variant={webhookStatus.variant}>{webhookStatus.label}</StatusTag>
-          </Flex>
-
-          {webhookDbConfigured === false ? (
-            <Text>Webhook database is not configured.</Text>
-          ) : webhookPreview.length === 0 ? (
-            <Text>No recent webhook events were found for this portal.</Text>
-          ) : (
-            <AutoGrid columnWidth={240} flexible={true} gap="small">
-              {webhookPreview.map((event, idx) => (
-                <Tile compact key={event?.eventId ?? `${event?.subscriptionType ?? "event"}-${idx}`}>
-                  <Flex direction="column" gap="flush">
-                    <Text format={{ fontWeight: "bold" }}>
-                      {String(event?.subscriptionType ?? "-")}
-                    </Text>
-                    <Text>
-                      Object {String(event?.objectId ?? "-")} • {String(event?.propertyName ?? "-")}
-                    </Text>
-                    <Text>Received {formatDate(event?.receivedAtUtc)}</Text>
-                    <Text>Occurred {formatDate(event?.occurredAtUtc)}</Text>
-                    <Text>
-                      Value {String(event?.propertyValue ?? "-")} from {String(event?.changeSource ?? "-")}
-                    </Text>
-                  </Flex>
-                </Tile>
-              ))}
-            </AutoGrid>
-          )}
-        </Flex>
-      </Tile>
-
-      <Accordion title="Technical details" size="small">
+      <AutoGrid columnWidth={320} flexible={true} gap="small">
         <Tile compact>
-          <AutoGrid columnWidth={220} flexible={true} gap="small">
-            <DetailField label="Portal ID" value={portalId || "unknown"} />
-            <DetailField label="User ID" value={userId || "unknown"} />
-            <DetailField label="User email" value={userEmail || "unknown"} />
-            <DetailField label="App ID" value={appId || "unknown"} />
-            <DetailField
-              label="Database configured"
-              value={String(debug?.dbConfigured ?? "-")}
-            />
-            <DetailField
-              label="Overview URL"
-              value={buildUrl("/api/v1/dashboard/overview", {
-                portalId,
-                userId,
-                userEmail,
-                appId,
-              })}
-            />
-            <DetailField
-              label="Webhook URL"
-              value={buildUrl("/api/v1/webhooks/recent", { portalId })}
-            />
-          </AutoGrid>
+          <Flex direction="column" gap="small">
+            <Flex justify="between" align="center" wrap gap="small">
+              <Box flex="auto">
+                <Heading inline={true}>Incidents</Heading>
+                <Text>Current operator queue above the saved threshold.</Text>
+              </Box>
+              <StatusTag variant={incidentStatus.variant}>{incidentStatus.label}</StatusTag>
+            </Flex>
+
+            {overviewError ? (
+              <Text>Incident summary is unavailable until overview data reloads.</Text>
+            ) : incidentPreview.length === 0 ? (
+              <Text>No incidents are currently above the alert threshold.</Text>
+            ) : (
+              <Flex direction="column" gap="small">
+                {incidentPreview.map((incident, idx) => (
+                  <Tile compact key={incident?.id ?? idx}>
+                    <Flex direction="column" gap="flush">
+                      <Flex justify="between" align="center" wrap gap="small">
+                        <Text format={{ fontWeight: "bold" }}>
+                          {String(incident?.title ?? "Untitled incident")}
+                        </Text>
+                        <StatusTag variant={getSeverityVariant(incident?.severity)}>
+                          {String(incident?.severity ?? "unknown").toUpperCase()}
+                        </StatusTag>
+                      </Flex>
+                      <Text>ID {String(incident?.id ?? "-")}</Text>
+                      <Text>
+                        Affected records {String(incident?.affectedRecords ?? "-")}
+                      </Text>
+                      <Text>
+                        Recommendation {String(incident?.recommendation ?? "-")}
+                      </Text>
+                    </Flex>
+                  </Tile>
+                ))}
+              </Flex>
+            )}
+          </Flex>
         </Tile>
+
+        <Tile compact>
+          <Flex direction="column" gap="small">
+            <Flex justify="between" align="center" wrap gap="small">
+              <Box flex="auto">
+                <Heading inline={true}>Saved alerts</Heading>
+                <Text>Portal-level visibility, thresholds, and monitored workflows.</Text>
+              </Box>
+              <StatusTag variant={savedAlertStatus.variant}>{savedAlertStatus.label}</StatusTag>
+            </Flex>
+
+            {overviewError ? (
+              <Text>Saved-alert context is unavailable until overview data reloads.</Text>
+            ) : (
+              <AutoGrid columnWidth={170} flexible={true} gap="small">
+                <DetailField
+                  label="Alert threshold"
+                  value={String(settings?.alertThreshold ?? "-").toUpperCase()}
+                />
+                <DetailField
+                  label="Critical workflows"
+                  value={
+                    criticalWorkflowCount > 0
+                      ? String(criticalWorkflowCount)
+                      : "None configured"
+                  }
+                />
+                <DetailField
+                  label="Saved alert rows"
+                  value={String(debug?.savedAlertRows ?? "-")}
+                />
+                <DetailField
+                  label="Settings storage"
+                  value={String(settings?.storage ?? debug?.settingsStorage ?? "-")}
+                />
+                <DetailField
+                  label="Workflow list"
+                  value={
+                    monitoredWorkflows.length > 0
+                      ? monitoredWorkflows.slice(0, 3).join(", ")
+                      : "No workflow names saved"
+                  }
+                />
+                <DetailField
+                  label="Settings updated"
+                  value={formatDate(settings?.updatedAtUtc)}
+                />
+              </AutoGrid>
+            )}
+          </Flex>
+        </Tile>
+
+        <Tile compact>
+          <Flex direction="column" gap="small">
+            <Flex justify="between" align="center" wrap gap="small">
+              <Box flex="auto">
+                <Heading inline={true}>Ticket automation</Heading>
+                <Text>Recent OpsLens ticket sync and auto-resolve visibility.</Text>
+              </Box>
+              <StatusTag variant={ticketStatus.variant}>{ticketStatus.label}</StatusTag>
+            </Flex>
+
+            {ticketError ? (
+              <Text>Ticket visibility is limited right now: {ticketError}</Text>
+            ) : ticketActivityTotal === 0 ? (
+              <Text>No OpsLens tickets have been found for this portal yet.</Text>
+            ) : (
+              <Flex direction="column" gap="small">
+                <AutoGrid columnWidth={170} flexible={true} gap="small">
+                  <DetailField
+                    label="Tracked tickets"
+                    value={String(ticketActivityTotal)}
+                  />
+                  <DetailField
+                    label="Active in preview"
+                    value={String(recentActiveTickets)}
+                  />
+                  <DetailField
+                    label="Resolved in preview"
+                    value={String(recentResolvedTickets)}
+                  />
+                  <DetailField
+                    label="Latest ticket update"
+                    value={formatDate(ticketPreview[0]?.properties?.hs_lastmodifieddate)}
+                  />
+                </AutoGrid>
+
+                <Flex direction="column" gap="small">
+                  {ticketPreview.map((ticket, idx) => {
+                    const properties = ticket?.properties ?? {};
+
+                    return (
+                      <Tile compact key={ticket?.id ?? idx}>
+                        <Flex direction="column" gap="flush">
+                          <Flex justify="between" align="center" wrap gap="small">
+                            <Text format={{ fontWeight: "bold" }}>
+                              {String(
+                                properties?.subject ||
+                                  `Ticket ${String(ticket?.id ?? idx + 1)}`
+                              )}
+                            </Text>
+                            <StatusTag
+                              variant={getTicketStageVariant(
+                                properties?.hs_pipeline_stage
+                              )}
+                            >
+                              {getTicketStageLabel(properties?.hs_pipeline_stage)}
+                            </StatusTag>
+                          </Flex>
+                          <Text>
+                            Contact {String(properties?.opslens_ticket_contact_id ?? "-")} •
+                            Workflow {String(properties?.opslens_ticket_workflow_id ?? "-")}
+                          </Text>
+                          <Text>
+                            Delivery {String(
+                              properties?.opslens_ticket_delivery_status ?? "-"
+                            )} • Last alert{" "}
+                            {formatDate(properties?.opslens_ticket_last_alert_at)}
+                          </Text>
+                        </Flex>
+                      </Tile>
+                    );
+                  })}
+                </Flex>
+              </Flex>
+            )}
+          </Flex>
+        </Tile>
+
+        <Tile compact>
+          <Flex direction="column" gap="small">
+            <Flex justify="between" align="center" wrap gap="small">
+              <Box flex="auto">
+                <Heading inline={true}>Webhook activity</Heading>
+                <Text>Recent delivery and property-change activity for this portal.</Text>
+              </Box>
+              <StatusTag variant={webhookStatus.variant}>{webhookStatus.label}</StatusTag>
+            </Flex>
+
+            {webhookError ? (
+              <Text>Webhook activity is unavailable right now: {webhookError}</Text>
+            ) : webhookDbConfigured === false ? (
+              <Text>Webhook storage is not configured for this environment.</Text>
+            ) : webhookPreview.length === 0 ? (
+              <Text>No recent webhook events were found for this portal.</Text>
+            ) : (
+              <Flex direction="column" gap="small">
+                {webhookPreview.map((event, idx) => (
+                  <Tile compact key={event?.eventId ?? `${event?.subscriptionType ?? "event"}-${idx}`}>
+                    <Flex direction="column" gap="flush">
+                      <Text format={{ fontWeight: "bold" }}>
+                        {String(event?.subscriptionType ?? "-")}
+                      </Text>
+                      <Text>
+                        Object {String(event?.objectId ?? "-")} •{" "}
+                        {String(event?.propertyName ?? "-")}
+                      </Text>
+                      <Text>
+                        Received {formatDate(event?.receivedAtUtc)} • Occurred{" "}
+                        {formatDate(event?.occurredAtUtc)}
+                      </Text>
+                      <Text>
+                        Source {String(event?.changeSource ?? "-")} • Value{" "}
+                        {String(event?.propertyValue ?? "-")}
+                      </Text>
+                    </Flex>
+                  </Tile>
+                ))}
+              </Flex>
+            )}
+          </Flex>
+        </Tile>
+      </AutoGrid>
+
+      <Accordion title="Advanced context" size="small">
+        <Flex direction="column" gap="small">
+          <Tile compact>
+            <AutoGrid columnWidth={220} flexible={true} gap="small">
+              <DetailField label="Portal ID" value={portalId || "unknown"} />
+              <DetailField label="User ID" value={userId || "unknown"} />
+              <DetailField label="User email" value={userEmail || "unknown"} />
+              <DetailField label="App ID" value={appId || "unknown"} />
+              <DetailField
+                label="Database configured"
+                value={String(debug?.dbConfigured ?? "-")}
+              />
+              <DetailField
+                label="Overview URL"
+                value={buildUrl("/api/v1/dashboard/overview", {
+                  portalId,
+                  userId,
+                  userEmail,
+                  appId,
+                })}
+              />
+              <DetailField
+                label="Webhook URL"
+                value={buildUrl("/api/v1/webhooks/recent", { portalId })}
+              />
+              <DetailField
+                label="Ticket search"
+                value={`${HUBSPOT_API_BASE_URL}/crm/v3/objects/tickets/search`}
+              />
+            </AutoGrid>
+          </Tile>
+
+          <Tile compact>
+            <Flex direction="column" gap="flush">
+              <Text format={{ fontWeight: "bold" }}>Recent refresh notes</Text>
+              <Text>
+                Overview status {overviewError ? `issue: ${overviewError}` : "ok"}
+              </Text>
+              <Text>
+                Ticket automation status {ticketError ? `issue: ${ticketError}` : "ok"}
+              </Text>
+              <Text>
+                Webhook status {webhookError ? `issue: ${webhookError}` : "ok"}
+              </Text>
+            </Flex>
+          </Tile>
+        </Flex>
       </Accordion>
     </Flex>
   );

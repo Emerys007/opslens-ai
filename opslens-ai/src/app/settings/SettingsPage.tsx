@@ -27,6 +27,8 @@ type DetailFieldProps = {
   value: string;
 };
 
+type StatusVariant = "danger" | "warning" | "info" | "success" | "default";
+
 const DetailField = ({ label, value }: DetailFieldProps) => {
   return (
     <Box>
@@ -35,8 +37,6 @@ const DetailField = ({ label, value }: DetailFieldProps) => {
     </Box>
   );
 };
-
-type StatusVariant = "danger" | "warning" | "info" | "success" | "default";
 
 const SettingsPage = ({ context }) => {
   const [loading, setLoading] = useState(true);
@@ -47,6 +47,7 @@ const SettingsPage = ({ context }) => {
   const [slackWebhookUrl, setSlackWebhookUrl] = useState("");
   const [alertThreshold, setAlertThreshold] = useState("high");
   const [criticalWorkflows, setCriticalWorkflows] = useState("");
+  const [lastSavedAt, setLastSavedAt] = useState("");
 
   const portalId = String(context?.portal?.id ?? "unknown");
   const userId = String(context?.user?.id ?? "unknown");
@@ -55,6 +56,16 @@ const SettingsPage = ({ context }) => {
   const settingsUrl = useMemo(() => {
     return `${BACKEND_BASE_URL}/api/v1/settings-store`;
   }, []);
+
+  const formatDate = (value?: string | null) => {
+    if (!value) return "Not available yet";
+
+    try {
+      return new Date(value).toLocaleString();
+    } catch {
+      return String(value);
+    }
+  };
 
   const loadSettings = async () => {
     setLoading(true);
@@ -77,29 +88,30 @@ const SettingsPage = ({ context }) => {
       const nextSlackWebhookUrl = String(settings?.slackWebhookUrl ?? "");
       const nextAlertThreshold = String(settings?.alertThreshold ?? "high");
       const nextCriticalWorkflows = String(settings?.criticalWorkflows ?? "");
+      const nextLastSavedAt = String(
+        data?.savedAtUtc ??
+          settings?.updatedAtUtc ??
+          settings?.loadedAtUtc ??
+          ""
+      );
 
       setSlackWebhookUrl(nextSlackWebhookUrl);
       setAlertThreshold(nextAlertThreshold);
       setCriticalWorkflows(nextCriticalWorkflows);
+      setLastSavedAt(nextLastSavedAt);
       setHasLoadedSettings(true);
-
-      const lastSavedAt =
-        data?.savedAtUtc ??
-        settings?.updatedAtUtc ??
-        settings?.loadedAtUtc ??
-        "";
 
       const hasLoadedValues =
         nextSlackWebhookUrl.trim() !== "" ||
         nextCriticalWorkflows.trim() !== "" ||
         nextAlertThreshold.trim() !== "";
 
-      if (lastSavedAt) {
-        setSaveMessage(`Last saved at ${lastSavedAt}`);
+      if (nextLastSavedAt) {
+        setSaveMessage("Settings loaded from the hosted portal store.");
       } else if (hasLoadedValues) {
-        setSaveMessage("Settings loaded from hosted backend.");
+        setSaveMessage("Settings loaded from the hosted portal store.");
       } else {
-        setSaveMessage("");
+        setSaveMessage("No saved values were returned for this portal.");
       }
     } catch (err) {
       console.error("Failed to load settings", err);
@@ -130,13 +142,15 @@ const SettingsPage = ({ context }) => {
       }
 
       const data = await response.json();
-      const savedAt =
+      const savedAt = String(
         data?.savedAtUtc ??
-        data?.settings?.updatedAtUtc ??
-        data?.settings?.loadedAtUtc ??
-        "";
+          data?.settings?.updatedAtUtc ??
+          data?.settings?.loadedAtUtc ??
+          ""
+      );
 
-      setSaveMessage(savedAt ? `Saved at ${savedAt}` : "Settings saved.");
+      setLastSavedAt(savedAt);
+      setSaveMessage(savedAt ? "Changes saved to the hosted portal store." : "Settings saved.");
     } catch (err) {
       console.error("Failed to save settings", err);
       setErrorMessage(err instanceof Error ? err.message : "Unknown error");
@@ -151,6 +165,10 @@ const SettingsPage = ({ context }) => {
     );
   }, [settingsUrl]);
 
+  const workflowCount = criticalWorkflows
+    .split("\n")
+    .map((value) => value.trim())
+    .filter(Boolean).length;
   const formLocked = loading || saving || !hasLoadedSettings;
   const settingsStatus: { label: string; variant: StatusVariant } = loading
     ? { label: "Loading settings", variant: "info" }
@@ -166,6 +184,11 @@ const SettingsPage = ({ context }) => {
     : !hasLoadedSettings
       ? "Settings stay locked until the current portal configuration loads successfully."
       : saveMessage || "Portal settings are ready to edit.";
+  const protectionMessage = !hasLoadedSettings
+    ? "Editing stays locked until load succeeds."
+    : saving
+      ? "Save is in progress."
+      : "Editing is unlocked for this portal.";
 
   return (
     <Flex direction="column" gap="small">
@@ -182,7 +205,21 @@ const SettingsPage = ({ context }) => {
               {settingsStatus.label}
             </StatusTag>
           </Flex>
+
           <Text>{statusMessage}</Text>
+
+          <AutoGrid columnWidth={180} flexible={true} gap="small">
+            <DetailField label="Portal" value={portalId} />
+            <DetailField
+              label="Alert threshold"
+              value={String(alertThreshold || "-").toUpperCase()}
+            />
+            <DetailField
+              label="Critical workflows"
+              value={workflowCount > 0 ? String(workflowCount) : "None configured"}
+            />
+            <DetailField label="Last saved" value={formatDate(lastSavedAt)} />
+          </AutoGrid>
         </Flex>
       </Tile>
 
@@ -194,68 +231,77 @@ const SettingsPage = ({ context }) => {
           );
         }}
       >
-        <Flex direction="column" gap="small">
-          <AutoGrid columnWidth={280} flexible={true} gap="small">
-            <Tile compact>
-              <Flex direction="column" gap="small">
-                <Heading inline={true}>Alert routing</Heading>
-                <Text>
-                  Manage where OpsLens alert activity is sent and when it becomes visible.
-                </Text>
-                <Input
-                  label="Slack webhook URL"
-                  name="slackWebhookUrl"
-                  value={slackWebhookUrl}
-                  onChange={(value) => setSlackWebhookUrl(String(value))}
-                  placeholder="https://hooks.slack.com/services/..."
-                  readOnly={formLocked}
-                />
-                <Select
-                  label="Alert threshold"
-                  name="alertThreshold"
-                  value={alertThreshold}
-                  onChange={(value) => setAlertThreshold(String(value))}
-                  readOnly={formLocked}
-                  options={[
-                    { label: "Critical", value: "critical" },
-                    { label: "High", value: "high" },
-                    { label: "Medium", value: "medium" },
-                  ]}
-                />
-              </Flex>
-            </Tile>
-
-            <Tile compact>
-              <Flex direction="column" gap="small">
-                <Heading inline={true}>Workflow monitoring</Heading>
-                <Text>
-                  Keep the workflow list tight so operators can focus on the highest-value flows.
-                </Text>
-                <TextArea
-                  label="Critical workflows"
-                  name="criticalWorkflows"
-                  value={criticalWorkflows}
-                  onChange={(value) => setCriticalWorkflows(String(value))}
-                  placeholder={"Quote Sync\nOwner Routing\nImport Cleanup"}
-                  description="One workflow name per line."
-                  readOnly={formLocked}
-                  rows={7}
-                />
-              </Flex>
-            </Tile>
-          </AutoGrid>
+        <AutoGrid columnWidth={260} flexible={true} gap="small">
+          <Tile compact>
+            <Flex direction="column" gap="small">
+              <Heading inline={true}>Alert routing</Heading>
+              <Text>Choose the threshold and Slack destination operators rely on.</Text>
+              <Input
+                label="Slack webhook URL"
+                name="slackWebhookUrl"
+                value={slackWebhookUrl}
+                onChange={(value) => setSlackWebhookUrl(String(value))}
+                placeholder="https://hooks.slack.com/services/..."
+                readOnly={formLocked}
+              />
+              <Select
+                label="Alert threshold"
+                name="alertThreshold"
+                value={alertThreshold}
+                onChange={(value) => setAlertThreshold(String(value))}
+                readOnly={formLocked}
+                options={[
+                  { label: "Critical", value: "critical" },
+                  { label: "High", value: "high" },
+                  { label: "Medium", value: "medium" },
+                ]}
+              />
+            </Flex>
+          </Tile>
 
           <Tile compact>
-            <Flex justify="between" align="center" wrap gap="small">
-              <Box flex="auto">
-                <Text format={{ fontWeight: "bold" }}>Save state</Text>
-                <Text>
-                  {!hasLoadedSettings
-                    ? "Settings must load successfully before you can edit or save them."
-                    : saveMessage || "Changes save to the hosted portal settings store."}
-                </Text>
-                {errorMessage ? <Text>Error: {errorMessage}</Text> : null}
-              </Box>
+            <Flex direction="column" gap="small">
+              <Heading inline={true}>Workflow monitoring</Heading>
+              <Text>Keep the workflow list short so high-value automations stay visible.</Text>
+              <TextArea
+                label="Critical workflows"
+                name="criticalWorkflows"
+                value={criticalWorkflows}
+                onChange={(value) => setCriticalWorkflows(String(value))}
+                placeholder={"Quote Sync\nOwner Routing\nImport Cleanup"}
+                description="One workflow name per line."
+                readOnly={formLocked}
+                rows={5}
+              />
+            </Flex>
+          </Tile>
+
+          <Tile compact>
+            <Flex direction="column" gap="small">
+              <Flex justify="between" align="center" wrap gap="small">
+                <Heading inline={true}>Save state</Heading>
+                <StatusTag variant={settingsStatus.variant}>
+                  {settingsStatus.label}
+                </StatusTag>
+              </Flex>
+
+              <AutoGrid columnWidth={170} flexible={true} gap="small">
+                <DetailField label="Protection" value={protectionMessage} />
+                <DetailField label="Last saved" value={formatDate(lastSavedAt)} />
+                <DetailField label="Portal store" value="Hosted backend settings store" />
+                <DetailField
+                  label="Workflow count"
+                  value={workflowCount > 0 ? String(workflowCount) : "0"}
+                />
+              </AutoGrid>
+
+              <Text>
+                {!hasLoadedSettings
+                  ? "Settings must load successfully before you can edit or save them."
+                  : saveMessage || "Changes save to the hosted portal settings store."}
+              </Text>
+              {errorMessage ? <Text>Error: {errorMessage}</Text> : null}
+
               <Flex align="center" gap="small" wrap>
                 {errorMessage ? (
                   <Button
@@ -275,10 +321,10 @@ const SettingsPage = ({ context }) => {
               </Flex>
             </Flex>
           </Tile>
-        </Flex>
+        </AutoGrid>
       </Form>
 
-      <Accordion title="Technical details" size="small">
+      <Accordion title="Advanced context" size="small">
         <Tile compact>
           <AutoGrid columnWidth={220} flexible={true} gap="small">
             <DetailField label="Portal ID" value={portalId} />
