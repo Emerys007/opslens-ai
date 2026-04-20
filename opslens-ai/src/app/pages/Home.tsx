@@ -1,11 +1,14 @@
 import React, { useEffect, useState } from "react";
 import {
+  Accordion,
+  AutoGrid,
   Box,
   Button,
-  Divider,
-  EmptyState,
   Flex,
+  Heading,
+  StatusTag,
   Text,
+  Tile,
   hubspot,
 } from "@hubspot/ui-extensions";
 
@@ -81,6 +84,59 @@ type RecentWebhooksResponse = {
   events?: WebhookEvent[];
 };
 
+type MetricTileProps = {
+  label: string;
+  value: string | number;
+  note?: string;
+};
+
+type StatusVariant = "danger" | "warning" | "info" | "success" | "default";
+
+const MetricTile = ({ label, value, note }: MetricTileProps) => {
+  return (
+    <Tile compact>
+      <Flex direction="column" gap="flush">
+        <Text format={{ fontWeight: "bold" }}>{label}</Text>
+        <Heading>{String(value)}</Heading>
+        {note ? <Text>{note}</Text> : null}
+      </Flex>
+    </Tile>
+  );
+};
+
+type DetailFieldProps = {
+  label: string;
+  value: string;
+};
+
+const DetailField = ({ label, value }: DetailFieldProps) => {
+  return (
+    <Box>
+      <Text format={{ fontWeight: "bold" }}>{label}</Text>
+      <Text>{value}</Text>
+    </Box>
+  );
+};
+
+const getStatusVariant = (
+  variant: "loading" | "error" | "success" | "default"
+): StatusVariant => {
+  if (variant === "loading") return "info";
+  if (variant === "error") return "warning";
+  if (variant === "success") return "success";
+  return "default";
+};
+
+const getSeverityVariant = (severity?: string | null): StatusVariant => {
+  const level = String(severity || "").toLowerCase();
+
+  if (level === "critical") return "danger";
+  if (level === "high") return "warning";
+  if (level === "medium") return "info";
+
+  return "default";
+};
+
 const HomePage = ({ context }: HomePageProps) => {
   const [loading, setLoading] = useState(true);
   const [overviewError, setOverviewError] = useState("");
@@ -96,6 +152,7 @@ const HomePage = ({ context }: HomePageProps) => {
 
   const formatDate = (value?: string | null) => {
     if (!value) return "-";
+
     try {
       return new Date(value).toLocaleString();
     } catch {
@@ -170,10 +227,7 @@ const HomePage = ({ context }: HomePageProps) => {
     setWebhookError("");
 
     try {
-      await Promise.all([
-        loadOverview(),
-        loadRecentWebhookActivity(),
-      ]);
+      await Promise.all([loadOverview(), loadRecentWebhookActivity()]);
     } catch (err) {
       console.error("App Home refresh failed", err);
       const message = err instanceof Error ? err.message : "Unknown refresh error";
@@ -197,124 +251,241 @@ const HomePage = ({ context }: HomePageProps) => {
   const settings = overviewData?.settings ?? {};
   const summary = overviewData?.summary ?? {};
   const debug = overviewData?.debug ?? {};
-  const activeIncidents = Array.isArray(summary?.activeIncidents) ? summary.activeIncidents : [];
+  const activeIncidents = Array.isArray(summary?.activeIncidents)
+    ? summary.activeIncidents
+    : [];
+  const criticalWorkflowCount = String(settings?.criticalWorkflows ?? "")
+    .split("\n")
+    .map((value) => value.trim())
+    .filter(Boolean).length;
+  const webhookPreview = recentWebhookActivity.slice(0, 4);
+  const pageStatus: { label: string; variant: StatusVariant } = loading
+    ? { label: "Refreshing", variant: getStatusVariant("loading") }
+    : overviewError || webhookError
+      ? { label: "Needs attention", variant: getStatusVariant("error") }
+      : { label: "Live", variant: getStatusVariant("success") };
+  const incidentStatus: { label: string; variant: StatusVariant } =
+    Number(summary?.openIncidents ?? 0) > 0
+      ? { label: `${String(summary?.openIncidents ?? 0)} open`, variant: "warning" }
+      : { label: "Stable", variant: "success" };
+  const webhookStatus: { label: string; variant: StatusVariant } =
+    webhookDbConfigured === false
+      ? { label: "Database unavailable", variant: "warning" }
+      : webhookPreview.length > 0
+        ? { label: `${webhookPreview.length} recent`, variant: "info" }
+        : { label: "Quiet", variant: "default" };
 
   return (
-    <Flex direction="column" gap="medium">
-      <EmptyState title="OpsLens AI is connected" layout="vertical">
-        <Text>
-          This page is now loading live summary and recent webhook activity from the hosted backend.
-        </Text>
-      </EmptyState>
-
-      <Button
-        onClick={() => {
-          refreshAll().catch((err) =>
-            console.error("Unexpected Home refresh error", err)
-          );
-        }}
-      >
-        Refresh
-      </Button>
-
-      <Divider />
-
-      <Box>
-        <Text format={{ fontWeight: "bold" }}>Backend status</Text>
-        <Text>{loading ? "Loading..." : "ok"}</Text>
-        <Text>{overviewError ? `Overview error: ${overviewError}` : "No fetch error detected."}</Text>
-        <Text>{webhookError ? `Webhook feed error: ${webhookError}` : "No webhook feed error detected."}</Text>
-        <Text>Database configured: {String(debug?.dbConfigured ?? "-")}</Text>
-      </Box>
-
-      <Divider />
-
-      <Box>
-        <Text format={{ fontWeight: "bold" }}>Applied settings</Text>
-        <Text>Alert threshold: {String(settings?.alertThreshold ?? "-")}</Text>
-        <Text>Critical workflows: {String(settings?.criticalWorkflows ?? "-")}</Text>
-        <Text>Settings storage: {String(settings?.storage ?? debug?.settingsStorage ?? "-")}</Text>
-      </Box>
-
-      <Divider />
-
-      <Box>
-        <Text format={{ fontWeight: "bold" }}>Ops summary</Text>
-        <Text>Open incidents: {String(summary?.openIncidents ?? "-")}</Text>
-        <Text>Critical issues: {String(summary?.criticalIssues ?? "-")}</Text>
-        <Text>Monitored workflows: {String(summary?.monitoredWorkflows ?? "-")}</Text>
-        <Text>Last checked: {formatDate(summary?.lastCheckedUtc)}</Text>
-      </Box>
-
-      <Divider />
-
-      <Box>
-        <Text format={{ fontWeight: "bold" }}>Active incidents</Text>
-        {activeIncidents.length === 0 ? (
-          <Text>No active incidents returned.</Text>
-        ) : (
-          <Flex direction="column" gap="small">
-            {activeIncidents.map((incident, idx) => (
-              <Box key={incident?.id ?? idx}>
-                <Text>
-                  [{String(incident?.severity ?? "-").toUpperCase()}] {String(incident?.title ?? "Untitled incident")}
-                </Text>
-                <Text>ID: {String(incident?.id ?? "-")}</Text>
-                <Text>Affected records: {String(incident?.affectedRecords ?? "-")}</Text>
-                <Text>Recommendation: {String(incident?.recommendation ?? "-")}</Text>
-              </Box>
-            ))}
+    <Flex direction="column" gap="small">
+      <Tile compact>
+        <Flex direction="column" gap="small">
+          <Flex justify="between" align="center" wrap gap="small">
+            <Box flex="auto">
+              <Heading>OpsLens AI</Heading>
+              <Text>
+                Portal operations view for incidents, saved alerts, and webhook health.
+              </Text>
+            </Box>
+            <Flex align="center" gap="small" wrap>
+              <StatusTag variant={pageStatus.variant}>{pageStatus.label}</StatusTag>
+              <Button
+                onClick={() => {
+                  refreshAll().catch((err) =>
+                    console.error("Unexpected Home refresh error", err)
+                  );
+                }}
+                disabled={loading}
+              >
+                {loading ? "Refreshing..." : "Refresh"}
+              </Button>
+            </Flex>
           </Flex>
-        )}
-      </Box>
 
-      <Divider />
+          {overviewError || webhookError ? (
+            <Flex direction="column" gap="flush">
+              {overviewError ? <Text>Overview: {overviewError}</Text> : null}
+              {webhookError ? <Text>Webhooks: {webhookError}</Text> : null}
+            </Flex>
+          ) : (
+            <Text>
+              Last backend check {formatDate(summary?.lastCheckedUtc)}. Threshold{" "}
+              {String(settings?.alertThreshold ?? "-").toUpperCase()}.
+            </Text>
+          )}
+        </Flex>
+      </Tile>
 
-      <Box>
-        <Text format={{ fontWeight: "bold" }}>Saved alert status</Text>
-        <Text>Saved alert rows: {String(debug?.savedAlertRows ?? "-")}</Text>
-        <Text>Visible rows at threshold: {String(debug?.visibleRowsAtThreshold ?? "-")}</Text>
-      </Box>
+      <AutoGrid columnWidth={170} flexible={true} gap="small">
+        <MetricTile
+          label="Open incidents"
+          value={String(summary?.openIncidents ?? "-")}
+          note="Above the current alert threshold"
+        />
+        <MetricTile
+          label="Critical issues"
+          value={String(summary?.criticalIssues ?? "-")}
+          note="Escalated incident count"
+        />
+        <MetricTile
+          label="Monitored workflows"
+          value={String(summary?.monitoredWorkflows ?? "-")}
+          note={`${criticalWorkflowCount} marked critical`}
+        />
+        <MetricTile
+          label="Saved alerts"
+          value={String(debug?.savedAlertRows ?? "-")}
+          note={`${String(debug?.visibleRowsAtThreshold ?? "-")} visible now`}
+        />
+      </AutoGrid>
 
-      <Divider />
-
-      <Box>
-        <Text format={{ fontWeight: "bold" }}>Recent webhook activity</Text>
-        {webhookDbConfigured === false ? (
-          <Text>Webhook database is not configured.</Text>
-        ) : recentWebhookActivity.length === 0 ? (
-          <Text>No recent webhook events found for this portal.</Text>
-        ) : (
-          <Flex direction="column" gap="small">
-            {recentWebhookActivity.map((event, idx) => (
-              <Box key={event?.eventId ?? `${event?.subscriptionType ?? "event"}-${idx}`}>
-                <Text>
-                  {String(event?.subscriptionType ?? "-")} on object {String(event?.objectId ?? "-")}
-                </Text>
-                <Text>Received: {formatDate(event?.receivedAtUtc)}</Text>
-                <Text>Occurred: {formatDate(event?.occurredAtUtc)}</Text>
-                <Text>Property: {String(event?.propertyName ?? "-")}</Text>
-                <Text>Value: {String(event?.propertyValue ?? "-")}</Text>
-                <Text>Change source: {String(event?.changeSource ?? "-")}</Text>
-                <Text>Source ID: {String(event?.sourceId ?? "-")}</Text>
-                <Text>Event ID: {String(event?.eventId ?? "-")}</Text>
-              </Box>
-            ))}
+      <Tile compact>
+        <Flex direction="column" gap="small">
+          <Flex justify="between" align="center" wrap gap="small">
+            <Heading inline={true}>Incidents</Heading>
+            <StatusTag variant={incidentStatus.variant}>{incidentStatus.label}</StatusTag>
           </Flex>
-        )}
-      </Box>
 
-      <Divider />
+          {activeIncidents.length === 0 ? (
+            <Text>No incidents are above the current alert threshold.</Text>
+          ) : (
+            <AutoGrid columnWidth={260} flexible={true} gap="small">
+              {activeIncidents.map((incident, idx) => (
+                <Tile compact key={incident?.id ?? idx}>
+                  <Flex direction="column" gap="flush">
+                    <Flex justify="between" align="center" wrap gap="small">
+                      <Text format={{ fontWeight: "bold" }}>
+                        {String(incident?.title ?? "Untitled incident")}
+                      </Text>
+                      <StatusTag
+                        variant={getSeverityVariant(incident?.severity)}
+                      >
+                        {String(incident?.severity ?? "unknown").toUpperCase()}
+                      </StatusTag>
+                    </Flex>
+                    <Text>ID: {String(incident?.id ?? "-")}</Text>
+                    <Text>
+                      Affected records: {String(incident?.affectedRecords ?? "-")}
+                    </Text>
+                    <Text>
+                      Recommendation: {String(incident?.recommendation ?? "-")}
+                    </Text>
+                  </Flex>
+                </Tile>
+              ))}
+            </AutoGrid>
+          )}
+        </Flex>
+      </Tile>
 
-      <Box>
-        <Text format={{ fontWeight: "bold" }}>Debug context</Text>
-        <Text>Portal ID: {portalId || "unknown"}</Text>
-        <Text>User ID: {userId || "unknown"}</Text>
-        <Text>User Email: {userEmail || "unknown"}</Text>
-        <Text>App ID: {appId || "unknown"}</Text>
-        <Text>Overview URL: {buildUrl("/api/v1/dashboard/overview", { portalId, userId, userEmail, appId })}</Text>
-        <Text>Webhook URL: {buildUrl("/api/v1/webhooks/recent", { portalId })}</Text>
-      </Box>
+      <Tile compact>
+        <Flex direction="column" gap="small">
+          <Flex justify="between" align="center" wrap gap="small">
+            <Heading inline={true}>Saved alerts</Heading>
+            <StatusTag variant="info">
+              Threshold {String(settings?.alertThreshold ?? "-").toUpperCase()}
+            </StatusTag>
+          </Flex>
+
+          <AutoGrid columnWidth={220} flexible={true} gap="small">
+            <DetailField
+              label="Saved alert rows"
+              value={String(debug?.savedAlertRows ?? "-")}
+            />
+            <DetailField
+              label="Visible at threshold"
+              value={String(debug?.visibleRowsAtThreshold ?? "-")}
+            />
+            <DetailField
+              label="Critical workflows"
+              value={criticalWorkflowCount > 0 ? String(criticalWorkflowCount) : "None configured"}
+            />
+            <DetailField
+              label="Settings storage"
+              value={String(settings?.storage ?? debug?.settingsStorage ?? "-")}
+            />
+            <DetailField
+              label="Workflow list"
+              value={
+                criticalWorkflowCount > 0
+                  ? String(settings?.criticalWorkflows ?? "")
+                      .split("\n")
+                      .map((value) => value.trim())
+                      .filter(Boolean)
+                      .slice(0, 3)
+                      .join(", ")
+                  : "No critical workflow names saved"
+              }
+            />
+            <DetailField
+              label="Settings updated"
+              value={formatDate(settings?.updatedAtUtc)}
+            />
+          </AutoGrid>
+        </Flex>
+      </Tile>
+
+      <Tile compact>
+        <Flex direction="column" gap="small">
+          <Flex justify="between" align="center" wrap gap="small">
+            <Heading inline={true}>Webhook activity</Heading>
+            <StatusTag variant={webhookStatus.variant}>{webhookStatus.label}</StatusTag>
+          </Flex>
+
+          {webhookDbConfigured === false ? (
+            <Text>Webhook database is not configured.</Text>
+          ) : webhookPreview.length === 0 ? (
+            <Text>No recent webhook events were found for this portal.</Text>
+          ) : (
+            <AutoGrid columnWidth={240} flexible={true} gap="small">
+              {webhookPreview.map((event, idx) => (
+                <Tile compact key={event?.eventId ?? `${event?.subscriptionType ?? "event"}-${idx}`}>
+                  <Flex direction="column" gap="flush">
+                    <Text format={{ fontWeight: "bold" }}>
+                      {String(event?.subscriptionType ?? "-")}
+                    </Text>
+                    <Text>
+                      Object {String(event?.objectId ?? "-")} • {String(event?.propertyName ?? "-")}
+                    </Text>
+                    <Text>Received {formatDate(event?.receivedAtUtc)}</Text>
+                    <Text>Occurred {formatDate(event?.occurredAtUtc)}</Text>
+                    <Text>
+                      Value {String(event?.propertyValue ?? "-")} from {String(event?.changeSource ?? "-")}
+                    </Text>
+                  </Flex>
+                </Tile>
+              ))}
+            </AutoGrid>
+          )}
+        </Flex>
+      </Tile>
+
+      <Accordion title="Technical details" size="small">
+        <Tile compact>
+          <AutoGrid columnWidth={220} flexible={true} gap="small">
+            <DetailField label="Portal ID" value={portalId || "unknown"} />
+            <DetailField label="User ID" value={userId || "unknown"} />
+            <DetailField label="User email" value={userEmail || "unknown"} />
+            <DetailField label="App ID" value={appId || "unknown"} />
+            <DetailField
+              label="Database configured"
+              value={String(debug?.dbConfigured ?? "-")}
+            />
+            <DetailField
+              label="Overview URL"
+              value={buildUrl("/api/v1/dashboard/overview", {
+                portalId,
+                userId,
+                userEmail,
+                appId,
+              })}
+            />
+            <DetailField
+              label="Webhook URL"
+              value={buildUrl("/api/v1/webhooks/recent", { portalId })}
+            />
+          </AutoGrid>
+        </Tile>
+      </Accordion>
     </Flex>
   );
 };

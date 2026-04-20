@@ -1,15 +1,18 @@
-﻿import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
+  Accordion,
+  AutoGrid,
   Box,
   Button,
-  Divider,
-  EmptyState,
   Flex,
   Form,
+  Heading,
   Input,
   Select,
+  StatusTag,
   Text,
   TextArea,
+  Tile,
   hubspot,
 } from "@hubspot/ui-extensions";
 
@@ -18,6 +21,22 @@ const BACKEND_BASE_URL = "https://api.app-sync.com";
 hubspot.extend(({ context }) => {
   return <SettingsPage context={context} />;
 });
+
+type DetailFieldProps = {
+  label: string;
+  value: string;
+};
+
+const DetailField = ({ label, value }: DetailFieldProps) => {
+  return (
+    <Box>
+      <Text format={{ fontWeight: "bold" }}>{label}</Text>
+      <Text>{value}</Text>
+    </Box>
+  );
+};
+
+type StatusVariant = "danger" | "warning" | "info" | "success" | "default";
 
 const SettingsPage = ({ context }) => {
   const [loading, setLoading] = useState(true);
@@ -133,45 +152,39 @@ const SettingsPage = ({ context }) => {
   }, [settingsUrl]);
 
   const formLocked = loading || saving || !hasLoadedSettings;
+  const settingsStatus: { label: string; variant: StatusVariant } = loading
+    ? { label: "Loading settings", variant: "info" }
+    : saving
+      ? { label: "Saving changes", variant: "warning" }
+      : errorMessage
+        ? { label: "Needs attention", variant: "warning" }
+        : !hasLoadedSettings
+          ? { label: "Protected", variant: "default" }
+          : { label: "Ready", variant: "success" };
+  const statusMessage = errorMessage
+    ? `Error: ${errorMessage}`
+    : !hasLoadedSettings
+      ? "Settings stay locked until the current portal configuration loads successfully."
+      : saveMessage || "Portal settings are ready to edit.";
 
   return (
-    <Flex direction="column" gap="medium">
-      <EmptyState title="OpsLens AI settings" layout="vertical">
-        <Text>
-          This page now loads and saves portal-level OpsLens settings through
-          the hosted Python backend.
-        </Text>
-      </EmptyState>
-
-      <Divider />
-
-      <Box>
-        <Text format={{ fontWeight: "bold" }}>Backend status</Text>
-        <Text>{loading ? "Loading settings..." : saving ? "Saving..." : "Ready"}</Text>
-        <Text>
-          {errorMessage
-            ? `Error: ${errorMessage}`
-            : "No settings fetch error detected."}
-        </Text>
-        {!hasLoadedSettings ? (
-          <Text>Settings must load successfully before you can edit or save them.</Text>
-        ) : null}
-        <Text>{saveMessage ? saveMessage : "No settings save event yet."}</Text>
-        {errorMessage ? (
-          <Button
-            onClick={() => {
-              loadSettings().catch((err) =>
-                console.error("Unexpected settings retry error", err)
-              );
-            }}
-            disabled={loading || saving}
-          >
-            Retry loading settings
-          </Button>
-        ) : null}
-      </Box>
-
-      <Divider />
+    <Flex direction="column" gap="small">
+      <Tile compact>
+        <Flex direction="column" gap="small">
+          <Flex justify="between" align="center" wrap gap="small">
+            <Box flex="auto">
+              <Heading>OpsLens settings</Heading>
+              <Text>
+                Compact portal controls for alert routing and workflow monitoring.
+              </Text>
+            </Box>
+            <StatusTag variant={settingsStatus.variant}>
+              {settingsStatus.label}
+            </StatusTag>
+          </Flex>
+          <Text>{statusMessage}</Text>
+        </Flex>
+      </Tile>
 
       <Form
         preventDefault={true}
@@ -181,54 +194,100 @@ const SettingsPage = ({ context }) => {
           );
         }}
       >
-        <Flex direction="column" gap="medium">
-          <Input
-            label="Slack webhook URL"
-            name="slackWebhookUrl"
-            value={slackWebhookUrl}
-            onChange={(value) => setSlackWebhookUrl(String(value))}
-            placeholder="https://hooks.slack.com/services/..."
-            readOnly={formLocked}
-          />
+        <Flex direction="column" gap="small">
+          <AutoGrid columnWidth={280} flexible={true} gap="small">
+            <Tile compact>
+              <Flex direction="column" gap="small">
+                <Heading inline={true}>Alert routing</Heading>
+                <Text>
+                  Manage where OpsLens alert activity is sent and when it becomes visible.
+                </Text>
+                <Input
+                  label="Slack webhook URL"
+                  name="slackWebhookUrl"
+                  value={slackWebhookUrl}
+                  onChange={(value) => setSlackWebhookUrl(String(value))}
+                  placeholder="https://hooks.slack.com/services/..."
+                  readOnly={formLocked}
+                />
+                <Select
+                  label="Alert threshold"
+                  name="alertThreshold"
+                  value={alertThreshold}
+                  onChange={(value) => setAlertThreshold(String(value))}
+                  readOnly={formLocked}
+                  options={[
+                    { label: "Critical", value: "critical" },
+                    { label: "High", value: "high" },
+                    { label: "Medium", value: "medium" },
+                  ]}
+                />
+              </Flex>
+            </Tile>
 
-          <Select
-            label="Alert threshold"
-            name="alertThreshold"
-            value={alertThreshold}
-            onChange={(value) => setAlertThreshold(String(value))}
-            readOnly={formLocked}
-            options={[
-              { label: "Critical", value: "critical" },
-              { label: "High", value: "high" },
-              { label: "Medium", value: "medium" },
-            ]}
-          />
+            <Tile compact>
+              <Flex direction="column" gap="small">
+                <Heading inline={true}>Workflow monitoring</Heading>
+                <Text>
+                  Keep the workflow list tight so operators can focus on the highest-value flows.
+                </Text>
+                <TextArea
+                  label="Critical workflows"
+                  name="criticalWorkflows"
+                  value={criticalWorkflows}
+                  onChange={(value) => setCriticalWorkflows(String(value))}
+                  placeholder={"Quote Sync\nOwner Routing\nImport Cleanup"}
+                  description="One workflow name per line."
+                  readOnly={formLocked}
+                  rows={7}
+                />
+              </Flex>
+            </Tile>
+          </AutoGrid>
 
-          <TextArea
-            label="Critical workflows"
-            name="criticalWorkflows"
-            value={criticalWorkflows}
-            onChange={(value) => setCriticalWorkflows(String(value))}
-            placeholder={"Quote Sync\nOwner Routing\nImport Cleanup"}
-            description="One workflow name per line."
-            readOnly={formLocked}
-          />
-
-          <Button type="submit" disabled={formLocked}>
-            {saving ? "Saving..." : "Save settings"}
-          </Button>
+          <Tile compact>
+            <Flex justify="between" align="center" wrap gap="small">
+              <Box flex="auto">
+                <Text format={{ fontWeight: "bold" }}>Save state</Text>
+                <Text>
+                  {!hasLoadedSettings
+                    ? "Settings must load successfully before you can edit or save them."
+                    : saveMessage || "Changes save to the hosted portal settings store."}
+                </Text>
+                {errorMessage ? <Text>Error: {errorMessage}</Text> : null}
+              </Box>
+              <Flex align="center" gap="small" wrap>
+                {errorMessage ? (
+                  <Button
+                    onClick={() => {
+                      loadSettings().catch((err) =>
+                        console.error("Unexpected settings retry error", err)
+                      );
+                    }}
+                    disabled={loading || saving}
+                  >
+                    Retry loading settings
+                  </Button>
+                ) : null}
+                <Button type="submit" disabled={formLocked}>
+                  {saving ? "Saving..." : "Save settings"}
+                </Button>
+              </Flex>
+            </Flex>
+          </Tile>
         </Flex>
       </Form>
 
-      <Divider />
-
-      <Box>
-        <Text format={{ fontWeight: "bold" }}>Debug context</Text>
-        <Text>Portal ID: {portalId}</Text>
-        <Text>User ID: {userId}</Text>
-        <Text>User Email: {userEmail}</Text>
-        <Text>Settings URL: {settingsUrl}</Text>
-      </Box>
+      <Accordion title="Technical details" size="small">
+        <Tile compact>
+          <AutoGrid columnWidth={220} flexible={true} gap="small">
+            <DetailField label="Portal ID" value={portalId} />
+            <DetailField label="User ID" value={userId} />
+            <DetailField label="User email" value={userEmail} />
+            <DetailField label="Settings URL" value={settingsUrl} />
+          </AutoGrid>
+        </Tile>
+      </Accordion>
     </Flex>
   );
 };
