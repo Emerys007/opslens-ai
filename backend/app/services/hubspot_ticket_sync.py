@@ -7,31 +7,17 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.db import get_session, init_db
+from app.services.hubspot_ticket_pipeline import (
+    TicketPipelineConfig,
+    load_portal_ticket_pipeline_config,
+)
 from app.services.hubspot_oauth import get_portal_access_token
 
 BASE_URL = "https://api.hubapi.com"
 
-OPSLENS_PIPELINE_ID = os.getenv("HUBSPOT_OPSLENS_PIPELINE_ID", "890820374").strip()
-OPSLENS_STAGE_NEW_ALERT = os.getenv("HUBSPOT_OPSLENS_STAGE_NEW_ALERT", "1341759033").strip()
-OPSLENS_STAGE_INVESTIGATING = os.getenv("HUBSPOT_OPSLENS_STAGE_INVESTIGATING", "1341759034").strip()
-OPSLENS_STAGE_WAITING = os.getenv("HUBSPOT_OPSLENS_STAGE_WAITING", "1341759035").strip()
-OPSLENS_STAGE_RESOLVED = os.getenv("HUBSPOT_OPSLENS_STAGE_RESOLVED", "1341759036").strip()
-OPSLENS_STAGE_DUPLICATE = os.getenv("HUBSPOT_OPSLENS_STAGE_DUPLICATE", "1341759037").strip()
-
 OPSLENS_REOPEN_WINDOW_HOURS = int(
     os.getenv("HUBSPOT_OPSLENS_REOPEN_WINDOW_HOURS", "168").strip() or "168"
 )
-
-OPEN_STAGE_IDS = {
-    OPSLENS_STAGE_NEW_ALERT,
-    OPSLENS_STAGE_INVESTIGATING,
-    OPSLENS_STAGE_WAITING,
-}
-
-CLOSED_STAGE_IDS = {
-    OPSLENS_STAGE_RESOLVED,
-    OPSLENS_STAGE_DUPLICATE,
-}
 
 TICKET_TO_CONTACT_ASSOCIATION_TYPE_ID = 16
 TICKET_TO_COMPANY_ASSOCIATION_TYPE_ID = 339
@@ -156,32 +142,6 @@ def _parse_repeat_count(value: Any) -> int:
     return max(1, parsed)
 
 
-def _get_next_repeated_alert_stage(current_stage_id: str) -> str:
-    current = str(current_stage_id or "").strip()
-
-    if current == OPSLENS_STAGE_NEW_ALERT:
-        return OPSLENS_STAGE_INVESTIGATING
-
-    if current == OPSLENS_STAGE_INVESTIGATING:
-        return OPSLENS_STAGE_WAITING
-
-    if current == OPSLENS_STAGE_WAITING:
-        return OPSLENS_STAGE_WAITING
-
-    return OPSLENS_STAGE_INVESTIGATING
-
-
-def _stage_label(stage_id: str) -> str:
-    mapping = {
-        OPSLENS_STAGE_NEW_ALERT: "New Alert",
-        OPSLENS_STAGE_INVESTIGATING: "Investigating",
-        OPSLENS_STAGE_WAITING: "Waiting / Monitoring",
-        OPSLENS_STAGE_RESOLVED: "Resolved",
-        OPSLENS_STAGE_DUPLICATE: "Closed as Duplicate",
-    }
-    return mapping.get(str(stage_id or "").strip(), str(stage_id or "").strip() or "Unknown")
-
-
 def _subject_for_alert(workflow_id: str, contact_id: str) -> str:
     return f"OpsLens critical alert | Workflow {workflow_id} | Contact {contact_id}"
 
@@ -211,6 +171,7 @@ def _description_for_alert(
 
 def _timeline_note_body(
     *,
+    pipeline_config: TicketPipelineConfig,
     event_label: str,
     portal_id: str,
     contact_id: str,
@@ -227,7 +188,7 @@ def _timeline_note_body(
     lines = [
         f"OpsLens ticket event: {event_label}",
         f"Ticket ID: {ticket_id}",
-        f"Ticket stage: {_stage_label(stage_id)}",
+        f"Ticket stage: {pipeline_config.stage_label(stage_id)}",
         f"Repeat count: {max(1, repeat_count)}",
         f"Severity: {severity}",
         f"Delivery status: {delivery_status}",
@@ -248,6 +209,7 @@ def _timeline_note_body(
 def _create_ticket_timeline_note(
     *,
     token: str,
+    pipeline_config: TicketPipelineConfig,
     ticket_id: str,
     contact_id: str,
     company_id: str,
@@ -301,6 +263,7 @@ def _create_ticket_timeline_note(
         "properties": {
             "hs_timestamp": str(timestamp_utc or "").strip() or _now_utc_iso(),
             "hs_note_body": _timeline_note_body(
+                pipeline_config=pipeline_config,
                 event_label=event_label,
                 portal_id=portal_id,
                 contact_id=contact_id,
@@ -389,7 +352,13 @@ def _ensure_ticket_company_association(token: str, ticket_id: str, company_id: s
     return status in (200, 201, 204)
 
 
-def _search_matching_tickets(token: str, contact_id: str, workflow_id: str, limit: int = 20) -> list[dict]:
+def _search_matching_tickets(
+    token: str,
+    pipeline_config: TicketPipelineConfig,
+    contact_id: str,
+    workflow_id: str,
+    limit: int = 20,
+) -> list[dict]:
     payload = {
         "filterGroups": [
             {
@@ -397,7 +366,7 @@ def _search_matching_tickets(token: str, contact_id: str, workflow_id: str, limi
                     {
                         "propertyName": "hs_pipeline",
                         "operator": "EQ",
-                        "value": OPSLENS_PIPELINE_ID,
+                        "value": pipeline_config.pipeline_id,
                     },
                     {
                         "propertyName": "opslens_ticket_contact_id",
@@ -440,18 +409,32 @@ def _search_matching_tickets(token: str, contact_id: str, workflow_id: str, limi
     return body.get("results", []) or []
 
 
-def _find_existing_open_ticket(token: str, contact_id: str, workflow_id: str) -> dict | None:
-    for row in _search_matching_tickets(token, contact_id, workflow_id, limit=20):
+def _find_existing_open_ticket(
+    token: str,
+    pipeline_config: TicketPipelineConfig,
+    contact_id: str,
+    workflow_id: str,
+) -> dict | None:
+    for row in _search_matching_tickets(
+        token,
+        pipeline_config,
+        contact_id,
+        workflow_id,
+        limit=20,
+    ):
         props = row.get("properties", {}) or {}
         stage_id = str(props.get("hs_pipeline_stage") or "").strip()
-        if stage_id in OPEN_STAGE_IDS:
+        if stage_id in pipeline_config.open_stage_ids:
             return row
     return None
 
 
-def _is_recently_resolved_ticket(props: dict[str, Any]) -> bool:
+def _is_recently_resolved_ticket(
+    pipeline_config: TicketPipelineConfig,
+    props: dict[str, Any],
+) -> bool:
     stage_id = str(props.get("hs_pipeline_stage") or "").strip()
-    if stage_id not in CLOSED_STAGE_IDS:
+    if stage_id not in pipeline_config.closed_stage_ids:
         return False
 
     resolved_at = _parse_iso_datetime(props.get("opslens_ticket_resolved_at"))
@@ -465,16 +448,28 @@ def _is_recently_resolved_ticket(props: dict[str, Any]) -> bool:
     return age <= timedelta(hours=OPSLENS_REOPEN_WINDOW_HOURS)
 
 
-def _find_recently_resolved_matching_ticket(token: str, contact_id: str, workflow_id: str) -> dict | None:
-    for row in _search_matching_tickets(token, contact_id, workflow_id, limit=20):
+def _find_recently_resolved_matching_ticket(
+    token: str,
+    pipeline_config: TicketPipelineConfig,
+    contact_id: str,
+    workflow_id: str,
+) -> dict | None:
+    for row in _search_matching_tickets(
+        token,
+        pipeline_config,
+        contact_id,
+        workflow_id,
+        limit=20,
+    ):
         props = row.get("properties", {}) or {}
-        if _is_recently_resolved_ticket(props):
+        if _is_recently_resolved_ticket(pipeline_config, props):
             return row
     return None
 
 
 def _build_ticket_properties(
     *,
+    pipeline_config: TicketPipelineConfig,
     portal_id: str,
     contact_id: str,
     workflow_id: str,
@@ -501,7 +496,7 @@ def _build_ticket_properties(
             analyst_note=analyst_note,
             delivery_reason=delivery_reason,
         ),
-        "hs_pipeline": OPSLENS_PIPELINE_ID,
+        "hs_pipeline": pipeline_config.pipeline_id,
         "hs_pipeline_stage": stage_id,
         "hs_ticket_priority": "HIGH" if severity == "critical" else "MEDIUM",
         "opslens_ticket_callback_id": callback_id,
@@ -519,6 +514,7 @@ def _build_ticket_properties(
 def _reopen_resolved_ticket(
     *,
     token: str,
+    pipeline_config: TicketPipelineConfig,
     existing_ticket: dict,
     portal_id: str,
     contact_id: str,
@@ -540,6 +536,7 @@ def _reopen_resolved_ticket(
     ).strip()
 
     update_properties = _build_ticket_properties(
+        pipeline_config=pipeline_config,
         portal_id=portal_id,
         contact_id=contact_id,
         workflow_id=workflow_id,
@@ -549,7 +546,7 @@ def _reopen_resolved_ticket(
         delivery_reason=delivery_reason,
         analyst_note=analyst_note,
         received_at_utc=received_at_utc,
-        stage_id=OPSLENS_STAGE_NEW_ALERT,
+        stage_id=pipeline_config.stage_new_alert,
         repeat_count=next_repeat_count,
         first_alert_at_utc=first_alert_at_utc,
     )
@@ -570,7 +567,7 @@ def _reopen_resolved_ticket(
             "ticketId": ticket_id,
             "error": body,
             "repeatCount": next_repeat_count,
-            "stageUsed": OPSLENS_STAGE_NEW_ALERT,
+            "stageUsed": pipeline_config.stage_new_alert,
         }
 
     return {
@@ -578,7 +575,7 @@ def _reopen_resolved_ticket(
         "ticketId": ticket_id,
         "error": {},
         "repeatCount": next_repeat_count,
-        "stageUsed": OPSLENS_STAGE_NEW_ALERT,
+        "stageUsed": pipeline_config.stage_new_alert,
     }
 
 
@@ -626,10 +623,19 @@ def sync_hubspot_ticket_for_alert(payload: dict) -> dict:
 
         token = _resolve_token_for_portal(portal_id)
         result["ticketSyncAttempted"] = True
+        pipeline_config = load_portal_ticket_pipeline_config(
+            token=token,
+            portal_id=portal_id,
+        )
 
         company_id = _get_contact_company_id(token, contact_id)
 
-        existing = _find_existing_open_ticket(token, contact_id, workflow_id)
+        existing = _find_existing_open_ticket(
+            token,
+            pipeline_config,
+            contact_id,
+            workflow_id,
+        )
         if existing:
             ticket_id = str(existing.get("id") or "").strip()
             props = existing.get("properties", {}) or {}
@@ -639,11 +645,11 @@ def sync_hubspot_ticket_for_alert(payload: dict) -> dict:
                 props.get("opslens_ticket_repeat_count")
             )
             next_repeat_count = current_repeat_count + 1
-            next_stage = _get_next_repeated_alert_stage(current_stage)
+            next_stage = pipeline_config.next_repeated_alert_stage(current_stage)
 
-            if next_stage == OPSLENS_STAGE_INVESTIGATING:
+            if next_stage == pipeline_config.stage_investigating:
                 ticket_reason = "Existing open OpsLens ticket found and moved to Investigating."
-            elif next_stage == OPSLENS_STAGE_WAITING:
+            elif next_stage == pipeline_config.stage_waiting:
                 ticket_reason = "Existing open OpsLens ticket found and moved to Waiting / Monitoring."
             else:
                 ticket_reason = "Existing open OpsLens ticket found and updated successfully."
@@ -653,6 +659,7 @@ def sync_hubspot_ticket_for_alert(payload: dict) -> dict:
             ).strip()
 
             update_properties = _build_ticket_properties(
+                pipeline_config=pipeline_config,
                 portal_id=portal_id,
                 contact_id=contact_id,
                 workflow_id=workflow_id,
@@ -685,6 +692,7 @@ def sync_hubspot_ticket_for_alert(payload: dict) -> dict:
 
             note_ok, note_id, note_error = _create_ticket_timeline_note(
                 token=token,
+                pipeline_config=pipeline_config,
                 ticket_id=ticket_id,
                 contact_id=contact_id,
                 company_id=company_id,
@@ -727,10 +735,16 @@ def sync_hubspot_ticket_for_alert(payload: dict) -> dict:
             )
             return result
 
-        resolved_ticket = _find_recently_resolved_matching_ticket(token, contact_id, workflow_id)
+        resolved_ticket = _find_recently_resolved_matching_ticket(
+            token,
+            pipeline_config,
+            contact_id,
+            workflow_id,
+        )
         if resolved_ticket:
             reopened = _reopen_resolved_ticket(
                 token=token,
+                pipeline_config=pipeline_config,
                 existing_ticket=resolved_ticket,
                 portal_id=portal_id,
                 contact_id=contact_id,
@@ -750,7 +764,7 @@ def sync_hubspot_ticket_for_alert(payload: dict) -> dict:
                 return result
 
             ticket_id = str(reopened.get("ticketId") or "").strip()
-            stage_used = str(reopened.get("stageUsed") or OPSLENS_STAGE_NEW_ALERT)
+            stage_used = str(reopened.get("stageUsed") or pipeline_config.stage_new_alert)
             repeat_count = _safe_int(reopened.get("repeatCount"), 1)
 
             assoc_contact_ok = _ensure_ticket_contact_association(token, ticket_id, contact_id)
@@ -762,6 +776,7 @@ def sync_hubspot_ticket_for_alert(payload: dict) -> dict:
 
             note_ok, note_id, note_error = _create_ticket_timeline_note(
                 token=token,
+                pipeline_config=pipeline_config,
                 ticket_id=ticket_id,
                 contact_id=contact_id,
                 company_id=company_id,
@@ -805,6 +820,7 @@ def sync_hubspot_ticket_for_alert(payload: dict) -> dict:
             return result
 
         create_properties = _build_ticket_properties(
+            pipeline_config=pipeline_config,
             portal_id=portal_id,
             contact_id=contact_id,
             workflow_id=workflow_id,
@@ -814,7 +830,7 @@ def sync_hubspot_ticket_for_alert(payload: dict) -> dict:
             delivery_reason=delivery_reason,
             analyst_note=analyst_note,
             received_at_utc=received_at_utc,
-            stage_id=OPSLENS_STAGE_NEW_ALERT,
+            stage_id=pipeline_config.stage_new_alert,
             repeat_count=1,
             first_alert_at_utc=received_at_utc,
         )
@@ -839,13 +855,14 @@ def sync_hubspot_ticket_for_alert(payload: dict) -> dict:
 
         note_ok, note_id, note_error = _create_ticket_timeline_note(
             token=token,
+            pipeline_config=pipeline_config,
             ticket_id=ticket_id,
             contact_id=contact_id,
             company_id=company_id,
             portal_id=portal_id,
             workflow_id=workflow_id,
             callback_id=callback_id,
-            stage_id=OPSLENS_STAGE_NEW_ALERT,
+            stage_id=pipeline_config.stage_new_alert,
             repeat_count=1,
             severity=severity,
             delivery_status=delivery_status,
@@ -869,7 +886,7 @@ def sync_hubspot_ticket_for_alert(payload: dict) -> dict:
                 "ticketAssociationOk": bool(assoc_contact_ok and assoc_company_ok),
                 "ticketReason": "HubSpot ticket created successfully.",
                 "ticketSyncError": "",
-                "ticketStageUsed": OPSLENS_STAGE_NEW_ALERT,
+                "ticketStageUsed": pipeline_config.stage_new_alert,
                 "ticketRepeatCount": "1",
                 "timelineNoteCreated": note_ok,
                 "timelineNoteId": note_id,

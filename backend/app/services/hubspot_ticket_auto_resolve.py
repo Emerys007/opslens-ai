@@ -10,13 +10,13 @@ from sqlalchemy import select
 
 from app.db import get_session, init_db
 from app.models.hubspot_installation import HubSpotInstallation
+from app.services.hubspot_ticket_pipeline import (
+    TicketPipelineConfig,
+    load_portal_ticket_pipeline_config,
+)
 from app.services.hubspot_oauth import get_portal_access_token
 
 BASE_URL = "https://api.hubapi.com"
-
-OPSLENS_PIPELINE_ID = os.getenv("HUBSPOT_OPSLENS_PIPELINE_ID", "890820374").strip()
-OPSLENS_STAGE_WAITING = os.getenv("HUBSPOT_OPSLENS_STAGE_WAITING", "1341759035").strip()
-OPSLENS_STAGE_RESOLVED = os.getenv("HUBSPOT_OPSLENS_STAGE_RESOLVED", "1341759036").strip()
 
 DEFAULT_QUIET_HOURS = int(os.getenv("OPSLENS_AUTO_RESOLVE_QUIET_HOURS", "24").strip() or "24")
 
@@ -174,7 +174,11 @@ def _get_contact_company_id(token: str, contact_id: str) -> str:
     return str(companies[0].get("id") or "").strip()
 
 
-def _search_waiting_tickets(token: str, limit: int = 100) -> list[dict]:
+def _search_waiting_tickets(
+    token: str,
+    pipeline_config: TicketPipelineConfig,
+    limit: int = 100,
+) -> list[dict]:
     payload = {
         "filterGroups": [
             {
@@ -182,12 +186,12 @@ def _search_waiting_tickets(token: str, limit: int = 100) -> list[dict]:
                     {
                         "propertyName": "hs_pipeline",
                         "operator": "EQ",
-                        "value": OPSLENS_PIPELINE_ID,
+                        "value": pipeline_config.pipeline_id,
                     },
                     {
                         "propertyName": "hs_pipeline_stage",
                         "operator": "EQ",
-                        "value": OPSLENS_STAGE_WAITING,
+                        "value": pipeline_config.stage_waiting,
                     },
                 ]
             }
@@ -224,11 +228,17 @@ def _search_waiting_tickets(token: str, limit: int = 100) -> list[dict]:
     return body.get("results", []) or []
 
 
-def _resolve_ticket(token: str, ticket_id: str, reason: str, resolved_at_utc: str) -> tuple[bool, str]:
+def _resolve_ticket(
+    token: str,
+    pipeline_config: TicketPipelineConfig,
+    ticket_id: str,
+    reason: str,
+    resolved_at_utc: str,
+) -> tuple[bool, str]:
     payload = {
         "properties": {
-            "hs_pipeline": OPSLENS_PIPELINE_ID,
-            "hs_pipeline_stage": OPSLENS_STAGE_RESOLVED,
+            "hs_pipeline": pipeline_config.pipeline_id,
+            "hs_pipeline_stage": pipeline_config.stage_resolved,
             "opslens_ticket_resolved_at": resolved_at_utc,
             "opslens_ticket_resolution_reason": reason,
         }
@@ -418,11 +428,16 @@ def auto_resolve_waiting_tickets(
     }
 
     portal_ids = _installed_portal_ids()
-    portal_tokens: list[tuple[str, str]] = []
+    portal_tokens: list[tuple[str, str, TicketPipelineConfig]] = []
 
     for portal_id in portal_ids:
         try:
-            portal_tokens.append((portal_id, _resolve_token_for_portal(portal_id)))
+            token = _resolve_token_for_portal(portal_id)
+            pipeline_config = load_portal_ticket_pipeline_config(
+                token=token,
+                portal_id=portal_id,
+            )
+            portal_tokens.append((portal_id, token, pipeline_config))
         except Exception as exc:
             summary["errors"].append(
                 {
@@ -440,9 +455,9 @@ def auto_resolve_waiting_tickets(
         )
         return summary
 
-    for portal_id, token in portal_tokens:
+    for portal_id, token, pipeline_config in portal_tokens:
         try:
-            tickets = _search_waiting_tickets(token, limit=max_records)
+            tickets = _search_waiting_tickets(token, pipeline_config, limit=max_records)
         except Exception as exc:
             summary["errors"].append(
                 {
@@ -490,7 +505,13 @@ def auto_resolve_waiting_tickets(
                 continue
 
             resolved_at_utc = _now_utc_iso()
-            ok, err = _resolve_ticket(token, ticket_id, reason, resolved_at_utc)
+            ok, err = _resolve_ticket(
+                token,
+                pipeline_config,
+                ticket_id,
+                reason,
+                resolved_at_utc,
+            )
             if not ok:
                 summary["errors"].append(
                     {
