@@ -4,6 +4,7 @@ from sqlalchemy import desc, select
 from app.db import get_session, init_db
 from app.models.alert_event import AlertEvent
 from app.services.hubspot_ticket_visibility import load_ticket_visibility
+from app.services.portal_entitlements import get_portal_entitlement, portal_is_entitled
 from app.services.portal_settings import (
     SEVERITY_ORDER,
     load_portal_settings,
@@ -38,11 +39,13 @@ def dashboard_overview(request: Request):
 
     if not db_ready or session is None:
         settings = load_portal_settings(None, portal_id)
+        entitlement = get_portal_entitlement(None, portal_id)
         return {
             "status": "ok",
             "app": "OpsLens AI",
             "connectedBackend": True,
             "settings": settings,
+            "entitlement": entitlement,
             "summary": {
                 "openIncidents": 0,
                 "criticalIssues": 0,
@@ -61,6 +64,7 @@ def dashboard_overview(request: Request):
 
     try:
         settings = load_portal_settings(session, portal_id)
+        entitlement = get_portal_entitlement(session, portal_id)
         threshold = normalize_severity(settings.get("alertThreshold"), "high")
 
         stmt = select(AlertEvent).where(AlertEvent.result == "accepted")
@@ -105,6 +109,7 @@ def dashboard_overview(request: Request):
             "app": "OpsLens AI",
             "connectedBackend": True,
             "settings": settings,
+            "entitlement": entitlement,
             "summary": {
                 "openIncidents": len(visible_rows),
                 "criticalIssues": critical_issues,
@@ -139,7 +144,60 @@ def dashboard_ticket_automation(request: Request):
     except Exception:
         limit = 4
 
-    return load_ticket_visibility(
-        portal_id=portal_id,
-        limit=max(1, min(limit, 20)),
-    )
+    if not portal_id:
+        return {
+            "status": "error",
+            "message": "portalId is required.",
+            "entitlement": get_portal_entitlement(None, portal_id),
+            "provisioned": False,
+            "total": 0,
+            "results": [],
+        }
+
+    db_ready = init_db()
+    session = get_session()
+
+    if not db_ready or session is None:
+        return {
+            "status": "ok",
+            "portalId": portal_id,
+            "entitlement": get_portal_entitlement(None, portal_id),
+            "provisioned": False,
+            "reason": "Database is not configured.",
+            "total": 0,
+            "results": [],
+        }
+
+    try:
+        entitlement = get_portal_entitlement(session, portal_id)
+    finally:
+        session.close()
+
+    if not portal_is_entitled(entitlement):
+        return {
+            "status": "ok",
+            "portalId": portal_id,
+            "entitlement": entitlement,
+            "provisioned": False,
+            "reason": "Portal activation is blocked until the subscription is active or trial-approved.",
+            "total": 0,
+            "results": [],
+        }
+
+    try:
+        payload = load_ticket_visibility(
+            portal_id=portal_id,
+            limit=max(1, min(limit, 20)),
+        )
+        payload["entitlement"] = entitlement
+        return payload
+    except Exception as exc:
+        return {
+            "status": "ok",
+            "portalId": portal_id,
+            "entitlement": entitlement,
+            "provisioned": False,
+            "reason": str(exc),
+            "total": 0,
+            "results": [],
+        }

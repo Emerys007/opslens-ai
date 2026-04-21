@@ -122,6 +122,35 @@ def load_portal_settings(session: Optional[Session], portal_id: Optional[str]):
     )
 
 
+def ensure_default_portal_settings(session: Session, portal_id: str):
+    cleaned_portal_id = str(portal_id or "").strip()
+    if not cleaned_portal_id:
+        raise RuntimeError("portal_id is required.")
+
+    row = session.get(PortalSetting, cleaned_portal_id)
+    created = False
+    if row is None:
+        row = PortalSetting(
+            portal_id=cleaned_portal_id,
+            slack_webhook_url=DEFAULT_SETTINGS["slackWebhookUrl"],
+            alert_threshold=DEFAULT_SETTINGS["alertThreshold"],
+            critical_workflows=DEFAULT_SETTINGS["criticalWorkflows"],
+        )
+        session.add(row)
+        session.commit()
+        session.refresh(row)
+        created = True
+
+    return _settings_dict(
+        portal_id=row.portal_id,
+        slack_webhook_url=row.slack_webhook_url,
+        alert_threshold=row.alert_threshold,
+        critical_workflows=row.critical_workflows,
+        updated_at=row.updated_at,
+        storage="postgres",
+    ), created
+
+
 def save_portal_settings(session: Session, portal_id: str, payload: dict):
     row = session.get(PortalSetting, str(portal_id))
     if row is None:

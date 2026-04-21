@@ -7,6 +7,8 @@ class Settings(BaseSettings):
     app_host: str = "127.0.0.1"
     app_port: int = 8000
     log_level: str = "INFO"
+    backend_public_base_url: str = "https://api.app-sync.com"
+    app_public_base_url: str = "https://apps.app-sync.com"
 
     hubspot_client_id: str = ""
     hubspot_client_secret: str = ""
@@ -18,6 +20,13 @@ class Settings(BaseSettings):
     hubspot_optional_scopes: str = ""
     oauth_state_secret: str = ""
     oauth_state_ttl_seconds: int = 900
+
+    stripe_secret_key: str = ""
+    stripe_webhook_secret: str = ""
+    stripe_price_professional_monthly: str = ""
+    stripe_price_professional_yearly: str = ""
+    stripe_price_business_monthly: str = ""
+    stripe_price_business_yearly: str = ""
 
     model_config = SettingsConfigDict(
         env_file=".env",

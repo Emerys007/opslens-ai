@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Request
 
 from app.db import get_session, init_db
+from app.services.portal_entitlements import get_portal_entitlement, portal_is_entitled
 from app.services.portal_settings import load_portal_settings, save_portal_settings
 
 router = APIRouter(prefix="/settings-store", tags=["settings-store"])
@@ -18,14 +19,17 @@ def get_settings(request: Request):
             "status": "ok",
             "portalId": portal_id or "not-provided",
             "settings": load_portal_settings(None, portal_id),
+            "entitlement": get_portal_entitlement(None, portal_id),
             "dbConfigured": False,
         }
 
     try:
+        entitlement = get_portal_entitlement(session, portal_id)
         return {
             "status": "ok",
             "portalId": portal_id or "not-provided",
             "settings": load_portal_settings(session, portal_id),
+            "entitlement": entitlement,
             "dbConfigured": True,
         }
     finally:
@@ -50,14 +54,26 @@ async def save_settings(request: Request):
         return {
             "status": "error",
             "message": "Database is not configured.",
+            "entitlement": get_portal_entitlement(None, portal_id),
         }
 
     try:
+        entitlement = get_portal_entitlement(session, portal_id)
+        if not portal_is_entitled(entitlement):
+            return {
+                "status": "error",
+                "message": "Portal activation is blocked until the subscription is active or trial-approved.",
+                "portalId": portal_id,
+                "entitlement": entitlement,
+                "dbConfigured": True,
+            }
+
         settings = save_portal_settings(session, portal_id, payload)
         return {
             "status": "ok",
             "portalId": portal_id,
             "settings": settings,
+            "entitlement": entitlement,
             "dbConfigured": True,
         }
     finally:

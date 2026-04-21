@@ -111,11 +111,15 @@ def _safe_return_to(value: str | None) -> str:
     return ""
 
 
-def build_signed_state(return_to: str | None = None) -> str:
+def build_signed_state(
+    return_to: str | None = None,
+    install_session_id: str | None = None,
+) -> str:
     payload = {
         "nonce": secrets.token_urlsafe(16),
         "ts": int(_utc_now().timestamp()),
         "returnTo": _safe_return_to(return_to),
+        "installSessionId": str(install_session_id or "").strip(),
     }
 
     raw = json.dumps(payload, separators=(",", ":"), sort_keys=True)
@@ -159,17 +163,21 @@ def parse_signed_state(state: str) -> dict[str, Any]:
         raise ValueError("OAuth state has expired.")
 
     payload["returnTo"] = _safe_return_to(payload.get("returnTo"))
+    payload["installSessionId"] = str(payload.get("installSessionId") or "").strip()
     return payload
 
 
-def build_authorization_url(return_to: str | None = None) -> str:
+def build_authorization_url(
+    return_to: str | None = None,
+    install_session_id: str | None = None,
+) -> str:
     _require_oauth_config()
 
     params = {
         "client_id": settings.hubspot_client_id,
         "scope": _required_scopes(),
         "redirect_uri": settings.hubspot_redirect_uri,
-        "state": build_signed_state(return_to),
+        "state": build_signed_state(return_to, install_session_id),
     }
 
     optional_scopes = _optional_scopes()
@@ -270,6 +278,7 @@ def upsert_installation(
     *,
     token_payload: dict[str, Any],
     metadata: dict[str, Any],
+    active: bool = True,
 ) -> HubSpotInstallation:
     portal_id = str(
         metadata.get("hub_id")
@@ -321,7 +330,7 @@ def upsert_installation(
     row.token_type = token_type
     row.scopes_json = json.dumps(sorted(scopes))
     row.access_token_expires_at = _token_expiry_from_payload(token_payload, metadata)
-    row.is_active = True
+    row.is_active = bool(active)
 
     session.commit()
     session.refresh(row)
