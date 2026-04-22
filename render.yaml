@@ -1,4 +1,34 @@
 services:
+  - type: web
+    name: opslens-public-site
+    runtime: static
+    plan: free
+    branch: main
+    buildCommand: echo "Static site ready"
+    staticPublishPath: ./public-site
+    domains:
+      - apps.app-sync.com
+    buildFilter:
+      paths:
+        - public-site/**
+        - render.yaml
+    envVars:
+      - key: SKIP_INSTALL_DEPS
+        value: "true"
+    headers:
+      - path: /*
+        name: X-Frame-Options
+        value: SAMEORIGIN
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: Referrer-Policy
+        value: strict-origin-when-cross-origin
+    routes:
+      - type: rewrite
+        source: /install/complete
+        destination: /install/complete/index.html
   - type: cron
     name: opslens-auto-resolve
     runtime: python
