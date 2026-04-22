@@ -135,6 +135,202 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
         self.assertEqual(400, response.status_code)
         self.assertIn("paid or trial-approved install session", response.text)
 
+    def test_trial_approved_oauth_callback_completes_without_detached_session_error(self) -> None:
+        session = self._session()
+        try:
+            create_marketplace_install_session(
+                session,
+                install_session_id="trial-callback-session",
+                plan="business",
+                billing_interval="yearly",
+                return_url="https://apps.app-sync.com/install/complete",
+                tenant_context={"tenantSlug": "trial-callback"},
+                partner_user_email="owner@example.com",
+                trial_approved=True,
+            )
+        finally:
+            session.close()
+
+        with (
+            patch(
+                "app.routes.oauth.parse_signed_state",
+                return_value={
+                    "installSessionId": "trial-callback-session",
+                    "returnTo": "https://apps.app-sync.com/install/complete",
+                },
+            ),
+            patch(
+                "app.routes.oauth.exchange_code_for_tokens",
+                return_value={
+                    "access_token": "access-token",
+                    "refresh_token": "refresh-token",
+                    "expires_in": 3600,
+                    "token_type": "Bearer",
+                },
+            ),
+            patch(
+                "app.routes.oauth.introspect_access_token",
+                return_value={
+                    "hub_id": "8886743",
+                    "hub_domain": "portal-8886743.test",
+                    "user": "owner@example.com",
+                    "user_id": "user-123",
+                    "app_id": "app-123",
+                    "scopes": ["oauth", "tickets"],
+                },
+            ),
+            patch(
+                "app.services.portal_entitlements.ensure_portal_bootstrap",
+                return_value={
+                    "portalId": "8886743",
+                    "pipelineId": "892158537",
+                    "contactPropertyGroupCreated": False,
+                    "ticketPropertyGroupCreated": False,
+                    "contactPropertiesCreated": [],
+                    "ticketPropertiesCreated": [],
+                    "pipelineCreated": False,
+                    "stagesCreated": [],
+                    "stagesUpdated": [],
+                },
+            ),
+        ):
+            callback = self.client.get("/oauth-callback?code=auth-code&state=signed-state")
+
+        self.assertEqual(200, callback.status_code)
+        self.assertIn("OpsLens installation complete", callback.text)
+        self.assertNotIn("is not bound to a Session", callback.text)
+
+        success = self.client.get(
+            "/api/v1/marketplace/install/success?installSessionId=trial-callback-session"
+        )
+        self.assertEqual(200, success.status_code)
+        success_payload = success.json()
+        self.assertEqual("ok", success_payload["status"])
+        self.assertEqual("8886743", success_payload["portalId"])
+        self.assertEqual("success", success_payload["bootstrapStatus"])
+        self.assertTrue(success_payload["active"])
+
+        overview = self.client.get("/api/v1/dashboard/overview?portalId=8886743")
+        self.assertEqual(200, overview.status_code)
+        self.assertEqual("ok", overview.json()["status"])
+
+        settings = self.client.get("/api/v1/settings-store?portalId=8886743")
+        self.assertEqual(200, settings.status_code)
+        self.assertEqual("ok", settings.json()["status"])
+
+    def test_paid_install_authorize_and_oauth_callback_complete_after_checkout(self) -> None:
+        session = self._session()
+        try:
+            create_marketplace_install_session(
+                session,
+                install_session_id="paid-callback-session",
+                plan="professional",
+                billing_interval="monthly",
+                return_url="https://apps.app-sync.com/install/complete",
+                tenant_context={"tenantSlug": "paid-callback"},
+                partner_user_email="owner@example.com",
+                trial_approved=False,
+            )
+        finally:
+            session.close()
+
+        with (
+            patch(
+                "app.routes.oauth.retrieve_checkout_session",
+                return_value={
+                    "id": "cs_paid_123",
+                    "client_reference_id": "paid-callback-session",
+                    "payment_status": "paid",
+                    "status": "complete",
+                    "subscription": "sub_paid_123",
+                    "customer": "cus_paid_123",
+                },
+            ),
+            patch(
+                "app.routes.oauth.retrieve_subscription",
+                return_value={
+                    "id": "sub_paid_123",
+                    "status": "active",
+                    "items": {"data": [{"price": {"id": "unknown_price"}}]},
+                },
+            ),
+            patch("app.routes.oauth.build_authorization_url", return_value="https://hubspot.test/oauth"),
+        ):
+            authorize = self.client.get(
+                "/marketplace/install/authorize?installSessionId=paid-callback-session&checkoutSessionId=cs_paid_123",
+                follow_redirects=False,
+            )
+
+        self.assertEqual(302, authorize.status_code)
+        self.assertEqual("https://hubspot.test/oauth", authorize.headers["location"])
+
+        with (
+            patch(
+                "app.routes.oauth.parse_signed_state",
+                return_value={
+                    "installSessionId": "paid-callback-session",
+                    "returnTo": "https://apps.app-sync.com/install/complete",
+                },
+            ),
+            patch(
+                "app.routes.oauth.exchange_code_for_tokens",
+                return_value={
+                    "access_token": "access-token",
+                    "refresh_token": "refresh-token",
+                    "expires_in": 3600,
+                    "token_type": "Bearer",
+                },
+            ),
+            patch(
+                "app.routes.oauth.introspect_access_token",
+                return_value={
+                    "hub_id": "9999999",
+                    "hub_domain": "portal-new.test",
+                    "user": "owner@example.com",
+                    "user_id": "user-456",
+                    "app_id": "app-123",
+                    "scopes": ["oauth", "tickets"],
+                },
+            ),
+            patch(
+                "app.services.portal_entitlements.ensure_portal_bootstrap",
+                return_value={
+                    "portalId": "9999999",
+                    "pipelineId": "912345678",
+                    "contactPropertyGroupCreated": True,
+                    "ticketPropertyGroupCreated": True,
+                    "contactPropertiesCreated": ["opslens_healthy_signal_at"],
+                    "ticketPropertiesCreated": ["opslens_ticket_contact_id"],
+                    "pipelineCreated": True,
+                    "stagesCreated": ["New Alert"],
+                    "stagesUpdated": [],
+                },
+            ),
+        ):
+            callback = self.client.get("/oauth-callback?code=auth-code&state=signed-state")
+
+        self.assertEqual(200, callback.status_code)
+        self.assertIn("OpsLens installation complete", callback.text)
+        self.assertNotIn("is not bound to a Session", callback.text)
+
+        success = self.client.get(
+            "/api/v1/marketplace/install/success?installSessionId=paid-callback-session"
+        )
+        self.assertEqual(200, success.status_code)
+        success_payload = success.json()
+        self.assertEqual("ok", success_payload["status"])
+        self.assertEqual("9999999", success_payload["portalId"])
+        self.assertEqual("success", success_payload["bootstrapStatus"])
+        self.assertTrue(success_payload["active"])
+
+        overview = self.client.get("/api/v1/dashboard/overview?portalId=9999999")
+        self.assertEqual(200, overview.status_code)
+        self.assertEqual("ok", overview.json()["status"])
+
+        settings = self.client.get("/api/v1/settings-store?portalId=9999999")
+        self.assertEqual(200, settings.status_code)
+        self.assertEqual("ok", settings.json()["status"])
+
     def test_install_success_contract_reports_bootstrap_summary(self) -> None:
         session = self._session()
         try:

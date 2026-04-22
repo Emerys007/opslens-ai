@@ -305,6 +305,7 @@ def oauth_callback(
 
         bootstrap_started = False
         install_session = None
+        success_payload = {}
 
         try:
             install_session_id = str(state_payload.get("installSessionId") or "").strip()
@@ -356,6 +357,16 @@ def oauth_callback(
                 installation.is_active = True
                 session.commit()
                 session.refresh(installation)
+
+            success_payload = {
+                "portal_id": str(installation.portal_id or "").strip(),
+                "hub_domain": str(installation.hub_domain or "").strip(),
+                "installing_user_email": str(installation.installing_user_email or "").strip(),
+                "return_to": str(state_payload.get("returnTo") or ""),
+                "plan": str((install_session.requested_plan if install_session is not None else "") or ""),
+                "billing_interval": str((install_session.billing_interval if install_session is not None else "") or ""),
+                "bootstrap_status": str((install_session.bootstrap_status if install_session is not None else "success") or "success"),
+            }
         except Exception as exc:
             if install_session is not None and "session" in locals():
                 current_bootstrap_status = str(install_session.bootstrap_status or "").strip().lower()
@@ -374,13 +385,13 @@ def oauth_callback(
 
         return HTMLResponse(
             _success_html(
-                portal_id=installation.portal_id,
-                hub_domain=installation.hub_domain,
-                installing_user_email=installation.installing_user_email,
-                return_to=str(state_payload.get("returnTo") or ""),
-                plan=str((install_session.requested_plan if install_session is not None else "") or ""),
-                billing_interval=str((install_session.billing_interval if install_session is not None else "") or ""),
-                bootstrap_status=str((install_session.bootstrap_status if install_session is not None else "success") or "success"),
+                portal_id=success_payload["portal_id"],
+                hub_domain=success_payload["hub_domain"],
+                installing_user_email=success_payload["installing_user_email"],
+                return_to=success_payload["return_to"],
+                plan=success_payload["plan"],
+                billing_interval=success_payload["billing_interval"],
+                bootstrap_status=success_payload["bootstrap_status"],
             ),
             status_code=200,
         )
