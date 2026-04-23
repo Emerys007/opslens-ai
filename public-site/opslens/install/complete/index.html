@@ -31,7 +31,7 @@
       </header>
 
       <main class="install-main">
-        <section class="success-card">
+        <section class="success-card install-success-card">
           <div class="success-badge" aria-hidden="true">
             <span></span>
           </div>
@@ -43,43 +43,273 @@
             <span>/</span>
             <strong>Install complete</strong>
           </p>
-          <h1>OpsLens is connected and ready for the next step.</h1>
+          <h1>OpsLens is connected and ready to open in HubSpot.</h1>
           <p class="hero-text">
             Your HubSpot install completed successfully. Use the actions below to
-            return to HubSpot, request documentation, or reach the app-sync.com team.
+            open OpsLens, review settings, or follow the fallback path if app-specific
+            HubSpot deep links have not been provided yet.
           </p>
 
-          <div class="hero-actions centered-actions">
-            <a class="button button-primary" href="https://app.hubspot.com/" target="_blank" rel="noreferrer">
-              Return to HubSpot
+          <div class="install-meta" aria-label="Install metadata">
+            <span class="meta-chip">
+              <strong>Portal</strong>
+              <span id="install-portal-id">Waiting for portalId</span>
+            </span>
+            <span class="meta-chip">
+              <strong>Plan</strong>
+              <span id="install-plan">Pending</span>
+            </span>
+            <span class="meta-chip">
+              <strong>Billing</strong>
+              <span id="install-billing">Pending</span>
+            </span>
+            <span class="meta-chip">
+              <strong>Bootstrap</strong>
+              <span id="install-bootstrap-status">Pending</span>
+            </span>
+          </div>
+
+          <div class="hero-actions centered-actions install-action-group">
+            <a
+              id="open-opslens-link"
+              class="button button-primary"
+              href="https://app.hubspot.com/"
+              target="_blank"
+              rel="noreferrer"
+            >
+              Open OpsLens in HubSpot
             </a>
-            <a class="button button-secondary" href="mailto:docs@app-sync.com?subject=OpsLens%20Documentation%20Request">
-              View docs
-            </a>
-            <a class="button button-secondary" href="mailto:support@app-sync.com?subject=OpsLens%20Support">
-              Contact support
+            <a
+              id="open-settings-link"
+              class="button button-secondary"
+              href="#hubspot-fallback"
+            >
+              Open OpsLens settings
             </a>
           </div>
 
-          <div class="detail-band">
+          <p id="link-status-note" class="inline-note">
+            App-specific HubSpot links will be used automatically when they are included in the query string.
+          </p>
+
+          <div class="detail-band install-detail-band">
             <article class="detail-card">
-              <h2>What to expect next</h2>
-              <p>
-                OpsLens is now part of the shared app-sync integration hub, so the
-                install handoff can stay app-specific while keeping a common site structure.
-              </p>
+              <h2>Install summary</h2>
+              <dl class="summary-grid">
+                <div>
+                  <dt>Portal ID</dt>
+                  <dd id="summary-portal-id">Waiting for portalId</dd>
+                </div>
+                <div>
+                  <dt>Plan</dt>
+                  <dd id="summary-plan">Pending</dd>
+                </div>
+                <div>
+                  <dt>Billing interval</dt>
+                  <dd id="summary-billing">Pending</dd>
+                </div>
+                <div>
+                  <dt>Bootstrap status</dt>
+                  <dd id="summary-bootstrap-status">Pending</dd>
+                </div>
+              </dl>
             </article>
+
             <article class="detail-card">
-              <h2>Need another team?</h2>
+              <h2>Support and account contacts</h2>
               <ul class="contact-list">
                 <li><a href="mailto:docs@app-sync.com">docs@app-sync.com</a></li>
+                <li><a href="mailto:support@app-sync.com">support@app-sync.com</a></li>
                 <li><a href="mailto:billing@app-sync.com">billing@app-sync.com</a></li>
                 <li><a href="mailto:partners@app-sync.com">partners@app-sync.com</a></li>
               </ul>
             </article>
           </div>
+
+          <section id="hubspot-fallback" class="fallback-card" aria-live="polite">
+            <div class="fallback-header">
+              <p class="eyebrow">HubSpot fallback path</p>
+              <span id="fallback-status-pill" class="status-pill fallback-pill">
+                Using fallback navigation
+              </span>
+            </div>
+            <h2>Go here in HubSpot if app-specific deep links are not available yet</h2>
+            <p class="hero-text">
+              In HubSpot, open <strong>Connected Apps</strong>, select
+              <strong>OpsLens</strong>, then choose <strong>App Home</strong> or
+              <strong>Settings</strong>.
+            </p>
+            <div class="fallback-path">
+              Connected Apps
+              <span>&rarr;</span>
+              OpsLens
+              <span>&rarr;</span>
+              App Home / Settings
+            </div>
+            <p class="inline-note" id="fallback-copy">
+              We will replace this fallback automatically when HubSpot app-home and
+              settings deep links are included in the install callback query string.
+            </p>
+          </section>
         </section>
       </main>
     </div>
+
+    <script>
+      (function () {
+        var params = new URLSearchParams(window.location.search);
+
+        function firstValue(keys) {
+          for (var i = 0; i < keys.length; i += 1) {
+            var value = params.get(keys[i]);
+            if (value && value.trim()) {
+              return value.trim();
+            }
+          }
+          return "";
+        }
+
+        function prettyValue(value, fallback) {
+          if (!value) {
+            return fallback;
+          }
+
+          return value
+            .split(/[_-]+/)
+            .filter(Boolean)
+            .map(function (part) {
+              return part.charAt(0).toUpperCase() + part.slice(1);
+            })
+            .join(" ");
+        }
+
+        var portalId = firstValue(["portalId"]);
+        var plan = firstValue(["plan"]);
+        var billingInterval = firstValue(["billingInterval"]);
+        var bootstrapStatus = firstValue(["bootstrapStatus"]);
+        var appHomeUrl = firstValue([
+          "appHomeUrl",
+          "hubspotAppHomeUrl",
+          "hubspotHomeUrl",
+          "homeUrl"
+        ]);
+        var settingsUrl = firstValue([
+          "settingsUrl",
+          "hubspotSettingsUrl",
+          "settingsDeepLink"
+        ]);
+
+        var openOpsLensLink = document.getElementById("open-opslens-link");
+        var openSettingsLink = document.getElementById("open-settings-link");
+        var linkStatusNote = document.getElementById("link-status-note");
+        var fallbackSection = document.getElementById("hubspot-fallback");
+        var fallbackStatusPill = document.getElementById("fallback-status-pill");
+        var fallbackCopy = document.getElementById("fallback-copy");
+
+        var portalText = portalId || "Not provided";
+        var planText = prettyValue(plan, "Pending assignment");
+        var billingText = prettyValue(billingInterval, "Pending assignment");
+        var bootstrapText = prettyValue(bootstrapStatus, "Pending");
+
+        [
+          "install-portal-id",
+          "summary-portal-id"
+        ].forEach(function (id) {
+          var node = document.getElementById(id);
+          if (node) {
+            node.textContent = portalText;
+          }
+        });
+
+        [
+          "install-plan",
+          "summary-plan"
+        ].forEach(function (id) {
+          var node = document.getElementById(id);
+          if (node) {
+            node.textContent = planText;
+          }
+        });
+
+        [
+          "install-billing",
+          "summary-billing"
+        ].forEach(function (id) {
+          var node = document.getElementById(id);
+          if (node) {
+            node.textContent = billingText;
+          }
+        });
+
+        [
+          "install-bootstrap-status",
+          "summary-bootstrap-status"
+        ].forEach(function (id) {
+          var node = document.getElementById(id);
+          if (node) {
+            node.textContent = bootstrapText;
+          }
+        });
+
+        if (appHomeUrl) {
+          openOpsLensLink.href = appHomeUrl;
+        }
+
+        if (settingsUrl) {
+          openSettingsLink.href = settingsUrl;
+        }
+
+        if (appHomeUrl && settingsUrl) {
+          fallbackStatusPill.textContent = "Deep links ready";
+          fallbackStatusPill.classList.add("status-live");
+          fallbackStatusPill.classList.remove("fallback-pill");
+          fallbackCopy.textContent =
+            "The buttons above are using app-specific HubSpot deep links from the query string.";
+          linkStatusNote.textContent =
+            "App Home and Settings deep links are active for this install handoff.";
+        } else {
+          if (!appHomeUrl) {
+            openOpsLensLink.href = "https://app.hubspot.com/";
+          }
+
+          if (!settingsUrl) {
+            openSettingsLink.href = "#hubspot-fallback";
+          }
+
+          var missingTargets = [];
+          if (!appHomeUrl) {
+            missingTargets.push("App Home");
+          }
+          if (!settingsUrl) {
+            missingTargets.push("Settings");
+          }
+
+          linkStatusNote.textContent =
+            "Direct HubSpot links are not fully available yet for " +
+            missingTargets.join(" and ") +
+            ". Use the fallback path below after opening HubSpot.";
+        }
+
+        if (bootstrapStatus) {
+          var normalizedStatus = bootstrapStatus.toLowerCase();
+
+          if (normalizedStatus === "success" || normalizedStatus === "complete" || normalizedStatus === "completed" || normalizedStatus === "ready") {
+            fallbackStatusPill.textContent = "Bootstrap ready";
+            fallbackStatusPill.classList.add("status-live");
+            fallbackStatusPill.classList.remove("fallback-pill");
+          } else if (normalizedStatus === "pending" || normalizedStatus === "in_progress" || normalizedStatus === "running") {
+            fallbackStatusPill.textContent = "Bootstrap in progress";
+          } else if (normalizedStatus === "error" || normalizedStatus === "failed") {
+            fallbackStatusPill.textContent = "Bootstrap needs review";
+            fallbackStatusPill.classList.add("status-alert");
+            fallbackStatusPill.classList.remove("fallback-pill");
+          }
+        }
+
+        if (!portalId) {
+          fallbackSection.classList.add("fallback-emphasis");
+        }
+      })();
+    </script>
   </body>
 </html>
