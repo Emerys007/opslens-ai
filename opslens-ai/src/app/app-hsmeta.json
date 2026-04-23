@@ -4,7 +4,7 @@
   "config": {
     "description": "An example to demonstrate how to build a private oauth app with developer projects.",
     "name": "opslens-ai-App",
-    "distribution": "private",
+    "distribution": "marketplace",
     "auth": {
       "type": "oauth",
       "redirectUrls": [
@@ -30,10 +30,9 @@
       "img": []
     },
     "support": {
-      "supportEmail": "support@example.com",
-      "documentationUrl": "https://example.com/docs",
-      "supportUrl": "https://example.com/support",
-      "supportPhone": "+18005555555"
+      "supportEmail": "support@app-sync.com",
+      "documentationUrl": "https://apps.app-sync.com/opslens/setup/",
+      "supportUrl": "https://apps.app-sync.com/opslens/"
     }
   }
 }
