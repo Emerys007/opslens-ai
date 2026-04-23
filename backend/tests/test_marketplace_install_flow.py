@@ -145,7 +145,11 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
         self.assertIn("status=error", response.headers["location"])
 
     def test_marketplace_origin_oauth_callback_redirects_to_hubspot_return_url(self) -> None:
-        hubspot_return_url = "https://app.hubspot.com/installed/marketplace-demo"
+        hubspot_return_url = (
+            "https://app.hubspot.com/marketplace-preview"
+            "?returnToken=hubspot-provided-token"
+            "&portalId=8886743"
+        )
         session = self._session()
         try:
             create_marketplace_install_session(
