@@ -86,7 +86,10 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
             self.assertEqual("monthly", row.billing_interval)
             self.assertEqual("cus_123", row.stripe_customer_id)
             self.assertEqual("cs_123", row.stripe_checkout_session_id)
-            self.assertEqual('{"tenantSlug": "demo-co"}', row.tenant_context_json)
+            self.assertEqual(
+                '{"installOrigin": "external", "tenantSlug": "demo-co"}',
+                row.tenant_context_json,
+            )
         finally:
             session.close()
 
@@ -136,19 +139,25 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
             follow_redirects=False,
         )
 
-        self.assertEqual(400, response.status_code)
-        self.assertIn("paid or trial-approved install session", response.text)
+        self.assertEqual(302, response.status_code)
+        self.assertIn("/opslens/install/complete/?", response.headers["location"])
+        self.assertIn("bootstrapStatus=failed", response.headers["location"])
+        self.assertIn("status=error", response.headers["location"])
 
-    def test_trial_approved_oauth_callback_completes_without_detached_session_error(self) -> None:
+    def test_marketplace_origin_oauth_callback_redirects_to_hubspot_return_url(self) -> None:
+        hubspot_return_url = "https://app.hubspot.com/installed/marketplace-demo"
         session = self._session()
         try:
             create_marketplace_install_session(
                 session,
-                install_session_id="trial-callback-session",
+                install_session_id="marketplace-callback-session",
                 plan="business",
                 billing_interval="yearly",
-                return_url="https://apps.app-sync.com/install/complete",
-                tenant_context={"tenantSlug": "trial-callback"},
+                return_url=hubspot_return_url,
+                tenant_context={
+                    "tenantSlug": "marketplace-callback",
+                    "installOrigin": "marketplace",
+                },
                 partner_user_email="owner@example.com",
                 trial_approved=True,
             )
@@ -159,7 +168,93 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
             patch(
                 "app.routes.oauth.parse_signed_state",
                 return_value={
-                    "installSessionId": "trial-callback-session",
+                    "installSessionId": "marketplace-callback-session",
+                    "returnTo": hubspot_return_url,
+                },
+            ),
+            patch(
+                "app.routes.oauth.exchange_code_for_tokens",
+                return_value={
+                    "access_token": "access-token",
+                    "refresh_token": "refresh-token",
+                    "expires_in": 3600,
+                    "token_type": "Bearer",
+                },
+            ),
+            patch(
+                "app.routes.oauth.introspect_access_token",
+                return_value={
+                    "hub_id": "8886743",
+                    "hub_domain": "portal-8886743.test",
+                    "user": "owner@example.com",
+                    "user_id": "user-123",
+                    "app_id": "app-123",
+                    "scopes": ["oauth", "tickets"],
+                },
+            ),
+            patch(
+                "app.services.portal_entitlements.ensure_portal_bootstrap",
+                return_value={
+                    "portalId": "8886743",
+                    "pipelineId": "892158537",
+                    "contactPropertyGroupCreated": False,
+                    "ticketPropertyGroupCreated": False,
+                    "contactPropertiesCreated": [],
+                    "ticketPropertiesCreated": [],
+                    "pipelineCreated": False,
+                    "stagesCreated": [],
+                    "stagesUpdated": [],
+                },
+            ),
+        ):
+            callback = self.client.get(
+                "/oauth-callback?code=auth-code&state=signed-state",
+                follow_redirects=False,
+            )
+
+        self.assertEqual(302, callback.status_code)
+        self.assertEqual(hubspot_return_url, callback.headers["location"])
+
+        success = self.client.get(
+            "/api/v1/marketplace/install/success?installSessionId=marketplace-callback-session"
+        )
+        self.assertEqual(200, success.status_code)
+        success_payload = success.json()
+        self.assertEqual("ok", success_payload["status"])
+        self.assertEqual("8886743", success_payload["portalId"])
+        self.assertEqual("success", success_payload["bootstrapStatus"])
+        self.assertEqual(hubspot_return_url, success_payload["returnUrl"])
+        self.assertTrue(success_payload["active"])
+
+        overview = self.client.get("/api/v1/dashboard/overview?portalId=8886743")
+        self.assertEqual(200, overview.status_code)
+        self.assertEqual("ok", overview.json()["status"])
+
+        settings = self.client.get("/api/v1/settings-store?portalId=8886743")
+        self.assertEqual(200, settings.status_code)
+        self.assertEqual("ok", settings.json()["status"])
+
+    def test_external_origin_trial_install_redirects_to_public_complete_route(self) -> None:
+        session = self._session()
+        try:
+            create_marketplace_install_session(
+                session,
+                install_session_id="external-trial-session",
+                plan="business",
+                billing_interval="yearly",
+                return_url="https://apps.app-sync.com/install/complete",
+                tenant_context={"tenantSlug": "external-trial"},
+                partner_user_email="owner@example.com",
+                trial_approved=True,
+            )
+        finally:
+            session.close()
+
+        with (
+            patch(
+                "app.routes.oauth.parse_signed_state",
+                return_value={
+                    "installSessionId": "external-trial-session",
                     "returnTo": "https://apps.app-sync.com/install/complete",
                 },
             ),
@@ -198,31 +293,29 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
                 },
             ),
         ):
-            callback = self.client.get("/oauth-callback?code=auth-code&state=signed-state")
+            callback = self.client.get(
+                "/oauth-callback?code=auth-code&state=signed-state",
+                follow_redirects=False,
+            )
 
-        self.assertEqual(200, callback.status_code)
-        self.assertIn("OpsLens installation complete", callback.text)
-        self.assertNotIn("is not bound to a Session", callback.text)
-        self.assertIn("https://apps.app-sync.com/install/complete", callback.text)
+        self.assertEqual(302, callback.status_code)
+        location = callback.headers["location"]
+        self.assertTrue(location.startswith("https://apps.app-sync.com/opslens/install/complete/?"))
+        self.assertIn("portalId=8886743", location)
+        self.assertIn("plan=business", location)
+        self.assertIn("billingInterval=yearly", location)
+        self.assertIn("bootstrapStatus=success", location)
 
         success = self.client.get(
-            "/api/v1/marketplace/install/success?installSessionId=trial-callback-session"
+            "/api/v1/marketplace/install/success?installSessionId=external-trial-session"
         )
         self.assertEqual(200, success.status_code)
         success_payload = success.json()
         self.assertEqual("ok", success_payload["status"])
         self.assertEqual("8886743", success_payload["portalId"])
         self.assertEqual("success", success_payload["bootstrapStatus"])
-        self.assertEqual("https://apps.app-sync.com/install/complete", success_payload["returnUrl"])
+        self.assertIn("/opslens/install/complete/?portalId=8886743", success_payload["returnUrl"])
         self.assertTrue(success_payload["active"])
-
-        overview = self.client.get("/api/v1/dashboard/overview?portalId=8886743")
-        self.assertEqual(200, overview.status_code)
-        self.assertEqual("ok", overview.json()["status"])
-
-        settings = self.client.get("/api/v1/settings-store?portalId=8886743")
-        self.assertEqual(200, settings.status_code)
-        self.assertEqual("ok", settings.json()["status"])
 
     def test_paid_install_start_authorize_and_oauth_callback_complete_after_checkout(self) -> None:
         with (
@@ -331,12 +424,18 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
                 },
             ),
         ):
-            callback = self.client.get("/oauth-callback?code=auth-code&state=signed-state")
+            callback = self.client.get(
+                "/oauth-callback?code=auth-code&state=signed-state",
+                follow_redirects=False,
+            )
 
-        self.assertEqual(200, callback.status_code)
-        self.assertIn("OpsLens installation complete", callback.text)
-        self.assertNotIn("is not bound to a Session", callback.text)
-        self.assertIn("https://apps.app-sync.com/install/complete", callback.text)
+        self.assertEqual(302, callback.status_code)
+        callback_location = callback.headers["location"]
+        self.assertTrue(callback_location.startswith("https://apps.app-sync.com/opslens/install/complete/?"))
+        self.assertIn("portalId=9999999", callback_location)
+        self.assertIn("plan=professional", callback_location)
+        self.assertIn("billingInterval=monthly", callback_location)
+        self.assertIn("bootstrapStatus=success", callback_location)
 
         success = self.client.get(
             f"/api/v1/marketplace/install/success?installSessionId={install_session_id}"
@@ -346,7 +445,7 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
         self.assertEqual("ok", success_payload["status"])
         self.assertEqual("9999999", success_payload["portalId"])
         self.assertEqual("success", success_payload["bootstrapStatus"])
-        self.assertEqual("https://apps.app-sync.com/install/complete", success_payload["returnUrl"])
+        self.assertIn("/opslens/install/complete/?portalId=9999999", success_payload["returnUrl"])
         self.assertTrue(success_payload["active"])
 
         overview = self.client.get("/api/v1/dashboard/overview?portalId=9999999")
@@ -357,16 +456,16 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
         self.assertEqual(200, settings.status_code)
         self.assertEqual("ok", settings.json()["status"])
 
-    def test_missing_install_return_url_falls_back_to_public_app_site(self) -> None:
+    def test_failed_bootstrap_redirects_to_error_safe_destination(self) -> None:
         session = self._session()
         try:
             create_marketplace_install_session(
                 session,
-                install_session_id="fallback-return-session",
+                install_session_id="failed-bootstrap-session",
                 plan="business",
                 billing_interval="yearly",
-                return_url="",
-                tenant_context={"tenantSlug": "fallback-return"},
+                return_url="https://apps.app-sync.com/install/complete",
+                tenant_context={"tenantSlug": "failed-bootstrap"},
                 partner_user_email="owner@example.com",
                 trial_approved=True,
             )
@@ -377,8 +476,8 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
             patch(
                 "app.routes.oauth.parse_signed_state",
                 return_value={
-                    "installSessionId": "fallback-return-session",
-                    "returnTo": "",
+                    "installSessionId": "failed-bootstrap-session",
+                    "returnTo": "https://apps.app-sync.com/install/complete",
                 },
             ),
             patch(
@@ -403,34 +502,31 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
             ),
             patch(
                 "app.services.portal_entitlements.ensure_portal_bootstrap",
-                return_value={
-                    "portalId": "7777777",
-                    "pipelineId": "977777777",
-                    "contactPropertyGroupCreated": False,
-                    "ticketPropertyGroupCreated": False,
-                    "contactPropertiesCreated": [],
-                    "ticketPropertiesCreated": [],
-                    "pipelineCreated": False,
-                    "stagesCreated": [],
-                    "stagesUpdated": [],
-                },
+                side_effect=RuntimeError("bootstrap exploded"),
             ),
         ):
-            callback = self.client.get("/oauth-callback?code=auth-code&state=signed-state")
+            callback = self.client.get(
+                "/oauth-callback?code=auth-code&state=signed-state",
+                follow_redirects=False,
+            )
 
-        self.assertEqual(200, callback.status_code)
-        self.assertIn("https://apps.app-sync.com/opslens/install/complete", callback.text)
-        self.assertNotIn("https://api.app-sync.com/docs", callback.text)
+        self.assertEqual(302, callback.status_code)
+        location = callback.headers["location"]
+        self.assertTrue(location.startswith("https://apps.app-sync.com/opslens/install/complete/?"))
+        self.assertIn("portalId=7777777", location)
+        self.assertIn("plan=business", location)
+        self.assertIn("billingInterval=yearly", location)
+        self.assertIn("bootstrapStatus=failed", location)
+        self.assertIn("status=error", location)
 
         success = self.client.get(
-            "/api/v1/marketplace/install/success?installSessionId=fallback-return-session"
+            "/api/v1/marketplace/install/success?installSessionId=failed-bootstrap-session"
         )
         self.assertEqual(200, success.status_code)
         success_payload = success.json()
-        self.assertEqual(
-            "https://apps.app-sync.com/opslens/install/complete",
-            success_payload["returnUrl"],
-        )
+        self.assertEqual("failed", success_payload["bootstrapStatus"])
+        self.assertIn("/opslens/install/complete/?portalId=7777777", success_payload["returnUrl"])
+        self.assertIn("status=error", success_payload["returnUrl"])
 
     def test_install_success_contract_reports_bootstrap_summary(self) -> None:
         session = self._session()
@@ -465,6 +561,7 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
         self.assertEqual("8886743", payload["portalId"])
         self.assertEqual("professional", payload["plan"])
         self.assertEqual("success", payload["bootstrapStatus"])
+        self.assertIn("/opslens/install/complete/?portalId=8886743", payload["returnUrl"])
         self.assertTrue(payload["active"])
         self.assertEqual("892158537", payload["createdAssetsSummary"]["pipelineId"])
         self.assertEqual(3, len(payload["nextStepChecklist"]))

@@ -23,6 +23,11 @@ from app.services.marketplace_billing import (
     subscription_status_text,
     verify_stripe_webhook_signature,
 )
+from app.services.marketplace_install_routing import (
+    enriched_tenant_context,
+    final_install_redirect_url,
+    install_origin,
+)
 from app.services.portal_entitlements import (
     create_marketplace_install_session,
     get_marketplace_install_session,
@@ -49,18 +54,11 @@ class MarketplaceInstallStartRequest(BaseModel):
     trialApproved: bool = False
 
 
-def _default_install_return_url() -> str:
-    app_base = str(settings.app_public_base_url or "").strip().rstrip("/")
-    if not app_base:
-        app_base = "https://apps.app-sync.com"
-    return f"{app_base}/opslens/install/complete"
-
-
 def _resolved_install_return_url(return_url: str | None) -> str:
     cleaned = str(return_url or "").strip()
     if cleaned:
         return cleaned
-    return _default_install_return_url()
+    return final_install_redirect_url()
 
 
 def _backend_public_url(path: str, **query: str) -> str:
@@ -195,6 +193,10 @@ def marketplace_install_start(payload: MarketplaceInstallStartRequest):
         plan = normalize_plan(payload.plan)
         billing_interval = normalize_billing_interval(payload.billingInterval)
         install_session_id = create_install_session_id()
+        tenant_context = enriched_tenant_context(
+            payload.tenantContext,
+            return_url=payload.returnUrl,
+        )
 
         row = create_marketplace_install_session(
             session,
@@ -202,7 +204,7 @@ def marketplace_install_start(payload: MarketplaceInstallStartRequest):
             plan=plan,
             billing_interval=billing_interval,
             return_url=payload.returnUrl,
-            tenant_context=payload.tenantContext,
+            tenant_context=tenant_context,
             partner_user_id=payload.partnerUserId,
             partner_user_email=payload.partnerUserEmail,
             trial_approved=payload.trialApproved,
@@ -281,6 +283,18 @@ def marketplace_install_success(installSessionId: str):
         row = get_marketplace_install_session(session, installSessionId)
         bootstrap_summary = install_session_bootstrap_summary(row)
         context = install_session_context(row)
+        origin = install_origin(context, row.return_url)
+        redirect_status = "error" if str(row.bootstrap_status or "").strip().lower() != "success" else "ok"
+        resolved_return_url = final_install_redirect_url(
+            install_origin_value=origin,
+            hubspot_return_url=row.return_url,
+            portal_id=row.hubspot_portal_id,
+            plan=row.requested_plan,
+            billing_interval=row.billing_interval,
+            bootstrap_status=row.bootstrap_status,
+            status=redirect_status,
+            message=row.install_error if redirect_status == "error" else "",
+        )
 
         return {
             "status": "ok",
@@ -288,7 +302,7 @@ def marketplace_install_success(installSessionId: str):
             "portalId": str(row.hubspot_portal_id or "").strip(),
             "plan": str(row.requested_plan or "").strip(),
             "billingInterval": str(row.billing_interval or "").strip(),
-            "returnUrl": _resolved_install_return_url(row.return_url),
+            "returnUrl": resolved_return_url,
             "subscriptionStatus": str(row.subscription_status or "").strip(),
             "trialApproved": bool(row.trial_approved),
             "active": install_session_can_activate(row),

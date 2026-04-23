@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-import html
-
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import RedirectResponse
 
-from app.config import settings
 from app.db import get_session, init_db
 from app.services.hubspot_oauth import (
     build_authorization_url,
@@ -22,8 +19,14 @@ from app.services.marketplace_billing import (
     subscription_price_id,
     subscription_status_text,
 )
+from app.services.marketplace_install_routing import (
+    final_install_redirect_url,
+    install_origin,
+    is_hubspot_return_url,
+)
 from app.services.portal_entitlements import (
     get_marketplace_install_session,
+    install_session_context,
     install_session_is_billable_active,
     mark_install_session_bootstrap,
     mark_install_session_oauth_completed,
@@ -35,143 +38,37 @@ from app.services.portal_entitlements import (
 router = APIRouter(tags=["oauth"])
 
 
-def _default_install_return_url() -> str:
-    app_base = str(settings.app_public_base_url or "").strip().rstrip("/")
-    if not app_base:
-        app_base = "https://apps.app-sync.com"
-    return f"{app_base}/opslens/install/complete"
-
-
-def _resolved_install_return_url(
+def _callback_redirect_target(
     *,
-    install_session_return_url: str = "",
+    install_session=None,
     state_return_to: str = "",
-) -> str:
-    install_url = str(install_session_return_url or "").strip()
-    if install_url:
-        return install_url
-
-    state_url = str(state_return_to or "").strip()
-    if state_url:
-        return state_url
-
-    return _default_install_return_url()
-
-
-def _success_html(
-    *,
-    portal_id: str,
-    hub_domain: str,
-    installing_user_email: str,
-    return_to: str,
+    portal_id: str = "",
     plan: str = "",
     billing_interval: str = "",
-    bootstrap_status: str = "success",
+    bootstrap_status: str = "",
+    status: str = "",
+    message: str = "",
 ) -> str:
-    link_html = ""
-    if return_to:
-        safe_url = html.escape(return_to, quote=True)
-        link_html = (
-            f'<p><a href="{safe_url}" '
-            'style="display:inline-block;padding:10px 14px;background:#2563eb;'
-            'color:#fff;text-decoration:none;border-radius:8px;">Return</a></p>'
-        )
+    tenant_context = install_session_context(install_session) if install_session is not None else {}
+    install_session_return_url = str((install_session.return_url if install_session is not None else "") or "").strip()
+    origin = install_origin(tenant_context, install_session_return_url or state_return_to)
 
-    return f"""<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <title>OpsLens OAuth complete</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <style>
-      body {{
-        font-family: Arial, sans-serif;
-        background: #f7f9fc;
-        color: #1f2937;
-        margin: 0;
-        padding: 40px 20px;
-      }}
-      .card {{
-        max-width: 720px;
-        margin: 0 auto;
-        background: #ffffff;
-        border: 1px solid #e5e7eb;
-        border-radius: 12px;
-        padding: 24px;
-        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.06);
-      }}
-      h1 {{
-        margin-top: 0;
-      }}
-      code {{
-        background: #f3f4f6;
-        padding: 2px 6px;
-        border-radius: 6px;
-      }}
-    </style>
-  </head>
-  <body>
-    <div class="card">
-      <h1>OpsLens installation complete</h1>
-      <p>HubSpot OAuth completed successfully, the installation was saved in Postgres, and the OpsLens HubSpot schema was verified.</p>
-      <p><strong>Portal ID:</strong> <code>{html.escape(portal_id)}</code></p>
-      <p><strong>Hub domain:</strong> <code>{html.escape(hub_domain or "-")}</code></p>
-      <p><strong>Installing user:</strong> <code>{html.escape(installing_user_email or "-")}</code></p>
-      <p><strong>Plan:</strong> <code>{html.escape(plan or "-")}</code></p>
-      <p><strong>Billing interval:</strong> <code>{html.escape(billing_interval or "-")}</code></p>
-      <p><strong>Bootstrap status:</strong> <code>{html.escape(bootstrap_status or "-")}</code></p>
-      {link_html}
-      <p>You can close this tab.</p>
-    </div>
-  </body>
-</html>"""
+    hubspot_return_url = ""
+    if is_hubspot_return_url(install_session_return_url):
+        hubspot_return_url = install_session_return_url
+    elif is_hubspot_return_url(state_return_to):
+        hubspot_return_url = str(state_return_to or "").strip()
 
-
-def _error_html(message: str, return_to: str = "") -> str:
-    link_html = ""
-    if return_to:
-        safe_url = html.escape(return_to, quote=True)
-        link_html = (
-            f'<p><a href="{safe_url}" '
-            'style="display:inline-block;padding:10px 14px;background:#9a3412;'
-            'color:#fff;text-decoration:none;border-radius:8px;">Return</a></p>'
-        )
-
-    return f"""<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <title>OpsLens OAuth error</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <style>
-      body {{
-        font-family: Arial, sans-serif;
-        background: #fff7ed;
-        color: #7c2d12;
-        margin: 0;
-        padding: 40px 20px;
-      }}
-      .card {{
-        max-width: 720px;
-        margin: 0 auto;
-        background: #ffffff;
-        border: 1px solid #fdba74;
-        border-radius: 12px;
-        padding: 24px;
-      }}
-      h1 {{
-        margin-top: 0;
-      }}
-    </style>
-  </head>
-  <body>
-    <div class="card">
-      <h1>OpsLens OAuth failed</h1>
-      <p>{html.escape(message)}</p>
-      {link_html}
-    </div>
-  </body>
-</html>"""
+    return final_install_redirect_url(
+        install_origin_value=origin,
+        hubspot_return_url=hubspot_return_url,
+        portal_id=portal_id,
+        plan=plan,
+        billing_interval=billing_interval,
+        bootstrap_status=bootstrap_status,
+        status=status,
+        message=message,
+    )
 
 
 def _authorize_checkout_session(
@@ -276,9 +173,7 @@ def marketplace_install_authorize(
                 raise RuntimeError("A paid or trial-approved install session is required before HubSpot activation.")
             return RedirectResponse(
                 build_authorization_url(
-                    _resolved_install_return_url(
-                        install_session_return_url=install_session.return_url,
-                    ),
+                    install_session.return_url,
                     install_session.install_session_id,
                 ),
                 status_code=302,
@@ -286,30 +181,65 @@ def marketplace_install_authorize(
         finally:
             session.close()
     except Exception as exc:
-        return HTMLResponse(
-            _error_html(str(exc)),
-            status_code=400,
+        return RedirectResponse(
+            _callback_redirect_target(
+                portal_id="",
+                plan="",
+                billing_interval="",
+                bootstrap_status="failed",
+                status="error",
+                message=str(exc),
+            ),
+            status_code=302,
         )
 
 
-@router.get("/oauth-callback", response_class=HTMLResponse)
+@router.get("/oauth-callback")
 def oauth_callback(
     code: str | None = Query(default=None),
     state: str | None = Query(default=None),
     error: str | None = Query(default=None),
     error_description: str | None = Query(default=None),
 ):
-    if error:
-        message = error_description or error or "HubSpot OAuth returned an error."
-        return HTMLResponse(_error_html(message), status_code=400)
-
-    auth_code = str(code or "").strip()
     signed_state = str(state or "").strip()
 
+    if error:
+        message = error_description or error or "HubSpot OAuth returned an error."
+        state_payload = {}
+        try:
+            state_payload = parse_signed_state(signed_state) if signed_state else {}
+        except Exception:
+            state_payload = {}
+        return RedirectResponse(
+            _callback_redirect_target(
+                state_return_to=str(state_payload.get("returnTo") or ""),
+                bootstrap_status="failed",
+                status="error",
+                message=message,
+            ),
+            status_code=302,
+        )
+
+    auth_code = str(code or "").strip()
+
     if not auth_code:
-        return HTMLResponse(_error_html("Missing OAuth code."), status_code=400)
+        return RedirectResponse(
+            _callback_redirect_target(
+                bootstrap_status="failed",
+                status="error",
+                message="Missing OAuth code.",
+            ),
+            status_code=302,
+        )
     if not signed_state:
-        return HTMLResponse(_error_html("Missing OAuth state."), status_code=400)
+        return RedirectResponse(
+            _callback_redirect_target(
+                bootstrap_status="failed",
+                status="error",
+                message="Missing OAuth state.",
+            ),
+            status_code=302,
+        )
 
     try:
         state_payload = parse_signed_state(signed_state)
@@ -331,7 +261,7 @@ def oauth_callback(
 
         bootstrap_started = False
         install_session = None
-        success_payload = {}
+        redirect_payload = {}
 
         try:
             install_session_id = str(state_payload.get("installSessionId") or "").strip()
@@ -384,17 +314,16 @@ def oauth_callback(
                 session.commit()
                 session.refresh(installation)
 
-            success_payload = {
-                "portal_id": str(installation.portal_id or "").strip(),
-                "hub_domain": str(installation.hub_domain or "").strip(),
-                "installing_user_email": str(installation.installing_user_email or "").strip(),
-                "return_to": _resolved_install_return_url(
-                    install_session_return_url=(install_session.return_url if install_session is not None else ""),
+            redirect_payload = {
+                "redirect_url": _callback_redirect_target(
+                    install_session=install_session,
                     state_return_to=str(state_payload.get("returnTo") or ""),
-                ),
-                "plan": str((install_session.requested_plan if install_session is not None else "") or ""),
-                "billing_interval": str((install_session.billing_interval if install_session is not None else "") or ""),
-                "bootstrap_status": str((install_session.bootstrap_status if install_session is not None else "success") or "success"),
+                    portal_id=str(installation.portal_id or "").strip(),
+                    plan=str((install_session.requested_plan if install_session is not None else "") or ""),
+                    billing_interval=str((install_session.billing_interval if install_session is not None else "") or ""),
+                    bootstrap_status=str((install_session.bootstrap_status if install_session is not None else "success") or "success"),
+                    status="ok",
+                )
             }
         except Exception as exc:
             if install_session is not None and "session" in locals():
@@ -408,33 +337,57 @@ def oauth_callback(
                         install_error=str(exc),
                     )
                 sync_installation_activation_for_install_session(session, install_session)
+            installation = locals().get("installation")
+            redirect_payload = {
+                "redirect_url": _callback_redirect_target(
+                    install_session=install_session,
+                    state_return_to=str(state_payload.get("returnTo") or ""),
+                    portal_id=str(
+                        (
+                            installation.portal_id
+                            if installation is not None
+                            else (install_session.hubspot_portal_id if install_session is not None else "")
+                        )
+                        or ""
+                    ).strip(),
+                    plan=str((install_session.requested_plan if install_session is not None else "") or ""),
+                    billing_interval=str((install_session.billing_interval if install_session is not None else "") or ""),
+                    bootstrap_status=str(
+                        (
+                            install_session.bootstrap_status
+                            if install_session is not None and str(install_session.bootstrap_status or "").strip()
+                            else ("failed" if bootstrap_started else "failed")
+                        )
+                    ),
+                    status="error",
+                    message=str(exc),
+                )
+            }
             raise
         finally:
             session.close()
 
-        return HTMLResponse(
-            _success_html(
-                portal_id=success_payload["portal_id"],
-                hub_domain=success_payload["hub_domain"],
-                installing_user_email=success_payload["installing_user_email"],
-                return_to=success_payload["return_to"],
-                plan=success_payload["plan"],
-                billing_interval=success_payload["billing_interval"],
-                bootstrap_status=success_payload["bootstrap_status"],
-            ),
-            status_code=200,
+        return RedirectResponse(
+            redirect_payload["redirect_url"],
+            status_code=302,
         )
     except Exception as exc:
-        message = str(exc)
-        state_payload = locals().get("state_payload") or {}
-        install_session = locals().get("install_session")
-        return_to = _resolved_install_return_url(
-            install_session_return_url=(install_session.return_url if install_session is not None else ""),
-            state_return_to=str(state_payload.get("returnTo") or ""),
-        )
-        if "bootstrap_started" in locals() and bootstrap_started:
-            message = f"HubSpot install completed, but OpsLens bootstrap failed: {exc}"
-        return HTMLResponse(
-            _error_html(message, return_to),
-            status_code=400,
+        redirect_payload = locals().get("redirect_payload") or {}
+        redirect_url = redirect_payload.get("redirect_url")
+        if not redirect_url:
+            state_payload = locals().get("state_payload") or {}
+            install_session = locals().get("install_session")
+            redirect_url = _callback_redirect_target(
+                install_session=install_session,
+                state_return_to=str(state_payload.get("returnTo") or ""),
+                portal_id="",
+                plan="",
+                billing_interval="",
+                bootstrap_status="failed",
+                status="error",
+                message=str(exc),
+            )
+        return RedirectResponse(
+            redirect_url,
+            status_code=302,
         )
