@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpsLens Setup Guide | app-sync integrations</title>
+    <meta
+      name="description"
+      content="Setup guide for installing and configuring the OpsLens HubSpot integration from apps.app-sync.com."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="icon" href="/assets/opslens-mark.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="site-shell">
+      <header class="topbar">
+        <a class="brand" href="/">
+          <img src="/assets/opslens-mark.svg" alt="OpsLens" width="34" height="34" />
+          <span>
+            <strong>app-sync integrations</strong>
+            <em>OpsLens setup guide</em>
+          </span>
+        </a>
+        <nav class="topnav" aria-label="Primary">
+          <a href="/">Hub</a>
+          <a href="/opslens/">OpsLens</a>
+          <a href="#setup-steps">Setup steps</a>
+          <a class="nav-cta" href="/opslens/install/complete/">Install complete</a>
+        </nav>
+      </header>
+
+      <main>
+        <section class="subpage-hero">
+          <div class="subpage-copy">
+            <p class="eyebrow">Setup guide</p>
+            <p class="breadcrumb">
+              <a href="/">app-sync integrations</a>
+              <span>/</span>
+              <a href="/opslens/">OpsLens</a>
+              <span>/</span>
+              <strong>Setup</strong>
+            </p>
+            <h1>Install and configure OpsLens for HubSpot with confidence.</h1>
+            <p class="hero-text">
+              This setup guide is specific to the OpsLens HubSpot integration. It
+              walks through prerequisites, plan expectations, the install flow
+              from apps.app-sync.com, HubSpot OAuth authorization, and what your
+              team should see after the connection is complete.
+            </p>
+            <div class="hero-actions">
+              <a class="button button-primary" href="/opslens/install/complete/">
+                View install-complete page
+              </a>
+              <a class="button button-secondary" href="mailto:support@app-sync.com?subject=OpsLens%20Setup%20Help">
+                Contact support
+              </a>
+            </div>
+          </div>
+
+          <div class="subpage-summary">
+            <article class="summary-card">
+              <p class="eyebrow">Prerequisites</p>
+              <ul class="stack-list compact-list">
+                <li>A HubSpot portal where you can install connected apps</li>
+                <li>Access to approve the OpsLens OAuth authorization step</li>
+                <li>Your alert destinations and workflow owners ready to confirm after install</li>
+              </ul>
+            </article>
+            <article class="summary-card accent-summary">
+              <p class="eyebrow">Plan note</p>
+              <ul class="stack-list compact-list">
+                <li>OpsLens access is tied to your selected app-sync plan during install</li>
+                <li>Plan and billing details appear again on the install-complete page</li>
+                <li>For billing questions, contact billing@app-sync.com before rollout</li>
+              </ul>
+            </article>
+          </div>
+        </section>
+
+        <section class="section-grid">
+          <article class="info-card">
+            <p class="eyebrow">Before you start</p>
+            <h2>Make sure the right HubSpot admin is doing the install.</h2>
+            <p>
+              OpsLens should be installed by the person who can approve connected
+              app access for the target HubSpot portal and confirm the team’s
+              alerting expectations afterward. If you also plan to configure
+              Slack notifications, have the destination webhook ready before you
+              open Settings in HubSpot.
+            </p>
+          </article>
+
+          <article class="info-card">
+            <p class="eyebrow">Support contacts</p>
+            <h2>Help is available throughout setup.</h2>
+            <ul class="contact-list">
+              <li><a href="mailto:support@app-sync.com">support@app-sync.com</a></li>
+              <li><a href="mailto:docs@app-sync.com">docs@app-sync.com</a></li>
+              <li><a href="mailto:billing@app-sync.com">billing@app-sync.com</a></li>
+              <li><a href="mailto:partners@app-sync.com">partners@app-sync.com</a></li>
+            </ul>
+          </article>
+        </section>
+
+        <section class="feature-band" id="setup-steps">
+          <article class="feature-card stack-card">
+            <p class="eyebrow">Step 1</p>
+            <h3>Start the install from apps.app-sync.com.</h3>
+            <p>
+              Begin from the OpsLens public app entry on apps.app-sync.com and
+              choose the install path for your HubSpot portal. This is the public
+              starting point you can share during marketplace review or customer
+              onboarding.
+            </p>
+          </article>
+
+          <article class="feature-card">
+            <p class="eyebrow">Step 2</p>
+            <h3>Approve the HubSpot OAuth authorization.</h3>
+            <p>
+              HubSpot will prompt the installer to authorize OpsLens for the
+              required portal. Review the requested permissions, confirm the
+              correct portal is selected, and finish the OAuth approval flow to
+              complete the connection.
+            </p>
+          </article>
+
+          <article class="feature-card accent-card">
+            <p class="eyebrow">Step 3</p>
+            <h3>Confirm the install-complete handoff.</h3>
+            <p>
+              After OAuth succeeds, OpsLens returns the installer to the external
+              install-complete page. There you should see the portal ID, plan,
+              billing interval, bootstrap status, and the links that open OpsLens
+              in HubSpot or point you to the fallback HubSpot path.
+            </p>
+          </article>
+        </section>
+
+        <section class="section-grid">
+          <article class="info-card">
+            <p class="eyebrow">What you should see after install</p>
+            <h2>A successful install looks explicit, not silent.</h2>
+            <ul class="stack-list compact-list">
+              <li>An install-complete confirmation page for OpsLens</li>
+              <li>The connected portal ID and selected plan information</li>
+              <li>A bootstrap status that indicates the install is ready or in progress</li>
+              <li>Direct HubSpot actions when app-specific deep links are available</li>
+            </ul>
+          </article>
+
+          <article class="info-card">
+            <p class="eyebrow">Find OpsLens in HubSpot</p>
+            <h2>Use App Home first, then Settings.</h2>
+            <p>
+              Once the install is complete, open HubSpot and go to
+              <strong>Connected Apps</strong>, then select <strong>OpsLens</strong>.
+              From there, use <strong>App Home</strong> to review the dashboard
+              and use <strong>Settings</strong> to configure portal-specific
+              options such as alerts and critical workflow behavior.
+            </p>
+          </article>
+        </section>
+      </main>
+
+      <footer class="footer">
+        <div>
+          <strong>OpsLens</strong>
+          <p>Public setup guidance for the OpsLens HubSpot integration on app-sync.com.</p>
+        </div>
+        <div class="footer-links">
+          <a href="mailto:support@app-sync.com">support@app-sync.com</a>
+          <a href="mailto:docs@app-sync.com">docs@app-sync.com</a>
+          <a href="mailto:billing@app-sync.com">billing@app-sync.com</a>
+          <a href="mailto:partners@app-sync.com">partners@app-sync.com</a>
+        </div>
+      </footer>
+    </div>
+  </body>
+</html>
