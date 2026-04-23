@@ -49,6 +49,20 @@ class MarketplaceInstallStartRequest(BaseModel):
     trialApproved: bool = False
 
 
+def _default_install_return_url() -> str:
+    app_base = str(settings.app_public_base_url or "").strip().rstrip("/")
+    if not app_base:
+        app_base = "https://apps.app-sync.com"
+    return f"{app_base}/opslens/install/complete"
+
+
+def _resolved_install_return_url(return_url: str | None) -> str:
+    cleaned = str(return_url or "").strip()
+    if cleaned:
+        return cleaned
+    return _default_install_return_url()
+
+
 def _backend_public_url(path: str, **query: str) -> str:
     base = str(settings.backend_public_base_url or "").strip().rstrip("/")
     if not base:
@@ -61,15 +75,7 @@ def _backend_public_url(path: str, **query: str) -> str:
 
 
 def _default_cancel_url(return_url: str) -> str:
-    cleaned = str(return_url or "").strip()
-    if cleaned:
-        return cleaned
-
-    app_base = str(settings.app_public_base_url or "").strip().rstrip("/")
-    if app_base:
-        return app_base
-
-    return _backend_public_url("/")
+    return _resolved_install_return_url(return_url)
 
 
 def _update_billing_state(
@@ -273,6 +279,7 @@ def marketplace_install_success(installSessionId: str):
             "portalId": str(row.hubspot_portal_id or "").strip(),
             "plan": str(row.requested_plan or "").strip(),
             "billingInterval": str(row.billing_interval or "").strip(),
+            "returnUrl": _resolved_install_return_url(row.return_url),
             "subscriptionStatus": str(row.subscription_status or "").strip(),
             "trialApproved": bool(row.trial_approved),
             "active": install_session_can_activate(row),

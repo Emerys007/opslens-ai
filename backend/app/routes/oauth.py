@@ -5,6 +5,7 @@ import html
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from app.config import settings
 from app.db import get_session, init_db
 from app.services.hubspot_oauth import (
     build_authorization_url,
@@ -32,6 +33,29 @@ from app.services.portal_entitlements import (
 )
 
 router = APIRouter(tags=["oauth"])
+
+
+def _default_install_return_url() -> str:
+    app_base = str(settings.app_public_base_url or "").strip().rstrip("/")
+    if not app_base:
+        app_base = "https://apps.app-sync.com"
+    return f"{app_base}/opslens/install/complete"
+
+
+def _resolved_install_return_url(
+    *,
+    install_session_return_url: str = "",
+    state_return_to: str = "",
+) -> str:
+    install_url = str(install_session_return_url or "").strip()
+    if install_url:
+        return install_url
+
+    state_url = str(state_return_to or "").strip()
+    if state_url:
+        return state_url
+
+    return _default_install_return_url()
 
 
 def _success_html(
@@ -252,7 +276,9 @@ def marketplace_install_authorize(
                 raise RuntimeError("A paid or trial-approved install session is required before HubSpot activation.")
             return RedirectResponse(
                 build_authorization_url(
-                    install_session.return_url,
+                    _resolved_install_return_url(
+                        install_session_return_url=install_session.return_url,
+                    ),
                     install_session.install_session_id,
                 ),
                 status_code=302,
@@ -362,7 +388,10 @@ def oauth_callback(
                 "portal_id": str(installation.portal_id or "").strip(),
                 "hub_domain": str(installation.hub_domain or "").strip(),
                 "installing_user_email": str(installation.installing_user_email or "").strip(),
-                "return_to": str(state_payload.get("returnTo") or ""),
+                "return_to": _resolved_install_return_url(
+                    install_session_return_url=(install_session.return_url if install_session is not None else ""),
+                    state_return_to=str(state_payload.get("returnTo") or ""),
+                ),
                 "plan": str((install_session.requested_plan if install_session is not None else "") or ""),
                 "billing_interval": str((install_session.billing_interval if install_session is not None else "") or ""),
                 "bootstrap_status": str((install_session.bootstrap_status if install_session is not None else "success") or "success"),
@@ -398,7 +427,11 @@ def oauth_callback(
     except Exception as exc:
         message = str(exc)
         state_payload = locals().get("state_payload") or {}
-        return_to = str(state_payload.get("returnTo") or "")
+        install_session = locals().get("install_session")
+        return_to = _resolved_install_return_url(
+            install_session_return_url=(install_session.return_url if install_session is not None else ""),
+            state_return_to=str(state_payload.get("returnTo") or ""),
+        )
         if "bootstrap_started" in locals() and bootstrap_started:
             message = f"HubSpot install completed, but OpsLens bootstrap failed: {exc}"
         return HTMLResponse(

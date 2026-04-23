@@ -2,11 +2,15 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <meta
+      http-equiv="refresh"
+      content="0; url=/opslens/install/complete/"
+    />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>OpsLens Install Complete | app-sync.com</title>
+    <title>Redirecting to OpsLens install complete | app-sync.com</title>
     <meta
       name="description"
-      content="OpsLens has been installed. Return to HubSpot, request docs, or contact support from app-sync.com."
+      content="Legacy install-complete handoff for OpsLens on the app-sync integration hub."
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -16,60 +20,38 @@
     />
     <link rel="icon" href="/assets/opslens-mark.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/styles.css" />
+    <script>
+      window.location.replace("/opslens/install/complete/");
+    </script>
   </head>
   <body class="success-body">
     <div class="site-shell install-shell">
       <header class="topbar compact-topbar">
         <a class="brand" href="/">
-          <img src="/assets/opslens-mark.svg" alt="OpsLens" width="34" height="34" />
+          <img src="/assets/opslens-mark.svg" alt="app-sync integrations" width="34" height="34" />
           <span>
-            <strong>OpsLens</strong>
-            <em>by app-sync.com</em>
+            <strong>app-sync integrations</strong>
+            <em>Legacy install route</em>
           </span>
         </a>
-        <a class="topbar-link" href="/">Back to site</a>
+        <a class="topbar-link" href="/opslens/install/complete/">Go to OpsLens page</a>
       </header>
 
       <main class="install-main">
-        <section class="success-card">
-          <div class="success-badge" aria-hidden="true">
-            <span></span>
-          </div>
-          <p class="eyebrow">Install complete</p>
-          <h1>OpsLens is connected and ready for the next step.</h1>
+        <section class="success-card redirect-card">
+          <p class="eyebrow">Route moved</p>
+          <h1>Sending you to the OpsLens install-complete page.</h1>
           <p class="hero-text">
-            Your HubSpot install completed successfully. Use the actions below to
-            return to HubSpot, request documentation, or reach the app-sync.com team.
+            This legacy route now hands off to the app-specific OpsLens install flow
+            on the app-sync integration hub.
           </p>
-
           <div class="hero-actions centered-actions">
-            <a class="button button-primary" href="https://app.hubspot.com/" target="_blank" rel="noreferrer">
-              Return to HubSpot
+            <a class="button button-primary" href="/opslens/install/complete/">
+              Continue to OpsLens install complete
             </a>
-            <a class="button button-secondary" href="mailto:docs@app-sync.com?subject=OpsLens%20Documentation%20Request">
-              View docs
+            <a class="button button-secondary" href="/opslens/">
+              View OpsLens app page
             </a>
-            <a class="button button-secondary" href="mailto:support@app-sync.com?subject=OpsLens%20Support">
-              Contact support
-            </a>
-          </div>
-
-          <div class="detail-band">
-            <article class="detail-card">
-              <h2>What to expect next</h2>
-              <p>
-                The install handoff is ready now. The HubSpot return target and
-                docs destination can connect to deeper post-install flows later.
-              </p>
-            </article>
-            <article class="detail-card">
-              <h2>Need another team?</h2>
-              <ul class="contact-list">
-                <li><a href="mailto:docs@app-sync.com">docs@app-sync.com</a></li>
-                <li><a href="mailto:billing@app-sync.com">billing@app-sync.com</a></li>
-                <li><a href="mailto:partners@app-sync.com">partners@app-sync.com</a></li>
-              </ul>
-            </article>
           </div>
         </section>
       </main>
