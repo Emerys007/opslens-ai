@@ -215,6 +215,15 @@ p {
   transform: translateY(-1px);
 }
 
+.button:focus-visible,
+.topnav a:focus-visible,
+.topbar-link:focus-visible,
+.footer-links a:focus-visible,
+.contact-list a:focus-visible {
+  outline: 3px solid rgba(12, 159, 176, 0.28);
+  outline-offset: 4px;
+}
+
 .button-primary {
   background: linear-gradient(135deg, var(--brand-deep), var(--brand));
   color: #ffffff;
