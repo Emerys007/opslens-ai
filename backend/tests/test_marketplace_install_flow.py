@@ -74,6 +74,10 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
         self.assertEqual("https://checkout.stripe.test/session", payload["checkoutUrl"])
         create_customer.assert_called_once()
         create_checkout.assert_called_once()
+        success_url = create_checkout.call_args.kwargs["success_url"]
+        self.assertIn("{CHECKOUT_SESSION_ID}", success_url)
+        self.assertNotIn("%7BCHECKOUT_SESSION_ID%7D", success_url)
+        self.assertIn(f"installSessionId={payload['installSessionId']}", success_url)
 
         session = self._session()
         try:
@@ -220,28 +224,46 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
         self.assertEqual(200, settings.status_code)
         self.assertEqual("ok", settings.json()["status"])
 
-    def test_paid_install_authorize_and_oauth_callback_complete_after_checkout(self) -> None:
-        session = self._session()
-        try:
-            create_marketplace_install_session(
-                session,
-                install_session_id="paid-callback-session",
-                plan="professional",
-                billing_interval="monthly",
-                return_url="https://apps.app-sync.com/install/complete",
-                tenant_context={"tenantSlug": "paid-callback"},
-                partner_user_email="owner@example.com",
-                trial_approved=False,
+    def test_paid_install_start_authorize_and_oauth_callback_complete_after_checkout(self) -> None:
+        with (
+            patch("app.services.marketplace_billing.settings.stripe_price_professional_monthly", "price_prof_month"),
+            patch("app.api.v1.routes.marketplace.settings.backend_public_base_url", "https://api.app-sync.com"),
+            patch("app.api.v1.routes.marketplace.settings.app_public_base_url", "https://apps.app-sync.com"),
+            patch("app.api.v1.routes.marketplace.create_customer", return_value={"id": "cus_paid_123"}),
+            patch(
+                "app.api.v1.routes.marketplace.create_checkout_session",
+                return_value={"id": "cs_paid_123", "url": "https://checkout.stripe.test/session"},
+            ) as create_checkout,
+        ):
+            start = self.client.post(
+                "/api/v1/marketplace/install/start",
+                json={
+                    "plan": "professional",
+                    "billingInterval": "monthly",
+                    "returnUrl": "https://apps.app-sync.com/install/complete",
+                    "tenantContext": {"tenantSlug": "paid-callback"},
+                    "partnerUserId": "user-456",
+                    "partnerUserEmail": "owner@example.com",
+                    "trialApproved": False,
+                },
             )
-        finally:
-            session.close()
+
+        self.assertEqual(200, start.status_code)
+        start_payload = start.json()
+        install_session_id = start_payload["installSessionId"]
+        self.assertEqual("ok", start_payload["status"])
+        self.assertEqual("https://checkout.stripe.test/session", start_payload["checkoutUrl"])
+        success_url = create_checkout.call_args.kwargs["success_url"]
+        self.assertIn("{CHECKOUT_SESSION_ID}", success_url)
+        self.assertNotIn("%7BCHECKOUT_SESSION_ID%7D", success_url)
+        self.assertIn(f"installSessionId={install_session_id}", success_url)
 
         with (
             patch(
                 "app.routes.oauth.retrieve_checkout_session",
                 return_value={
                     "id": "cs_paid_123",
-                    "client_reference_id": "paid-callback-session",
+                    "client_reference_id": install_session_id,
                     "payment_status": "paid",
                     "status": "complete",
                     "subscription": "sub_paid_123",
@@ -259,7 +281,7 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
             patch("app.routes.oauth.build_authorization_url", return_value="https://hubspot.test/oauth"),
         ):
             authorize = self.client.get(
-                "/marketplace/install/authorize?installSessionId=paid-callback-session&checkoutSessionId=cs_paid_123",
+                f"/marketplace/install/authorize?installSessionId={install_session_id}&checkoutSessionId=cs_paid_123",
                 follow_redirects=False,
             )
 
@@ -270,7 +292,7 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
             patch(
                 "app.routes.oauth.parse_signed_state",
                 return_value={
-                    "installSessionId": "paid-callback-session",
+                    "installSessionId": install_session_id,
                     "returnTo": "https://apps.app-sync.com/install/complete",
                 },
             ),
@@ -317,7 +339,7 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
         self.assertIn("https://apps.app-sync.com/install/complete", callback.text)
 
         success = self.client.get(
-            "/api/v1/marketplace/install/success?installSessionId=paid-callback-session"
+            f"/api/v1/marketplace/install/success?installSessionId={install_session_id}"
         )
         self.assertEqual(200, success.status_code)
         success_payload = success.json()

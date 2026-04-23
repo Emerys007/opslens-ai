@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -72,6 +72,19 @@ def _backend_public_url(path: str, **query: str) -> str:
     if not query:
         return f"{base}{suffix}"
     return f"{base}{suffix}?{urlencode(query)}"
+
+
+def _stripe_checkout_success_url(install_session_id: str) -> str:
+    base = str(settings.backend_public_base_url or "").strip().rstrip("/")
+    if not base:
+        raise RuntimeError("BACKEND_PUBLIC_BASE_URL is not configured.")
+
+    encoded_install_session_id = quote(str(install_session_id or "").strip(), safe="")
+    return (
+        f"{base}/marketplace/install/authorize"
+        f"?installSessionId={encoded_install_session_id}"
+        "&checkoutSessionId={CHECKOUT_SESSION_ID}"
+    )
 
 
 def _default_cancel_url(return_url: str) -> str:
@@ -220,11 +233,7 @@ def marketplace_install_start(payload: MarketplaceInstallStartRequest):
             checkout = create_checkout_session(
                 customer_id=customer_id,
                 price_id=price_id,
-                success_url=_backend_public_url(
-                    "/marketplace/install/authorize",
-                    installSessionId=row.install_session_id,
-                    checkoutSessionId="{CHECKOUT_SESSION_ID}",
-                ),
+                success_url=_stripe_checkout_success_url(row.install_session_id),
                 cancel_url=_default_cancel_url(row.return_url),
                 install_session_id=row.install_session_id,
                 plan=row.requested_plan,
