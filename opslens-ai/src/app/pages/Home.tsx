@@ -671,49 +671,7 @@ const HomePage = ({ context }: HomePageProps) => {
           </Flex>
         </Tile>
 
-        <Tile compact>
-          <Flex direction="column" gap="small">
-            <Flex justify="between" align="center" wrap gap="small">
-              <Box flex="auto">
-                <Heading inline={true}>Webhook activity</Heading>
-                <Text>Recent delivery and property-change activity for this portal.</Text>
-              </Box>
-              <StatusTag variant={webhookStatus.variant}>{webhookStatus.label}</StatusTag>
-            </Flex>
-
-            {webhookError ? (
-              <Text>Webhook activity is unavailable right now: {webhookError}</Text>
-            ) : webhookDbConfigured === false ? (
-              <Text>Webhook storage is not configured for this environment.</Text>
-            ) : webhookPreview.length === 0 ? (
-              <Text>No recent webhook events were found for this portal.</Text>
-            ) : (
-              <Flex direction="column" gap="small">
-                {webhookPreview.map((event, idx) => (
-                  <Tile compact key={event?.eventId ?? `${event?.subscriptionType ?? "event"}-${idx}`}>
-                    <Flex direction="column" gap="flush">
-                      <Text format={{ fontWeight: "bold" }}>
-                        {String(event?.subscriptionType ?? "-")}
-                      </Text>
-                      <Text>
-                        Object {String(event?.objectId ?? "-")} •{" "}
-                        {String(event?.propertyName ?? "-")}
-                      </Text>
-                      <Text>
-                        Received {formatDate(event?.receivedAtUtc)} • Occurred{" "}
-                        {formatDate(event?.occurredAtUtc)}
-                      </Text>
-                      <Text>
-                        Source {String(event?.changeSource ?? "-")} • Value{" "}
-                        {String(event?.propertyValue ?? "-")}
-                      </Text>
-                    </Flex>
-                  </Tile>
-                ))}
-              </Flex>
-            )}
-          </Flex>
-        </Tile>
+        {/* Webhook feed panel removed in v2 scope reduction. Home.tsx is rebuilt in week 3. */}
       </AutoGrid>
 
       <Accordion title="Advanced context" size="small">
