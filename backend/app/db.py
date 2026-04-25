@@ -91,6 +91,7 @@ def init_db() -> bool:
     if engine is None:
         return False
 
+    from app.models.alert import Alert  # noqa: F401
     from app.models.alert_event import AlertEvent  # noqa: F401
     from app.models.hubspot_installation import HubSpotInstallation  # noqa: F401
     from app.models.marketplace_install_session import MarketplaceInstallSession  # noqa: F401
