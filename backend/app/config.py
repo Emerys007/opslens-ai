@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     stripe_price_business_monthly: str = ""
     stripe_price_business_yearly: str = ""
 
+    # Background workflow polling.
+    workflow_poll_interval_seconds: int = 120
+    maintenance_api_key: str = ""
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
