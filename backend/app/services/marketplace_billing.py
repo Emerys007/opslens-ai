@@ -68,8 +68,30 @@ def price_id_for(plan: str, billing_interval: str) -> str:
     return price_id
 
 
-def subscription_is_active(subscription_status: str | None, *, trial_approved: bool = False) -> bool:
-    if bool(trial_approved):
+def trial_is_active(trial_approved: bool, trial_expires_at: datetime | None = None) -> bool:
+    """Return True if a trial grant is currently in force.
+
+    A trial is considered active when it has been approved AND either has no
+    explicit expiry (legacy rows pre-dating auto-trial) or its expiry is in
+    the future. Comparison is done in UTC.
+    """
+    if not bool(trial_approved):
+        return False
+    if trial_expires_at is None:
+        return True
+    expiry = trial_expires_at
+    if expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=timezone.utc)
+    return _utc_now() < expiry
+
+
+def subscription_is_active(
+    subscription_status: str | None,
+    *,
+    trial_approved: bool = False,
+    trial_expires_at: datetime | None = None,
+) -> bool:
+    if trial_is_active(trial_approved, trial_expires_at):
         return True
     status = str(subscription_status or "").strip().lower()
     return status in ACTIVE_SUBSCRIPTION_STATUSES
