@@ -26,8 +26,10 @@ from app.services.marketplace_install_routing import (
 )
 from app.services.portal_entitlements import (
     get_marketplace_install_session,
+    grant_auto_trial_for_install_session,
     install_session_context,
     install_session_is_billable_active,
+    install_session_trial_query_params,
     mark_install_session_bootstrap,
     mark_install_session_oauth_completed,
     run_post_install_provisioner,
@@ -59,6 +61,8 @@ def _callback_redirect_target(
     elif is_hubspot_return_url(state_return_to):
         hubspot_return_url = str(state_return_to or "").strip()
 
+    trial_params = install_session_trial_query_params(install_session)
+
     return final_install_redirect_url(
         install_origin_value=origin,
         hubspot_return_url=hubspot_return_url,
@@ -68,6 +72,8 @@ def _callback_redirect_target(
         bootstrap_status=bootstrap_status,
         status=status,
         message=message,
+        trial=bool(trial_params.get("trial")),
+        trial_expires_at=trial_params.get("trial_expires_at", ""),
     )
 
 
@@ -281,6 +287,16 @@ def oauth_callback(
                     install_session,
                     portal_id=installation.portal_id,
                     hub_domain=installation.hub_domain,
+                )
+
+                # Auto-trial: a portal that has never had a trial AND has no
+                # active paid subscription gets a fresh 14-day trial granted
+                # at OAuth completion. Re-installs with a prior trial fall
+                # through to the existing payment-required path below.
+                install_session, _trial_granted = grant_auto_trial_for_install_session(
+                    session,
+                    install_session,
+                    portal_id=installation.portal_id,
                 )
 
                 if not install_session_is_billable_active(install_session):

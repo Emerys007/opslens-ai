@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 
 from sqlalchemy.orm import Session
@@ -14,12 +14,31 @@ from app.services.marketplace_billing import (
     normalize_plan,
     plan_from_price_id,
     subscription_is_active,
+    trial_is_active,
 )
 from app.services.portal_settings import ensure_default_portal_settings
 
 
+AUTO_TRIAL_DURATION = timedelta(days=14)
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _aware(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
+def _iso_utc(value: datetime | None) -> str:
+    aware = _aware(value)
+    if aware is None:
+        return ""
+    return aware.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _safe_json(value: dict | None) -> str:
@@ -37,6 +56,8 @@ def create_marketplace_install_session(
     partner_user_id: str = "",
     partner_user_email: str = "",
     trial_approved: bool = False,
+    trial_started_at: datetime | None = None,
+    trial_expires_at: datetime | None = None,
 ) -> MarketplaceInstallSession:
     row = MarketplaceInstallSession(
         install_session_id=str(install_session_id),
@@ -47,6 +68,8 @@ def create_marketplace_install_session(
         partner_user_id=str(partner_user_id or "").strip(),
         partner_user_email=str(partner_user_email or "").strip(),
         trial_approved=bool(trial_approved),
+        trial_started_at=_aware(trial_started_at),
+        trial_expires_at=_aware(trial_expires_at),
         subscription_status="trial_approved" if trial_approved else "pending",
     )
     session.add(row)
@@ -148,7 +171,24 @@ def install_session_is_billable_active(row: MarketplaceInstallSession) -> bool:
     return subscription_is_active(
         row.subscription_status,
         trial_approved=row.trial_approved,
+        trial_expires_at=_aware(row.trial_expires_at),
     )
+
+
+def install_session_trial_query_params(row: MarketplaceInstallSession | None) -> dict[str, str]:
+    """Return query-string fragments that signal an active auto-trial.
+
+    Empty dict if no trial was granted, the trial is not currently active, or
+    the trial has expired. Callers append these to the install-complete URL.
+    """
+    if row is None:
+        return {}
+    if not trial_is_active(bool(row.trial_approved), _aware(row.trial_expires_at)):
+        return {}
+    expires_iso = _iso_utc(row.trial_expires_at)
+    if not expires_iso:
+        return {}
+    return {"trial": "1", "trial_expires_at": expires_iso}
 
 
 def install_session_can_activate(row: MarketplaceInstallSession) -> bool:
@@ -167,6 +207,8 @@ def entitlement_payload(row: PortalEntitlement | None, portal_id: str = "") -> d
             "billingInterval": "",
             "subscriptionStatus": "pending",
             "trialApproved": False,
+            "trialStartedAt": "",
+            "trialExpiresAt": "",
             "active": False,
             "stripeCustomerId": "",
             "stripeSubscriptionId": "",
@@ -178,9 +220,12 @@ def entitlement_payload(row: PortalEntitlement | None, portal_id: str = "") -> d
         "billingInterval": str(row.billing_interval or "").strip(),
         "subscriptionStatus": str(row.subscription_status or "").strip(),
         "trialApproved": bool(row.trial_approved),
+        "trialStartedAt": _iso_utc(row.trial_started_at),
+        "trialExpiresAt": _iso_utc(row.trial_expires_at),
         "active": subscription_is_active(
             row.subscription_status,
             trial_approved=row.trial_approved,
+            trial_expires_at=_aware(row.trial_expires_at),
         ),
         "stripeCustomerId": str(row.stripe_customer_id or "").strip(),
         "stripeSubscriptionId": str(row.stripe_subscription_id or "").strip(),
@@ -223,12 +268,110 @@ def upsert_portal_entitlement_from_install_session(
     row.stripe_customer_id = str(install_session.stripe_customer_id or "").strip()
     row.stripe_checkout_session_id = str(install_session.stripe_checkout_session_id or "").strip()
     row.stripe_subscription_id = str(install_session.stripe_subscription_id or "").strip()
-    if subscription_is_active(row.subscription_status, trial_approved=row.trial_approved):
+    # Trial timestamps: a portal can only have one trial in its lifetime, so
+    # never overwrite an existing trial_started_at. trial_expires_at is allowed
+    # to refresh from the install session (e.g. a re-install during the trial
+    # window inherits the same expiry, not a brand new 14 days).
+    install_trial_started_at = _aware(install_session.trial_started_at)
+    install_trial_expires_at = _aware(install_session.trial_expires_at)
+    if row.trial_started_at is None and install_trial_started_at is not None:
+        row.trial_started_at = install_trial_started_at
+    if row.trial_started_at is not None and row.trial_expires_at is None and install_trial_expires_at is not None:
+        row.trial_expires_at = install_trial_expires_at
+    if subscription_is_active(
+        row.subscription_status,
+        trial_approved=row.trial_approved,
+        trial_expires_at=_aware(row.trial_expires_at),
+    ):
         row.activated_at = row.activated_at or _utc_now()
 
     session.commit()
     session.refresh(row)
     return row
+
+
+def _revoke_optimistic_install_session_trial(
+    session: Session,
+    install_session: MarketplaceInstallSession,
+) -> MarketplaceInstallSession:
+    """Roll back the optimistic auto-trial that ``install_start`` stages.
+
+    Called when the OAuth callback discovers that the portal is not eligible
+    for an auto-trial (it has a prior trial or an active paid subscription).
+    The install session must not advertise an active trial in that case.
+    """
+    install_session.trial_approved = False
+    install_session.trial_started_at = None
+    install_session.trial_expires_at = None
+    if str(install_session.subscription_status or "").strip().lower() == "trial_approved":
+        install_session.subscription_status = "pending"
+    session.commit()
+    session.refresh(install_session)
+    return install_session
+
+
+def grant_auto_trial_for_install_session(
+    session: Session,
+    install_session: MarketplaceInstallSession,
+    *,
+    portal_id: str,
+    duration: timedelta = AUTO_TRIAL_DURATION,
+) -> tuple[MarketplaceInstallSession, bool]:
+    """Grant a 14-day auto-trial to the install session if the portal is eligible.
+
+    Eligibility:
+      * The portal has no existing PortalEntitlement, OR
+      * The portal entitlement has no prior trial_started_at AND its current
+        subscription_status is not an active paid one.
+
+    Behavior:
+      * Eligible — grant a fresh trial (overwriting any optimistic timestamps
+        from ``install_start``) and return ``granted=True``.
+      * Ineligible due to active paid subscription — leave the install session
+        as-is and return ``granted=False``; the entitlement's own active flag
+        will keep the portal usable.
+      * Ineligible due to a prior trial — REVOKE the optimistic install-session
+        trial so the existing payment-required path takes over. Return
+        ``granted=False``.
+    """
+    cleaned_portal_id = str(portal_id or "").strip()
+    if not cleaned_portal_id:
+        return install_session, False
+
+    # If the install session is already attached to an active paid Stripe
+    # subscription (the legacy ``trialApproved=False`` path), do not stomp it
+    # with a trial. The customer just paid and we should respect that.
+    if subscription_is_active(install_session.subscription_status, trial_approved=False):
+        return install_session, False
+
+    entitlement = session.get(PortalEntitlement, cleaned_portal_id)
+
+    # If a paid subscription is already active for this portal, don't replace
+    # it with a trial. Leave the install session as-is; sync_installation_activation
+    # will rely on the existing entitlement record.
+    if entitlement is not None and subscription_is_active(
+        entitlement.subscription_status,
+        trial_approved=False,
+    ):
+        return install_session, False
+
+    # If the portal has previously been granted a trial, never grant another.
+    # Revoke the optimistic install-session trial so the caller's
+    # ``install_session_is_billable_active`` gate falls into payment_required.
+    if entitlement is not None and entitlement.trial_started_at is not None:
+        install_session = _revoke_optimistic_install_session_trial(session, install_session)
+        return install_session, False
+
+    started_at = _utc_now()
+    expires_at = started_at + duration
+
+    install_session.trial_approved = True
+    install_session.trial_started_at = started_at
+    install_session.trial_expires_at = expires_at
+    install_session.subscription_status = "trial_approved"
+    session.commit()
+    session.refresh(install_session)
+    return install_session, True
 
 
 def sync_installation_activation_for_install_session(
@@ -308,7 +451,11 @@ def update_entitlement_from_subscription(
     row.subscription_status = str(subscription_status or "").strip().lower() or row.subscription_status
     if payment_failed:
         row.last_payment_failed_at = _utc_now()
-    is_active = subscription_is_active(row.subscription_status, trial_approved=row.trial_approved)
+    is_active = subscription_is_active(
+        row.subscription_status,
+        trial_approved=row.trial_approved,
+        trial_expires_at=_aware(row.trial_expires_at),
+    )
     if is_active:
         row.activated_at = row.activated_at or _utc_now()
 
@@ -364,7 +511,11 @@ def update_install_session_from_subscription(
         subscription_status=subscription_status,
         plan=plan or row.requested_plan,
         billing_interval=billing_interval or row.billing_interval,
-        payment_completed=subscription_is_active(subscription_status, trial_approved=row.trial_approved),
+        payment_completed=subscription_is_active(
+            subscription_status,
+            trial_approved=row.trial_approved,
+            trial_expires_at=_aware(row.trial_expires_at),
+        ),
     )
     if payment_failed:
         row.install_error = "Stripe reported a payment failure for this install session."

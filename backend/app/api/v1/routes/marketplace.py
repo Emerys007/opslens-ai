@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote, urlencode
 
@@ -29,11 +30,13 @@ from app.services.marketplace_install_routing import (
     install_origin,
 )
 from app.services.portal_entitlements import (
+    AUTO_TRIAL_DURATION,
     create_marketplace_install_session,
     get_marketplace_install_session,
     install_session_bootstrap_summary,
     install_session_can_activate,
     install_session_context,
+    install_session_trial_query_params,
     sync_installation_activation_for_install_session,
     update_entitlement_from_subscription,
     update_install_session_billing,
@@ -51,7 +54,11 @@ class MarketplaceInstallStartRequest(BaseModel):
     tenantContext: dict[str, Any] = Field(default_factory=dict)
     partnerUserId: str = ""
     partnerUserEmail: str = ""
-    trialApproved: bool = False
+    # Defaults to True so that fresh installs go straight through the
+    # 14-day auto-trial path. Re-installs whose portal already used a trial
+    # are demoted at the OAuth callback by ``grant_auto_trial_for_install_session``.
+    # Pass ``False`` explicitly to force the legacy paid-checkout flow.
+    trialApproved: bool = True
 
 
 def _resolved_install_return_url(return_url: str | None) -> str:
@@ -198,6 +205,16 @@ def marketplace_install_start(payload: MarketplaceInstallStartRequest):
             return_url=payload.returnUrl,
         )
 
+        # Pre-stage the auto-trial timestamps when the install session is
+        # being created in trial mode. The OAuth callback re-validates
+        # eligibility per-portal and may revoke this if the portal has
+        # already used a trial.
+        trial_started_at: datetime | None = None
+        trial_expires_at: datetime | None = None
+        if payload.trialApproved:
+            trial_started_at = datetime.now(timezone.utc)
+            trial_expires_at = trial_started_at + AUTO_TRIAL_DURATION
+
         row = create_marketplace_install_session(
             session,
             install_session_id=install_session_id,
@@ -208,6 +225,8 @@ def marketplace_install_start(payload: MarketplaceInstallStartRequest):
             partner_user_id=payload.partnerUserId,
             partner_user_email=payload.partnerUserEmail,
             trial_approved=payload.trialApproved,
+            trial_started_at=trial_started_at,
+            trial_expires_at=trial_expires_at,
         )
 
         authorize_url = _backend_public_url(
@@ -285,6 +304,7 @@ def marketplace_install_success(installSessionId: str):
         context = install_session_context(row)
         origin = install_origin(context, row.return_url)
         redirect_status = "error" if str(row.bootstrap_status or "").strip().lower() != "success" else "ok"
+        trial_params = install_session_trial_query_params(row)
         resolved_return_url = final_install_redirect_url(
             install_origin_value=origin,
             hubspot_return_url=row.return_url,
@@ -294,7 +314,11 @@ def marketplace_install_success(installSessionId: str):
             bootstrap_status=row.bootstrap_status,
             status=redirect_status,
             message=row.install_error if redirect_status == "error" else "",
+            trial=bool(trial_params.get("trial")),
+            trial_expires_at=trial_params.get("trial_expires_at", ""),
         )
+
+        trial_expires_iso = trial_params.get("trial_expires_at", "")
 
         return {
             "status": "ok",
@@ -305,6 +329,7 @@ def marketplace_install_success(installSessionId: str):
             "returnUrl": resolved_return_url,
             "subscriptionStatus": str(row.subscription_status or "").strip(),
             "trialApproved": bool(row.trial_approved),
+            "trialExpiresAt": trial_expires_iso,
             "active": install_session_can_activate(row),
             "bootstrapStatus": str(row.bootstrap_status or "").strip(),
             "createdAssetsSummary": bootstrap_summary,

@@ -5,7 +5,9 @@ from fastapi import FastAPI
 from app.api.v1.router import api_router
 from app.config import settings
 from app.core.logging import configure_logging, logger
+from app.db import get_session, init_db
 from app.routes.oauth import router as oauth_router
+from app.services.workflow_polling_scheduler import WorkflowPollingScheduler
 
 configure_logging()
 
@@ -20,8 +22,24 @@ async def lifespan(app: FastAPI):
             "app_port": settings.app_port,
         },
     )
-    yield
-    logger.info("Stopping OpsLens AI API")
+
+    # Make sure tables exist before the polling loop tries to write to
+    # them. init_db() is idempotent and a no-op when DATABASE_URL is
+    # unset (e.g. unit tests that patch state in setUp).
+    try:
+        init_db()
+    except Exception:  # noqa: BLE001 — never block startup on DB init
+        logger.exception("init_db_failed_during_startup")
+
+    scheduler = WorkflowPollingScheduler(get_session)
+    app.state.workflow_polling_scheduler = scheduler
+    scheduler.start()
+
+    try:
+        yield
+    finally:
+        await scheduler.stop()
+        logger.info("Stopping OpsLens AI API")
 
 
 app = FastAPI(

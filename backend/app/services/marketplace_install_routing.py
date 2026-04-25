@@ -59,6 +59,8 @@ def external_install_complete_url(
     bootstrap_status: str = "",
     status: str = "",
     message: str = "",
+    trial: bool = False,
+    trial_expires_at: str = "",
 ) -> str:
     base = default_external_install_complete_url()
     params: dict[str, str] = {}
@@ -75,6 +77,10 @@ def external_install_complete_url(
         params["status"] = str(status).strip()
     if str(message or "").strip():
         params["message"] = str(message).strip()
+    if bool(trial):
+        params["trial"] = "1"
+    if str(trial_expires_at or "").strip():
+        params["trial_expires_at"] = str(trial_expires_at).strip()
 
     if not params:
         return base
@@ -92,6 +98,8 @@ def final_install_redirect_url(
     bootstrap_status: str = "",
     status: str = "",
     message: str = "",
+    trial: bool = False,
+    trial_expires_at: str = "",
 ) -> str:
     normalized_status = str(status or "").strip().lower()
     success_statuses = {"", "ok", "success"}
@@ -110,4 +118,6 @@ def final_install_redirect_url(
         bootstrap_status=bootstrap_status,
         status=status,
         message=message,
+        trial=trial,
+        trial_expires_at=trial_expires_at,
     )
