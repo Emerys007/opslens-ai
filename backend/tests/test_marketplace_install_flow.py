@@ -62,6 +62,9 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
                     "tenantContext": {"tenantSlug": "demo-co"},
                     "partnerUserId": "user_123",
                     "partnerUserEmail": "owner@example.com",
+                    # Explicitly opt out of the v2 auto-trial default so this
+                    # test continues to exercise the paid-checkout flow.
+                    "trialApproved": False,
                 },
             )
 
