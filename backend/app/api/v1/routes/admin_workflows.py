@@ -7,6 +7,10 @@ from fastapi import APIRouter, Header, HTTPException, Path, Query
 from app.config import settings
 from app.db import get_session
 from app.models.property_snapshot import PropertySnapshot
+from app.services.alert_correlation import (
+    correlate_unprocessed_events,
+    list_alerts_for_portal,
+)
 from app.services.dependency_mapping import (
     find_workflows_affected_by_email_template,
     find_workflows_affected_by_list,
@@ -294,4 +298,66 @@ def list_property_snapshot_counts(
         "portalId": portal_key,
         "total": sum(item["total"] for item in by_object_type),
         "byObjectType": by_object_type,
+    }
+
+
+# ----------------------------------------------------------------------
+# Alert correlation — manual trigger and per-portal listing
+# ----------------------------------------------------------------------
+
+
+@router.post("/admin/alerts/correlate")
+def trigger_alert_correlation(
+    x_opslens_admin_key: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Run the alert correlator across every unprocessed change event.
+
+    Useful for the demo and for backfilling alerts after the worker
+    has been down. Returns the same summary shape as
+    ``correlate_unprocessed_events``.
+    """
+    _require_admin_key(x_opslens_admin_key)
+
+    session = get_session()
+    if session is None:
+        raise HTTPException(status_code=503, detail="Database is not configured.")
+    try:
+        try:
+            return correlate_unprocessed_events(session)
+        except Exception:  # noqa: BLE001
+            session.rollback()
+            raise
+    finally:
+        session.close()
+
+
+@router.get("/admin/alerts/{portal_id}")
+def list_alerts_for_portal_endpoint(
+    portal_id: str = Path(..., min_length=1),
+    max_results: int = Query(default=50, ge=1, le=200, alias="maxResults"),
+    x_opslens_admin_key: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Open + recently-resolved alerts for a portal, newest first.
+
+    Capped at ``maxResults`` (default 50, max 200) so the demo
+    dashboard can fetch a reasonable slice without paging logic.
+    """
+    _require_admin_key(x_opslens_admin_key)
+
+    portal_key = str(portal_id or "").strip()
+    if not portal_key:
+        raise HTTPException(status_code=400, detail="portal_id is required.")
+
+    session = get_session()
+    if session is None:
+        raise HTTPException(status_code=503, detail="Database is not configured.")
+    try:
+        alerts = list_alerts_for_portal(session, portal_key, max_results=max_results)
+    finally:
+        session.close()
+
+    return {
+        "portalId": portal_key,
+        "count": len(alerts),
+        "alerts": alerts,
     }
