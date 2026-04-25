@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models.hubspot_installation import HubSpotInstallation
+from app.services.alert_correlation import correlate_unprocessed_events
 from app.services.property_polling import poll_portal_properties
 from app.services.workflow_polling import poll_portal_workflows
 
@@ -112,6 +113,7 @@ async def run_polling_cycle(session_factory: SessionFactory) -> dict[str, Any]:
         "portalsErrored": 0,
         "propertiesPolled": 0,
         "propertyEventsEmitted": 0,
+        "alertsCreated": 0,
         "perPortal": [],
     }
 
@@ -163,6 +165,43 @@ async def run_polling_cycle(session_factory: SessionFactory) -> dict[str, Any]:
             }
         )
         _accumulate_status(summary, workflow_summary.get("status"))
+
+    # Correlate every unprocessed change event from every portal in a
+    # single pass after polling completes. Doing it once at the end
+    # avoids re-querying the events table per portal (correlation is
+    # global by design — `processed_at IS NULL` is the only filter).
+    # Failures here are logged but never abort the cycle: a buggy
+    # correlator should not block the next polling round.
+    correlation_summary: dict[str, Any] = {
+        "events_processed": 0,
+        "alerts_created": 0,
+        "alerts_updated_repeat": 0,
+    }
+    correlation_session = session_factory()
+    if correlation_session is not None:
+        try:
+            try:
+                correlation_summary = correlate_unprocessed_events(correlation_session)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "alert_correlation_scheduler.cycle_failed",
+                    extra={"error": repr(exc)},
+                )
+                try:
+                    correlation_session.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
+                correlation_summary = {
+                    "events_processed": 0,
+                    "alerts_created": 0,
+                    "alerts_updated_repeat": 0,
+                    "error": f"unhandled_exception: {exc}",
+                }
+        finally:
+            correlation_session.close()
+
+    summary["alertsCreated"] = int(correlation_summary.get("alerts_created") or 0)
+    summary["correlation"] = correlation_summary
 
     summary["status"] = summary.get("status") or "ok"
     return summary
