@@ -19,6 +19,10 @@ from app.models.workflow_change_event import (
     WorkflowChangeEvent,
 )
 from app.models.workflow_snapshot import WorkflowSnapshot
+from app.services.dependency_mapping import (
+    delete_workflow_dependencies,
+    rebuild_workflow_dependencies,
+)
 from app.services.hubspot_oauth import get_portal_access_token
 
 logger = logging.getLogger(__name__)
@@ -199,10 +203,11 @@ def _refresh_definition(
     portal_id: str,
     workflow_id: str,
     snapshot: WorkflowSnapshot,
-) -> None:
+) -> bool:
     """Fetch the full definition for a single workflow and write it onto
     the snapshot row. Errors are swallowed and logged; the rest of the
-    polling cycle continues.
+    polling cycle continues. Returns True iff the refresh succeeded so
+    the caller knows whether to rebuild dependencies.
     """
     try:
         definition = fetch_workflow_definition(session, portal_id, workflow_id)
@@ -215,9 +220,36 @@ def _refresh_definition(
                 "error": repr(exc),
             },
         )
-        return
+        return False
     snapshot.definition_json = json.dumps(definition, separators=(",", ":"), sort_keys=True)
     snapshot.definition_fetched_at = _utc_now()
+    return True
+
+
+def _rebuild_dependencies_safely(
+    session: Session,
+    portal_id: str,
+    workflow_id: str,
+) -> int:
+    """Rebuild the dependency map for one workflow without ever raising.
+
+    A malformed definition or extractor bug must not abort the whole
+    polling cycle. Returns the number of dependencies extracted, or 0
+    on any failure.
+    """
+    try:
+        result = rebuild_workflow_dependencies(session, portal_id, workflow_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception(
+            "workflow_polling.rebuild_dependencies_failed",
+            extra={
+                "portal_id": portal_id,
+                "workflow_id": workflow_id,
+                "error": repr(exc),
+            },
+        )
+        return 0
+    return int(result.get("dependencies_extracted") or 0)
 
 
 def poll_portal_workflows(session: Session, portal_id: str) -> dict[str, Any]:
@@ -256,6 +288,7 @@ def poll_portal_workflows(session: Session, portal_id: str) -> dict[str, Any]:
         "editedEvents": 0,
         "enabledEvents": 0,
         "disabledEvents": 0,
+        "dependenciesRebuilt": 0,
     }
 
     try:
@@ -340,7 +373,13 @@ def poll_portal_workflows(session: Session, portal_id: str) -> dict[str, Any]:
                 new_is_enabled=new_is_enabled,
             )
             summary["createdEvents"] += 1
-            _refresh_definition(session, portal_key, workflow_id, snapshot)
+            if _refresh_definition(session, portal_key, workflow_id, snapshot):
+                # Flush so the snapshot row is visible to the rebuild
+                # query (which runs against the same session).
+                session.flush()
+                summary["dependenciesRebuilt"] += _rebuild_dependencies_safely(
+                    session, portal_key, workflow_id
+                )
             continue
 
         previous_revision_id = str(snapshot.revision_id or "")
@@ -404,7 +443,11 @@ def poll_portal_workflows(session: Session, portal_id: str) -> dict[str, Any]:
         snapshot.last_seen_at = now
 
         if needs_definition_refresh:
-            _refresh_definition(session, portal_key, workflow_id, snapshot)
+            if _refresh_definition(session, portal_key, workflow_id, snapshot):
+                session.flush()
+                summary["dependenciesRebuilt"] += _rebuild_dependencies_safely(
+                    session, portal_key, workflow_id
+                )
 
     # Anything we used to know about that didn't show up this cycle is
     # treated as deleted. (deleted_at is set, but the row is kept so we
@@ -441,6 +484,19 @@ def poll_portal_workflows(session: Session, portal_id: str) -> dict[str, Any]:
         )
         missing.deleted_at = now
         summary["deletedEvents"] += 1
+        # We don't keep dependency rows for workflows that have been
+        # removed from HubSpot — drop them so reverse queries don't
+        # surface stale matches.
+        try:
+            delete_workflow_dependencies(session, portal_key, missing.workflow_id)
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "workflow_polling.delete_dependencies_failed",
+                extra={
+                    "portal_id": portal_key,
+                    "workflow_id": missing.workflow_id,
+                },
+            )
 
     session.commit()
     return summary
