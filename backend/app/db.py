@@ -97,6 +97,8 @@ def init_db() -> bool:
     from app.models.portal_setting import PortalSetting  # noqa: F401
     from app.models.portal_entitlement import PortalEntitlement  # noqa: F401
     from app.models.webhook_event import WebhookEvent  # noqa: F401
+    from app.models.workflow_change_event import WorkflowChangeEvent  # noqa: F401
+    from app.models.workflow_snapshot import WorkflowSnapshot  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
     _backfill_missing_columns(engine)
