@@ -32,6 +32,13 @@ class Settings(BaseSettings):
     workflow_poll_interval_seconds: int = 120
     maintenance_api_key: str = ""
 
+    # Alert rewriter (Anthropic Claude). Empty key OR
+    # ``alert_rewriter_enabled=False`` disables the rewriter — the
+    # scheduler skips the rewrite pass and Slack/ticket bodies fall
+    # back to the structured rendering of the alert summary.
+    anthropic_api_key: str = ""
+    alert_rewriter_enabled: bool = True
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
