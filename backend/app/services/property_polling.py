@@ -118,9 +118,6 @@ def fetch_object_type_properties(
     url = HUBSPOT_PROPERTIES_URL.format(
         object_type=urllib.parse.quote(object_type_path, safe=""),
     )
-    # `archived=true` includes archived rows alongside live ones, which
-    # is the only way to detect an archive flip via this endpoint.
-    url = f"{url}?{urllib.parse.urlencode({'archived': 'true'})}"
 
     payload = _http_get_json(url, access_token)
     results = payload.get("results") or []
@@ -257,7 +254,6 @@ def poll_portal_properties(
         url = HUBSPOT_PROPERTIES_URL.format(
             object_type=urllib.parse.quote(object_type_path, safe=""),
         )
-        url = f"{url}?{urllib.parse.urlencode({'archived': 'true'})}"
 
         try:
             payload = _http_get_json(url, access_token)
