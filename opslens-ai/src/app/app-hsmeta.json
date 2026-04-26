@@ -2,8 +2,8 @@
   "uid": "opslens_ai_app",
   "type": "app",
   "config": {
-    "description": "An example to demonstrate how to build a private oauth app with developer projects.",
-    "name": "opslens-ai-App",
+    "description": "OpsLens AI watches your HubSpot portal for workflow-breaking changes — archived properties, disabled workflows, schema edits — and alerts your team in Slack and HubSpot tickets with plain-English explanations of what broke and how to fix it.",
+    "name": "OpsLens AI",
     "distribution": "marketplace",
     "auth": {
       "type": "oauth",
