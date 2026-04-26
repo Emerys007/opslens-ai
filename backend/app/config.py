@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     hubspot_app_id: str = ""
     hubspot_webhook_secret: str = ""
 
-    hubspot_scopes: str = "oauth crm.objects.contacts.read crm.objects.contacts.write crm.schemas.contacts.write tickets"
+    hubspot_scopes: str = "oauth crm.objects.contacts.read crm.objects.contacts.write crm.schemas.contacts.write tickets automation crm.schemas.contacts.read crm.schemas.companies.read crm.schemas.deals.read crm.schemas.tickets.read"
     hubspot_optional_scopes: str = ""
     oauth_state_secret: str = ""
     oauth_state_ttl_seconds: int = 900
@@ -31,6 +31,13 @@ class Settings(BaseSettings):
     # Background workflow polling.
     workflow_poll_interval_seconds: int = 120
     maintenance_api_key: str = ""
+
+    # Alert rewriter (Anthropic Claude). Empty key OR
+    # ``alert_rewriter_enabled=False`` disables the rewriter — the
+    # scheduler skips the rewrite pass and Slack/ticket bodies fall
+    # back to the structured rendering of the alert summary.
+    anthropic_api_key: str = ""
+    alert_rewriter_enabled: bool = True
 
     model_config = SettingsConfigDict(
         env_file=".env",

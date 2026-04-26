@@ -15,7 +15,19 @@ from fastapi.testclient import TestClient
 
 from app import db as db_module
 from app.main import app
+from app.models.alert import (
+    SEVERITY_HIGH,
+    SOURCE_EVENT_PROPERTY_ARCHIVED,
+    SOURCE_KIND_PROPERTY,
+    STATUS_OPEN,
+    Alert,
+)
 from app.models.hubspot_installation import HubSpotInstallation
+from app.models.property_change_event import (
+    PROPERTY_EVENT_ARCHIVED,
+    PropertyChangeEvent,
+)
+from app.models.property_snapshot import PropertySnapshot
 from app.models.workflow_dependency import WorkflowDependency
 from app.models.workflow_snapshot import WorkflowSnapshot
 
@@ -238,6 +250,351 @@ class AdminWorkflowEndpointTests(unittest.TestCase):
                 headers={"X-OpsLens-Admin-Key": "anything"},
             )
         self.assertEqual(503, response.status_code)
+
+
+# ===========================================================================
+# Alert correlation endpoints
+# ===========================================================================
+
+
+class AlertAdminEndpointTests(unittest.TestCase):
+    """Covers POST /admin/alerts/correlate and GET /admin/alerts/{portal_id}."""
+
+    PORTAL_ID = "77777"
+
+    def setUp(self) -> None:
+        self._tempdir = tempfile.TemporaryDirectory()
+        self._database_url = (
+            f"sqlite:///{os.path.join(self._tempdir.name, 'admin-alerts-test.sqlite')}"
+        )
+        os.environ["DATABASE_URL"] = self._database_url
+        db_module._engine = None
+        db_module._SessionLocal = None
+        db_module.init_db()
+
+        # Seed: a property snapshot, a workflow snapshot, a dependency,
+        # and an unprocessed PropertyChangeEvent that the correlator
+        # endpoint can pick up.
+        session = db_module.get_session()
+        assert session is not None
+        try:
+            session.add(
+                HubSpotInstallation(
+                    portal_id=self.PORTAL_ID,
+                    access_token="seeded",
+                    refresh_token="seeded",
+                    is_active=True,
+                )
+            )
+            session.add(
+                PropertySnapshot(
+                    portal_id=self.PORTAL_ID,
+                    object_type_id="0-1",
+                    property_name="lifecyclestage",
+                    label="Lifecycle Stage",
+                    type="enumeration",
+                    field_type="select",
+                    archived=True,
+                )
+            )
+            session.add(
+                WorkflowSnapshot(
+                    portal_id=self.PORTAL_ID,
+                    workflow_id="100",
+                    name="Lead Nurture",
+                    object_type_id="0-1",
+                    is_enabled=True,
+                    revision_id="1",
+                    definition_json="{}",
+                )
+            )
+            session.add(
+                WorkflowDependency(
+                    portal_id=self.PORTAL_ID,
+                    workflow_id="100",
+                    dependency_type="property",
+                    dependency_id="lifecyclestage",
+                    dependency_object_type="0-1",
+                    location="actions[3].fields.property_name",
+                    revision_id="1",
+                )
+            )
+            session.add(
+                PropertyChangeEvent(
+                    portal_id=self.PORTAL_ID,
+                    object_type_id="0-1",
+                    property_name="lifecyclestage",
+                    event_type=PROPERTY_EVENT_ARCHIVED,
+                    previous_archived=False,
+                    new_archived=True,
+                )
+            )
+            session.commit()
+        finally:
+            session.close()
+
+        self.client = TestClient(app)
+
+    def tearDown(self) -> None:
+        self.client.close()
+        if db_module._engine is not None:
+            db_module._engine.dispose()
+        db_module._engine = None
+        db_module._SessionLocal = None
+        os.environ.pop("DATABASE_URL", None)
+        self._tempdir.cleanup()
+
+    def _patched_admin_key(self):
+        return patch(
+            "app.api.v1.routes.admin_workflows.settings.maintenance_api_key",
+            "secret-key",
+        )
+
+    def test_correlate_endpoint_runs_correlation_and_returns_summary(self) -> None:
+        with self._patched_admin_key():
+            response = self.client.post(
+                "/api/v1/admin/alerts/correlate",
+                headers={"X-OpsLens-Admin-Key": "secret-key"},
+            )
+
+        self.assertEqual(200, response.status_code)
+        payload = response.json()
+        self.assertEqual(1, payload["events_processed"])
+        self.assertEqual(1, payload["alerts_created"])
+
+        # Re-running picks up nothing — every event is processed.
+        with self._patched_admin_key():
+            response2 = self.client.post(
+                "/api/v1/admin/alerts/correlate",
+                headers={"X-OpsLens-Admin-Key": "secret-key"},
+            )
+        self.assertEqual(200, response2.status_code)
+        self.assertEqual(0, response2.json()["events_processed"])
+
+    def test_correlate_endpoint_requires_admin_key(self) -> None:
+        with self._patched_admin_key():
+            response = self.client.post(
+                "/api/v1/admin/alerts/correlate",
+                headers={"X-OpsLens-Admin-Key": "wrong"},
+            )
+        self.assertEqual(401, response.status_code)
+
+    def test_list_alerts_endpoint_returns_alerts_in_expected_shape(self) -> None:
+        # Pre-create one alert directly so the GET test is independent
+        # of the correlator running.
+        session = db_module.get_session()
+        try:
+            session.add(
+                Alert(
+                    portal_id=self.PORTAL_ID,
+                    alert_signature="sig-fixed-1",
+                    severity=SEVERITY_HIGH,
+                    status=STATUS_OPEN,
+                    source_event_type=SOURCE_EVENT_PROPERTY_ARCHIVED,
+                    source_event_kind=SOURCE_KIND_PROPERTY,
+                    source_dependency_type="property",
+                    source_dependency_id="lifecyclestage",
+                    source_object_type_id="0-1",
+                    impacted_workflow_id="100",
+                    impacted_workflow_name="Lead Nurture",
+                    title="Property 'Lifecycle Stage' archived — 1 workflow(s) affected",
+                    summary='{"kind":"property_archived"}',
+                )
+            )
+            session.commit()
+        finally:
+            session.close()
+
+        with self._patched_admin_key():
+            response = self.client.get(
+                f"/api/v1/admin/alerts/{self.PORTAL_ID}",
+                headers={"X-OpsLens-Admin-Key": "secret-key"},
+            )
+
+        self.assertEqual(200, response.status_code)
+        payload = response.json()
+        self.assertEqual(self.PORTAL_ID, payload["portalId"])
+        self.assertGreaterEqual(payload["count"], 1)
+        first = payload["alerts"][0]
+        self.assertIn("severity", first)
+        self.assertIn("title", first)
+        self.assertIn("summary", first)
+        self.assertIsInstance(first["summary"], dict)
+
+    def test_list_alerts_endpoint_requires_admin_key(self) -> None:
+        with self._patched_admin_key():
+            response = self.client.get(
+                f"/api/v1/admin/alerts/{self.PORTAL_ID}",
+                headers={"X-OpsLens-Admin-Key": "wrong"},
+            )
+        self.assertEqual(401, response.status_code)
+
+
+# ===========================================================================
+# Slack and ticket delivery admin endpoints
+# ===========================================================================
+
+
+class AlertRewriterAdminEndpointTests(unittest.TestCase):
+    """Covers POST /admin/alerts/rewrite."""
+
+    def setUp(self) -> None:
+        self._tempdir = tempfile.TemporaryDirectory()
+        self._database_url = (
+            f"sqlite:///{os.path.join(self._tempdir.name, 'admin-rewriter-test.sqlite')}"
+        )
+        os.environ["DATABASE_URL"] = self._database_url
+        db_module._engine = None
+        db_module._SessionLocal = None
+        db_module.init_db()
+        self.client = TestClient(app)
+
+    def tearDown(self) -> None:
+        self.client.close()
+        if db_module._engine is not None:
+            db_module._engine.dispose()
+        db_module._engine = None
+        db_module._SessionLocal = None
+        os.environ.pop("DATABASE_URL", None)
+        self._tempdir.cleanup()
+
+    def _patched_admin_key(self):
+        return patch(
+            "app.api.v1.routes.admin_workflows.settings.maintenance_api_key",
+            "secret-key",
+        )
+
+    def test_rewrite_endpoint_runs_rewriter_and_returns_summary(self) -> None:
+        fake_summary = {
+            "attempted": 2,
+            "succeeded": 2,
+            "failed": 0,
+            "skipped_disabled": 0,
+        }
+        with (
+            self._patched_admin_key(),
+            patch(
+                "app.api.v1.routes.admin_workflows.rewrite_pending_alerts",
+                return_value=fake_summary,
+            ) as mock_rewrite,
+        ):
+            response = self.client.post(
+                "/api/v1/admin/alerts/rewrite",
+                headers={"X-OpsLens-Admin-Key": "secret-key"},
+            )
+        self.assertEqual(200, response.status_code)
+        mock_rewrite.assert_called_once()
+        self.assertEqual(fake_summary, response.json())
+
+    def test_rewrite_endpoint_requires_admin_key(self) -> None:
+        with self._patched_admin_key():
+            response = self.client.post("/api/v1/admin/alerts/rewrite")
+        self.assertEqual(401, response.status_code)
+
+
+class DeliveryAdminEndpointTests(unittest.TestCase):
+    """Covers POST /admin/alerts/deliver/{slack,tickets,all}."""
+
+    PORTAL_ID = "33333"
+
+    def setUp(self) -> None:
+        self._tempdir = tempfile.TemporaryDirectory()
+        self._database_url = (
+            f"sqlite:///{os.path.join(self._tempdir.name, 'admin-delivery-test.sqlite')}"
+        )
+        os.environ["DATABASE_URL"] = self._database_url
+        db_module._engine = None
+        db_module._SessionLocal = None
+        db_module.init_db()
+        self.client = TestClient(app)
+
+    def tearDown(self) -> None:
+        self.client.close()
+        if db_module._engine is not None:
+            db_module._engine.dispose()
+        db_module._engine = None
+        db_module._SessionLocal = None
+        os.environ.pop("DATABASE_URL", None)
+        self._tempdir.cleanup()
+
+    def _patched_admin_key(self):
+        return patch(
+            "app.api.v1.routes.admin_workflows.settings.maintenance_api_key",
+            "secret-key",
+        )
+
+    def test_slack_endpoint_requires_admin_key(self) -> None:
+        with self._patched_admin_key():
+            response = self.client.post(
+                "/api/v1/admin/alerts/deliver/slack",
+                headers={"X-OpsLens-Admin-Key": "wrong"},
+            )
+        self.assertEqual(401, response.status_code)
+
+    def test_slack_endpoint_returns_summary_on_happy_path(self) -> None:
+        fake_summary = {"attempted": 0, "succeeded": 0, "failed": 0}
+        with (
+            self._patched_admin_key(),
+            patch(
+                "app.api.v1.routes.admin_workflows.deliver_pending_alerts",
+                return_value=fake_summary,
+            ) as mock_deliver,
+        ):
+            response = self.client.post(
+                "/api/v1/admin/alerts/deliver/slack",
+                headers={"X-OpsLens-Admin-Key": "secret-key"},
+            )
+        self.assertEqual(200, response.status_code)
+        mock_deliver.assert_called_once()
+        self.assertEqual(fake_summary, response.json())
+
+    def test_tickets_endpoint_returns_summary_on_happy_path(self) -> None:
+        fake_summary = {"attempted": 1, "succeeded": 1, "failed": 0}
+        with (
+            self._patched_admin_key(),
+            patch(
+                "app.api.v1.routes.admin_workflows.deliver_pending_tickets",
+                return_value=fake_summary,
+            ) as mock_deliver,
+        ):
+            response = self.client.post(
+                "/api/v1/admin/alerts/deliver/tickets",
+                headers={"X-OpsLens-Admin-Key": "secret-key"},
+            )
+        self.assertEqual(200, response.status_code)
+        mock_deliver.assert_called_once()
+        self.assertEqual(fake_summary, response.json())
+
+    def test_all_endpoint_runs_both_in_sequence_and_returns_merged_summary(self) -> None:
+        slack_summary = {"attempted": 2, "succeeded": 2, "failed": 0}
+        ticket_summary = {"attempted": 2, "succeeded": 1, "failed": 1}
+        with (
+            self._patched_admin_key(),
+            patch(
+                "app.api.v1.routes.admin_workflows.deliver_pending_alerts",
+                return_value=slack_summary,
+            ),
+            patch(
+                "app.api.v1.routes.admin_workflows.deliver_pending_tickets",
+                return_value=ticket_summary,
+            ),
+        ):
+            response = self.client.post(
+                "/api/v1/admin/alerts/deliver/all",
+                headers={"X-OpsLens-Admin-Key": "secret-key"},
+            )
+        self.assertEqual(200, response.status_code)
+        payload = response.json()
+        self.assertEqual(slack_summary, payload["slack"])
+        self.assertEqual(ticket_summary, payload["tickets"])
+
+    def test_all_endpoint_requires_admin_key(self) -> None:
+        with self._patched_admin_key():
+            response = self.client.post(
+                "/api/v1/admin/alerts/deliver/all",
+                headers={"X-OpsLens-Admin-Key": "wrong"},
+            )
+        self.assertEqual(401, response.status_code)
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -155,6 +155,42 @@ class HubSpotPortalBootstrapTests(unittest.TestCase):
         self.assertEqual(1, fake_api.calls.count(("POST", "/crm/v3/properties/contacts/groups")))
         self.assertEqual(1, fake_api.calls.count(("POST", "/crm/v3/properties/tickets/groups")))
 
+    def test_bootstrap_provisions_v2_alert_ticket_properties_idempotently(self) -> None:
+        """Explicit coverage for the three custom ticket properties the
+        v2 alert correlation engine relies on: ``opslens_alert_id``,
+        ``opslens_severity``, ``opslens_signature``. They should be
+        created on the first bootstrap run and skipped on the second.
+        """
+        fake_api = FakeBootstrapApi()
+        v2_property_names = {"opslens_alert_id", "opslens_severity", "opslens_signature"}
+
+        with (
+            patch("app.services.hubspot_portal_bootstrap._request_json", side_effect=fake_api.request_json),
+            patch(
+                "app.services.hubspot_portal_bootstrap.fetch_ticket_pipelines",
+                side_effect=fake_api.fetch_ticket_pipelines,
+            ),
+        ):
+            first = ensure_portal_bootstrap(token="token", portal_id="8886743")
+            second = ensure_portal_bootstrap(token="token", portal_id="8886743")
+
+        # All three v2 properties were declared in TICKET_PROPERTIES.
+        registered_names = {prop.name for prop in TICKET_PROPERTIES}
+        for name in v2_property_names:
+            self.assertIn(name, registered_names, f"{name} missing from TICKET_PROPERTIES")
+
+        # First run actually created them.
+        first_created = set(first["ticketPropertiesCreated"])
+        for name in v2_property_names:
+            self.assertIn(name, first_created, f"{name} not created on first bootstrap")
+
+        # Second run treated them as already-provisioned (no recreation).
+        self.assertEqual([], second["ticketPropertiesCreated"])
+
+        # And the underlying fake HubSpot has the rows persisted exactly once.
+        for name in v2_property_names:
+            self.assertIn(name, fake_api.properties["tickets"])
+
     def test_bootstrap_treats_group_conflicts_as_success(self) -> None:
         fake_api = FakeBootstrapApi()
 
@@ -183,7 +219,15 @@ class HubSpotBootstrapScopeTests(unittest.TestCase):
         with patch.object(hubspot_oauth.settings, "hubspot_scopes", "oauth crm.objects.contacts.read crm.objects.contacts.write tickets"):
             scopes = hubspot_oauth._required_scopes().split()
 
-        self.assertIn("crm.schemas.contacts.write", scopes)
+        for required_scope in (
+            "crm.schemas.contacts.write",
+            "automation",
+            "crm.schemas.contacts.read",
+            "crm.schemas.companies.read",
+            "crm.schemas.deals.read",
+            "crm.schemas.tickets.read",
+        ):
+            self.assertIn(required_scope, scopes)
 
 
 class AutoResolveProvisioningSkipTests(unittest.TestCase):

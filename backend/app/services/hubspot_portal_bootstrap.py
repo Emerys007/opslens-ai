@@ -237,6 +237,37 @@ TICKET_PROPERTIES = (
         field_type="textarea",
         description="Reason recorded when OpsLens resolved the ticket automatically.",
     ),
+    # ---- v2 alert-correlation properties ---------------------------------
+    # These are the link from a HubSpot ticket back to its source row in
+    # the ``alerts`` table. Created here so install bootstrap is the
+    # single owner of every OpsLens-owned ticket property.
+    PropertySpec(
+        object_type="tickets",
+        group_name=TICKET_GROUP.name,
+        name="opslens_alert_id",
+        label="OpsLens Alert ID",
+        value_type="string",
+        field_type="text",
+        description="Internal OpsLens alert id this ticket was created from.",
+    ),
+    PropertySpec(
+        object_type="tickets",
+        group_name=TICKET_GROUP.name,
+        name="opslens_severity",
+        label="OpsLens Alert Severity",
+        value_type="string",
+        field_type="text",
+        description="Severity of the OpsLens alert this ticket represents (high/medium/low).",
+    ),
+    PropertySpec(
+        object_type="tickets",
+        group_name=TICKET_GROUP.name,
+        name="opslens_signature",
+        label="OpsLens Alert Signature",
+        value_type="string",
+        field_type="text",
+        description="Deterministic hash used to deduplicate OpsLens alerts.",
+    ),
 )
 
 

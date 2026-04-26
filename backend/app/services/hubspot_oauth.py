@@ -26,6 +26,11 @@ REQUIRED_HUBSPOT_SCOPES = (
     "crm.objects.contacts.write",
     "crm.schemas.contacts.write",
     "tickets",
+    "automation",
+    "crm.schemas.contacts.read",
+    "crm.schemas.companies.read",
+    "crm.schemas.deals.read",
+    "crm.schemas.tickets.read",
 )
 
 

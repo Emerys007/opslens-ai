@@ -17,6 +17,8 @@ _BACKFILL_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("portal_entitlements", "trial_expires_at", "TIMESTAMP WITH TIME ZONE"),
     ("marketplace_install_sessions", "trial_started_at", "TIMESTAMP WITH TIME ZONE"),
     ("marketplace_install_sessions", "trial_expires_at", "TIMESTAMP WITH TIME ZONE"),
+    ("portal_settings", "slack_delivery_enabled", "BOOLEAN DEFAULT TRUE"),
+    ("portal_settings", "ticket_delivery_enabled", "BOOLEAN DEFAULT TRUE"),
 )
 
 
@@ -24,7 +26,13 @@ def _backfill_column_type(engine, ddl_type_clause: str) -> str:
     # SQLite does not support `TIMESTAMP WITH TIME ZONE`; SQLAlchemy stores
     # timezone-aware datetimes in a plain TIMESTAMP column on that backend.
     if engine.dialect.name == "sqlite":
-        return "TIMESTAMP"
+        if "TIMESTAMP" in ddl_type_clause:
+            return "TIMESTAMP"
+        if "BOOLEAN" in ddl_type_clause.upper():
+            # SQLite has no native BOOLEAN, but SQLAlchemy maps it to
+            # INTEGER (0/1) and accepts the keyword. Preserve any
+            # DEFAULT clause from the original spec.
+            return ddl_type_clause
     return ddl_type_clause
 
 
@@ -91,11 +99,14 @@ def init_db() -> bool:
     if engine is None:
         return False
 
+    from app.models.alert import Alert  # noqa: F401
     from app.models.alert_event import AlertEvent  # noqa: F401
     from app.models.hubspot_installation import HubSpotInstallation  # noqa: F401
     from app.models.marketplace_install_session import MarketplaceInstallSession  # noqa: F401
     from app.models.portal_setting import PortalSetting  # noqa: F401
     from app.models.portal_entitlement import PortalEntitlement  # noqa: F401
+    from app.models.property_change_event import PropertyChangeEvent  # noqa: F401
+    from app.models.property_snapshot import PropertySnapshot  # noqa: F401
     from app.models.webhook_event import WebhookEvent  # noqa: F401
     from app.models.workflow_change_event import WorkflowChangeEvent  # noqa: F401
     from app.models.workflow_dependency import WorkflowDependency  # noqa: F401

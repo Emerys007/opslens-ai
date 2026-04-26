@@ -8,6 +8,11 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models.hubspot_installation import HubSpotInstallation
+from app.services.alert_correlation import correlate_unprocessed_events
+from app.services.alert_rewriter import rewrite_pending_alerts
+from app.services.property_polling import poll_portal_properties
+from app.services.slack_delivery import deliver_pending_alerts
+from app.services.ticket_delivery import deliver_pending_tickets
 from app.services.workflow_polling import poll_portal_workflows
 
 logger = logging.getLogger(__name__)
@@ -32,19 +37,92 @@ def _list_active_portal_ids(session: Session) -> list[str]:
     return portal_ids
 
 
-async def run_polling_cycle(session_factory: SessionFactory) -> dict[str, Any]:
-    """Poll every active portal once. Returns a summary dict.
+def _run_portal_pass(
+    session_factory: SessionFactory,
+    portal_id: str,
+    poll_fn: Callable[[Session, str], dict[str, Any]],
+    log_key: str,
+) -> dict[str, Any]:
+    """Run one polling function against one portal in a fresh session.
 
-    This function is designed to be safe to call from anywhere — the
-    scheduled background loop, a FastAPI lifespan hook, or the admin
-    trigger endpoint. It does not raise on per-portal failures; it
-    aggregates them into the returned summary.
+    Failures are caught and converted to an ``error`` summary so a
+    transient bug in one polling pass cannot abort the rest of the
+    cycle. Each pass gets its own session so a rollback in one cannot
+    poison the other.
+    """
+    session = session_factory()
+    if session is None:
+        return {
+            "portalId": portal_id,
+            "status": "error",
+            "reason": "no_database",
+        }
+    try:
+        try:
+            return poll_fn(session, portal_id)
+        except Exception as exc:  # noqa: BLE001 — defensive
+            logger.exception(
+                f"{log_key}.portal_failed",
+                extra={"portal_id": portal_id, "error": repr(exc)},
+            )
+            try:
+                session.rollback()
+            except Exception:  # noqa: BLE001
+                pass
+            return {
+                "portalId": portal_id,
+                "status": "error",
+                "reason": f"unhandled_exception: {exc}",
+            }
+    finally:
+        session.close()
+
+
+def _accumulate_status(summary: dict[str, Any], status_value: str) -> None:
+    """Increment the cycle-level success / skip / error counters
+    based on a per-portal status string.
+    """
+    status = str(status_value or "").lower()
+    if status == "ok":
+        summary["portalsSucceeded"] += 1
+    elif status == "skipped":
+        summary["portalsSkipped"] += 1
+    else:
+        summary["portalsErrored"] += 1
+
+
+async def run_polling_cycle(session_factory: SessionFactory) -> dict[str, Any]:
+    """Poll every active portal once for both workflows AND property
+    schema. Returns a summary dict.
+
+    Each portal gets two sequential passes per cycle (workflows, then
+    properties). Each pass runs in its own session so a transient
+    failure in one cannot leak into the other. The cadence is the
+    same — every ``workflow_poll_interval_seconds`` — because the alert
+    correlation engine joins both data sources and skewed cadences
+    would create stale joins.
+
+    The per-portal entry in ``perPortal`` carries both summaries
+    keyed by ``workflow`` and ``property``. The cycle-level
+    success/skip/error counters use the workflow-pass status as the
+    canonical signal for backward compatibility with the existing
+    workflow-only callers; the property pass adds dedicated
+    ``propertiesPolled`` and ``propertyEventsEmitted`` counters.
     """
     summary: dict[str, Any] = {
         "portalsAttempted": 0,
         "portalsSucceeded": 0,
         "portalsSkipped": 0,
         "portalsErrored": 0,
+        "propertiesPolled": 0,
+        "propertyEventsEmitted": 0,
+        "alertsCreated": 0,
+        "alertsRewritten": 0,
+        "alertsRewriteFailed": 0,
+        "slackDelivered": 0,
+        "slackFailed": 0,
+        "ticketsCreated": 0,
+        "ticketsFailed": 0,
         "perPortal": [],
     }
 
@@ -61,42 +139,179 @@ async def run_polling_cycle(session_factory: SessionFactory) -> dict[str, Any]:
     summary["portalsAttempted"] = len(portal_ids)
 
     for portal_id in portal_ids:
-        # Each portal gets a fresh session so a transient failure on one
-        # portal cannot leave another portal's poll inside a half-rolled
-        # back transaction.
-        session = session_factory()
-        if session is None:
-            summary["status"] = "no_database"
-            return summary
+        workflow_summary = _run_portal_pass(
+            session_factory,
+            portal_id,
+            poll_portal_workflows,
+            "workflow_polling_scheduler",
+        )
+        property_summary = _run_portal_pass(
+            session_factory,
+            portal_id,
+            poll_portal_properties,
+            "property_polling_scheduler",
+        )
+
+        if isinstance(property_summary, dict):
+            summary["propertiesPolled"] += int(property_summary.get("polled") or 0)
+            summary["propertyEventsEmitted"] += sum(
+                int(property_summary.get(key) or 0)
+                for key in (
+                    "createdEvents",
+                    "archivedEvents",
+                    "unarchivedEvents",
+                    "typeChangedEvents",
+                    "renamedEvents",
+                    "deletedEvents",
+                )
+            )
+
+        summary["perPortal"].append(
+            {
+                "portalId": portal_id,
+                "workflow": workflow_summary,
+                "property": property_summary,
+            }
+        )
+        _accumulate_status(summary, workflow_summary.get("status"))
+
+    # Correlate every unprocessed change event from every portal in a
+    # single pass after polling completes. Doing it once at the end
+    # avoids re-querying the events table per portal (correlation is
+    # global by design — `processed_at IS NULL` is the only filter).
+    # Failures here are logged but never abort the cycle: a buggy
+    # correlator should not block the next polling round.
+    correlation_summary: dict[str, Any] = {
+        "events_processed": 0,
+        "alerts_created": 0,
+        "alerts_updated_repeat": 0,
+    }
+    correlation_session = session_factory()
+    if correlation_session is not None:
         try:
             try:
-                portal_summary = poll_portal_workflows(session, portal_id)
-            except Exception as exc:  # noqa: BLE001 — defensive
+                correlation_summary = correlate_unprocessed_events(correlation_session)
+            except Exception as exc:  # noqa: BLE001
                 logger.exception(
-                    "workflow_polling_scheduler.portal_failed",
-                    extra={"portal_id": portal_id, "error": repr(exc)},
+                    "alert_correlation_scheduler.cycle_failed",
+                    extra={"error": repr(exc)},
                 )
-                portal_summary = {
-                    "portalId": portal_id,
-                    "status": "error",
-                    "reason": f"unhandled_exception: {exc}",
-                }
-                # Roll back any partial writes from a failed poll.
                 try:
-                    session.rollback()
+                    correlation_session.rollback()
                 except Exception:  # noqa: BLE001
                     pass
-
-            summary["perPortal"].append(portal_summary)
-            status_value = str(portal_summary.get("status") or "").lower()
-            if status_value == "ok":
-                summary["portalsSucceeded"] += 1
-            elif status_value == "skipped":
-                summary["portalsSkipped"] += 1
-            else:
-                summary["portalsErrored"] += 1
+                correlation_summary = {
+                    "events_processed": 0,
+                    "alerts_created": 0,
+                    "alerts_updated_repeat": 0,
+                    "error": f"unhandled_exception: {exc}",
+                }
         finally:
-            session.close()
+            correlation_session.close()
+
+    summary["alertsCreated"] = int(correlation_summary.get("alerts_created") or 0)
+    summary["correlation"] = correlation_summary
+
+    # Plain-English rewriter — calls Anthropic's Haiku to populate
+    # ``plain_english_explanation`` and ``recommended_action`` on
+    # freshly-created alerts. Runs BEFORE Slack/ticket delivery so
+    # those bodies pick up the rewritten text. Failures are
+    # best-effort: the delivery layer falls back to the structured
+    # rendering when ``plain_english_explanation`` is null.
+    rewrite_summary: dict[str, Any] = {
+        "attempted": 0,
+        "succeeded": 0,
+        "failed": 0,
+        "skipped_disabled": 0,
+    }
+    rewrite_session = session_factory()
+    if rewrite_session is not None:
+        try:
+            try:
+                rewrite_summary = rewrite_pending_alerts(rewrite_session)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "alert_rewriter_scheduler.cycle_failed",
+                    extra={"error": repr(exc)},
+                )
+                try:
+                    rewrite_session.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
+                rewrite_summary = {
+                    "attempted": 0,
+                    "succeeded": 0,
+                    "failed": 0,
+                    "skipped_disabled": 0,
+                    "error": f"unhandled_exception: {exc}",
+                }
+        finally:
+            rewrite_session.close()
+
+    summary["alertsRewritten"] = int(rewrite_summary.get("succeeded") or 0)
+    summary["alertsRewriteFailed"] = int(rewrite_summary.get("failed") or 0)
+    summary["rewriter"] = rewrite_summary
+
+    # Deliver fresh alerts to Slack and to the OpsLens Alerts ticket
+    # pipeline. Both run on their own session, both are best-effort:
+    # a failure in one does not block the other and never aborts the
+    # cycle. Re-attempts happen automatically next cycle because
+    # ``slack_delivered_at`` / ``hubspot_ticket_id`` stay null on
+    # failure.
+    slack_summary: dict[str, Any] = {"attempted": 0, "succeeded": 0, "failed": 0}
+    slack_session = session_factory()
+    if slack_session is not None:
+        try:
+            try:
+                slack_summary = deliver_pending_alerts(slack_session)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "slack_delivery_scheduler.cycle_failed",
+                    extra={"error": repr(exc)},
+                )
+                try:
+                    slack_session.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
+                slack_summary = {
+                    "attempted": 0,
+                    "succeeded": 0,
+                    "failed": 0,
+                    "error": f"unhandled_exception: {exc}",
+                }
+        finally:
+            slack_session.close()
+
+    ticket_summary: dict[str, Any] = {"attempted": 0, "succeeded": 0, "failed": 0}
+    ticket_session = session_factory()
+    if ticket_session is not None:
+        try:
+            try:
+                ticket_summary = deliver_pending_tickets(ticket_session)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "ticket_delivery_scheduler.cycle_failed",
+                    extra={"error": repr(exc)},
+                )
+                try:
+                    ticket_session.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
+                ticket_summary = {
+                    "attempted": 0,
+                    "succeeded": 0,
+                    "failed": 0,
+                    "error": f"unhandled_exception: {exc}",
+                }
+        finally:
+            ticket_session.close()
+
+    summary["slackDelivered"] = int(slack_summary.get("succeeded") or 0)
+    summary["slackFailed"] = int(slack_summary.get("failed") or 0)
+    summary["ticketsCreated"] = int(ticket_summary.get("succeeded") or 0)
+    summary["ticketsFailed"] = int(ticket_summary.get("failed") or 0)
+    summary["slack"] = slack_summary
+    summary["tickets"] = ticket_summary
 
     summary["status"] = summary.get("status") or "ok"
     return summary
