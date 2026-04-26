@@ -1,341 +1,618 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
-  Accordion,
   AutoGrid,
   Box,
   Button,
+  Divider,
   Flex,
   Form,
   Heading,
   Input,
   Select,
   StatusTag,
+  Tag,
   Text,
   TextArea,
   Tile,
+  Toggle,
   hubspot,
 } from "@hubspot/ui-extensions";
 
-const BACKEND_BASE_URL = "https://api.app-sync.com";
+hubspot.extend(({ context }) => <SettingsPage context={context} />);
 
-hubspot.extend(({ context }) => {
-  return <SettingsPage context={context} />;
-});
+type PortalSettings = {
+  slackWebhookUrl?: string;
+  alertThreshold?: string;
+  criticalWorkflows?: string;
+  slackDeliveryEnabled?: boolean;
+  ticketDeliveryEnabled?: boolean;
+  updatedAtUtc?: string | null;
+  loadedAtUtc?: string | null;
+  lastPolledAt?: string | null;
+  lastPolledAtUtc?: string | null;
+  storage?: string;
+};
 
-type DetailFieldProps = {
+type SettingsResponse = {
+  status?: string;
+  message?: string;
+  settings?: PortalSettings;
+  savedAtUtc?: string;
+  dbConfigured?: boolean;
+};
+
+type StatusVariant = "success" | "warning" | "danger";
+
+const SETTINGS_API_BASE = "https://api.app-sync.com/api/v1/settings-store";
+
+function buildUrl(baseUrl: string, params: Record<string, string>) {
+  const url = new URL(baseUrl);
+  Object.entries(params).forEach(([key, value]) => {
+    if (value) {
+      url.searchParams.set(key, value);
+    }
+  });
+  return url.toString();
+}
+
+function relativeTime(timestamp?: string | null) {
+  if (!timestamp) {
+    return "Waiting for the first saved configuration";
+  }
+
+  const value = Date.parse(timestamp);
+  if (Number.isNaN(value)) {
+    return "Recently updated";
+  }
+
+  const seconds = Math.max(0, Math.floor((Date.now() - value) / 1000));
+  if (seconds < 60) {
+    return "Updated just now";
+  }
+
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) {
+    return `Updated ${minutes} min ago`;
+  }
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return `Updated ${hours} hr ago`;
+  }
+
+  const days = Math.floor(hours / 24);
+  return `Updated ${days} day${days === 1 ? "" : "s"} ago`;
+}
+
+function formatTimestamp(timestamp?: string | null) {
+  if (!timestamp) {
+    return "Not saved yet";
+  }
+
+  const value = Date.parse(timestamp);
+  if (Number.isNaN(value)) {
+    return "Recently updated";
+  }
+
+  return new Date(value).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function thresholdEmoji(threshold: string) {
+  if (threshold === "critical" || threshold === "high") {
+    return "🔴";
+  }
+  if (threshold === "medium") {
+    return "🟡";
+  }
+  return "⚪";
+}
+
+function thresholdLabel(threshold: string) {
+  if (threshold === "critical") {
+    return "Critical alerts only";
+  }
+  if (threshold === "high") {
+    return "High and critical alerts";
+  }
+  return "Medium, high, and critical alerts";
+}
+
+function previewExplanation(threshold: string) {
+  if (threshold === "critical") {
+    return "OpsLens will only interrupt your team when a workflow is very likely to break lead routing, attribution, or customer follow-up.";
+  }
+  if (threshold === "high") {
+    return "OpsLens will alert when a HubSpot change creates a clear workflow risk, while keeping lower-signal schema edits out of Slack.";
+  }
+  return "OpsLens will surface workflow-breaking changes and medium-risk schema edits so consultants can fix issues before a client notices.";
+}
+
+function SectionHeader({
+  eyebrow,
+  title,
+  body,
+}: {
+  eyebrow: string;
+  title: string;
+  body: string;
+}) {
+  return (
+    <Flex direction="column" gap="small">
+      <Text format={{ fontWeight: "bold" }}>{eyebrow}</Text>
+      <Heading>{title}</Heading>
+      <Text>{body}</Text>
+    </Flex>
+  );
+}
+
+function StatusMetric({
+  label,
+  value,
+  detail,
+  status,
+}: {
   label: string;
   value: string;
-};
-
-type StatusVariant = "danger" | "warning" | "info" | "success" | "default";
-
-const DetailField = ({ label, value }: DetailFieldProps) => {
+  detail: string;
+  status?: StatusVariant;
+}) {
   return (
-    <Box>
-      <Text format={{ fontWeight: "bold" }}>{label}</Text>
-      <Text>{value}</Text>
-    </Box>
+    <Tile compact>
+      <Flex direction="column" gap="small">
+        <Flex justify="between" align="center" gap="small" wrap>
+          <Text>{label}</Text>
+          {status ? <StatusTag variant={status}>{value}</StatusTag> : null}
+        </Flex>
+        {status ? null : <Heading>{value}</Heading>}
+        <Text>{detail}</Text>
+      </Flex>
+    </Tile>
   );
-};
+}
 
-const SettingsPage = ({ context }) => {
+function DeliveryToggle({
+  checked,
+  label,
+  description,
+  disabled,
+  onChange,
+}: {
+  checked: boolean;
+  label: string;
+  description: string;
+  disabled: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <Flex direction="column" gap="small">
+      <Toggle
+        label={label}
+        checked={checked}
+        readonly={disabled}
+        onChange={(value) => onChange(Boolean(value))}
+      />
+      <Text>{description}</Text>
+    </Flex>
+  );
+}
+
+function MonitorItem({
+  title,
+  severity,
+  variant,
+  description,
+}: {
+  title: string;
+  severity: string;
+  variant: "error" | "warning" | "default";
+  description: string;
+}) {
+  return (
+    <Flex direction="column" gap="small">
+      <Flex justify="between" align="center" gap="small" wrap>
+        <Text format={{ fontWeight: "bold" }}>{title}</Text>
+        <Tag variant={variant}>{severity}</Tag>
+      </Flex>
+      <Text>{description}</Text>
+    </Flex>
+  );
+}
+
+function SettingsPage({ context }: { context: any }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [hasLoadedSettings, setHasLoadedSettings] = useState(false);
   const [saveMessage, setSaveMessage] = useState("");
+  const [testMessage, setTestMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [slackWebhookUrl, setSlackWebhookUrl] = useState("");
-  const [alertThreshold, setAlertThreshold] = useState("high");
+  const [alertThreshold, setAlertThreshold] = useState("medium");
   const [criticalWorkflows, setCriticalWorkflows] = useState("");
+  const [slackDeliveryEnabled, setSlackDeliveryEnabled] = useState(true);
+  const [ticketDeliveryEnabled, setTicketDeliveryEnabled] = useState(true);
   const [lastSavedAt, setLastSavedAt] = useState("");
+  const [settingsStorage, setSettingsStorage] = useState("");
 
-  const portalId = String(context?.portal?.id ?? "unknown");
+  const portalId = String(context?.portal?.id ?? "");
   const userId = String(context?.user?.id ?? "unknown");
   const userEmail = String(context?.user?.email ?? "unknown");
+  const portalLabel = portalId || "Portal pending";
 
-  const settingsUrl = useMemo(() => {
-    return `${BACKEND_BASE_URL}/api/v1/settings-store`;
-  }, []);
+  const settingsUrl = useMemo(
+    () => buildUrl(SETTINGS_API_BASE, { portalId }),
+    [portalId]
+  );
 
-  const formatDate = (value?: string | null) => {
-    if (!value) return "Not available yet";
+  const formLocked = loading || saving || !hasLoadedSettings || !portalId;
+  const monitoringTimestamp = lastSavedAt || "";
+  const statusVariant: StatusVariant = errorMessage ? "warning" : "success";
 
-    try {
-      return new Date(value).toLocaleString();
-    } catch {
-      return String(value);
-    }
-  };
+  useEffect(() => {
+    async function loadSettings() {
+      setLoading(true);
+      setErrorMessage("");
+      setSaveMessage("");
+      setTestMessage("");
 
-  const loadSettings = async () => {
-    setLoading(true);
-    setErrorMessage("");
-    setSaveMessage("");
+      try {
+        const response = await hubspot.fetch(settingsUrl, {
+          method: "GET",
+          timeout: 15000,
+        });
+        if (!response.ok) {
+          throw new Error(`Backend returned status ${response.status}`);
+        }
+        const data = (await response.json()) as SettingsResponse;
+        if (data?.status === "error") {
+          throw new Error(data.message || "Settings could not be loaded.");
+        }
 
-    try {
-      const response = await hubspot.fetch(settingsUrl, {
-        method: "GET",
-        timeout: 8000,
-      });
-
-      if (!response.ok) {
-        throw new Error(`Backend returned status ${response.status}`);
+        const settings = data?.settings ?? {};
+        setSlackWebhookUrl(String(settings.slackWebhookUrl ?? ""));
+        setAlertThreshold(String(settings.alertThreshold ?? "medium"));
+        setCriticalWorkflows(String(settings.criticalWorkflows ?? ""));
+        setSlackDeliveryEnabled(settings.slackDeliveryEnabled !== false);
+        setTicketDeliveryEnabled(settings.ticketDeliveryEnabled !== false);
+        setLastSavedAt(
+          String(
+            settings.lastPolledAtUtc ??
+              settings.lastPolledAt ??
+              settings.updatedAtUtc ??
+              data?.savedAtUtc ??
+              settings.loadedAtUtc ??
+              ""
+          )
+        );
+        setSettingsStorage(String(settings.storage ?? ""));
+        setHasLoadedSettings(true);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setErrorMessage(message);
+        setHasLoadedSettings(false);
+      } finally {
+        setLoading(false);
       }
-
-      const data = await response.json();
-      const settings = data?.settings ?? {};
-
-      const nextSlackWebhookUrl = String(settings?.slackWebhookUrl ?? "");
-      const nextAlertThreshold = String(settings?.alertThreshold ?? "high");
-      const nextCriticalWorkflows = String(settings?.criticalWorkflows ?? "");
-      const nextLastSavedAt = String(
-        data?.savedAtUtc ??
-          settings?.updatedAtUtc ??
-          settings?.loadedAtUtc ??
-          ""
-      );
-
-      setSlackWebhookUrl(nextSlackWebhookUrl);
-      setAlertThreshold(nextAlertThreshold);
-      setCriticalWorkflows(nextCriticalWorkflows);
-      setLastSavedAt(nextLastSavedAt);
-      setHasLoadedSettings(true);
-
-      const hasLoadedValues =
-        nextSlackWebhookUrl.trim() !== "" ||
-        nextCriticalWorkflows.trim() !== "" ||
-        nextAlertThreshold.trim() !== "";
-
-      if (nextLastSavedAt) {
-        setSaveMessage("Settings loaded from the hosted portal store.");
-      } else if (hasLoadedValues) {
-        setSaveMessage("Settings loaded from the hosted portal store.");
-      } else {
-        setSaveMessage("No saved values were returned for this portal.");
-      }
-    } catch (err) {
-      console.error("Failed to load settings", err);
-      setErrorMessage(err instanceof Error ? err.message : "Unknown error");
-    } finally {
-      setLoading(false);
     }
-  };
 
-  const saveSettings = async () => {
+    loadSettings();
+  }, [settingsUrl]);
+
+  async function saveSettings() {
     setSaving(true);
-    setErrorMessage("");
     setSaveMessage("");
+    setErrorMessage("");
+    setTestMessage("");
 
     try {
+      const payload = {
+        slackWebhookUrl,
+        alertThreshold,
+        criticalWorkflows,
+        slackDeliveryEnabled,
+        ticketDeliveryEnabled,
+      };
       const response = await hubspot.fetch(settingsUrl, {
         method: "POST",
-        timeout: 8000,
-        body: {
-          slackWebhookUrl,
-          alertThreshold,
-          criticalWorkflows,
-        },
+        body: payload,
+        timeout: 15000,
       });
-
       if (!response.ok) {
         throw new Error(`Backend returned status ${response.status}`);
       }
+      const data = (await response.json()) as SettingsResponse;
+      if (data?.status === "error") {
+        throw new Error(data.message || "Settings could not be saved.");
+      }
 
-      const data = await response.json();
-      const savedAt = String(
-        data?.savedAtUtc ??
-          data?.settings?.updatedAtUtc ??
-          data?.settings?.loadedAtUtc ??
-          ""
+      const settings = data?.settings ?? {};
+      setSlackWebhookUrl(String(settings.slackWebhookUrl ?? slackWebhookUrl));
+      setAlertThreshold(String(settings.alertThreshold ?? alertThreshold));
+      setCriticalWorkflows(
+        String(settings.criticalWorkflows ?? criticalWorkflows)
       );
-
-      setLastSavedAt(savedAt);
-      setSaveMessage(savedAt ? "Changes saved to the hosted portal store." : "Settings saved.");
-    } catch (err) {
-      console.error("Failed to save settings", err);
-      setErrorMessage(err instanceof Error ? err.message : "Unknown error");
+      setSlackDeliveryEnabled(
+        settings.slackDeliveryEnabled ?? slackDeliveryEnabled
+      );
+      setTicketDeliveryEnabled(
+        settings.ticketDeliveryEnabled ?? ticketDeliveryEnabled
+      );
+      setLastSavedAt(
+        String(
+          settings.updatedAtUtc ??
+            data?.savedAtUtc ??
+            settings.loadedAtUtc ??
+            new Date().toISOString()
+        )
+      );
+      setSettingsStorage(String(settings.storage ?? settingsStorage));
+      setSaveMessage(
+        "Settings saved. OpsLens will apply them on the next polling cycle."
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setErrorMessage(message);
     } finally {
       setSaving(false);
     }
-  };
+  }
 
-  useEffect(() => {
-    loadSettings().catch((err) =>
-      console.error("Unexpected settings load error", err)
+  function handleTestAlert() {
+    setSaveMessage("");
+
+    if (!slackWebhookUrl.trim()) {
+      setTestMessage("Add a Slack webhook URL before sending a test alert.");
+      return;
+    }
+
+    setTestMessage(
+      "Test delivery is not connected from this iframe yet. Save this webhook and OpsLens will post the next matching alert automatically."
     );
-  }, [settingsUrl]);
-
-  const workflowCount = criticalWorkflows
-    .split("\n")
-    .map((value) => value.trim())
-    .filter(Boolean).length;
-  const formLocked = loading || saving || !hasLoadedSettings;
-  const settingsStatus: { label: string; variant: StatusVariant } = loading
-    ? { label: "Loading settings", variant: "info" }
-    : saving
-      ? { label: "Saving changes", variant: "warning" }
-      : errorMessage
-        ? { label: "Needs attention", variant: "warning" }
-        : !hasLoadedSettings
-          ? { label: "Protected", variant: "default" }
-          : { label: "Ready", variant: "success" };
-  const statusMessage = errorMessage
-    ? `Error: ${errorMessage}`
-    : !hasLoadedSettings
-      ? "Settings stay locked until the current portal configuration loads successfully."
-      : saveMessage || "Portal settings are ready to edit.";
-  const protectionMessage = !hasLoadedSettings
-    ? "Editing stays locked until load succeeds."
-    : saving
-      ? "Save is in progress."
-      : "Editing is unlocked for this portal.";
+  }
 
   return (
     <Flex direction="column" gap="small">
-      <Tile compact>
+      <Tile>
         <Flex direction="column" gap="small">
-          <Flex justify="between" align="center" wrap gap="small">
-            <Box flex="auto">
-              <Heading>OpsLens settings</Heading>
-              <Text>
-                Compact portal controls for alert routing and workflow monitoring.
-              </Text>
+          <Flex justify="between" align="center" gap="small" wrap>
+            <Box flex={1}>
+              <SectionHeader
+                eyebrow="System status"
+                title="OpsLens is monitoring this HubSpot portal"
+                body="Portal settings are loaded through the connected-app session, so the page reflects the configuration OpsLens will use for this account."
+              />
             </Box>
-            <StatusTag variant={settingsStatus.variant}>
-              {settingsStatus.label}
+            <StatusTag variant={statusVariant}>
+              {errorMessage ? "Needs attention" : "Monitoring active"}
             </StatusTag>
           </Flex>
-
-          <Text>{statusMessage}</Text>
-
-          <AutoGrid columnWidth={180} flexible={true} gap="small">
-            <DetailField label="Portal" value={portalId} />
-            <DetailField
-              label="Alert threshold"
-              value={String(alertThreshold || "-").toUpperCase()}
-            />
-            <DetailField
-              label="Critical workflows"
-              value={workflowCount > 0 ? String(workflowCount) : "None configured"}
-            />
-            <DetailField label="Last saved" value={formatDate(lastSavedAt)} />
-          </AutoGrid>
         </Flex>
       </Tile>
 
-      <Form
-        preventDefault={true}
-        onSubmit={() => {
-          saveSettings().catch((err) =>
-            console.error("Unexpected settings save error", err)
-          );
-        }}
-      >
-        <AutoGrid columnWidth={260} flexible={true} gap="small">
-          <Tile compact>
-            <Flex direction="column" gap="small">
-              <Heading inline={true}>Alert routing</Heading>
-              <Text>Choose the threshold and Slack destination operators rely on.</Text>
-              <Input
-                label="Slack webhook URL"
-                name="slackWebhookUrl"
-                value={slackWebhookUrl}
-                onChange={(value) => setSlackWebhookUrl(String(value))}
-                placeholder="https://hooks.slack.com/services/..."
-                readOnly={formLocked}
-              />
-              <Select
-                label="Alert threshold"
-                name="alertThreshold"
-                value={alertThreshold}
-                onChange={(value) => setAlertThreshold(String(value))}
-                readOnly={formLocked}
-                options={[
-                  { label: "Critical", value: "critical" },
-                  { label: "High", value: "high" },
-                  { label: "Medium", value: "medium" },
-                ]}
-              />
-            </Flex>
-          </Tile>
+      <AutoGrid gap="small" columnWidth={220}>
+        <StatusMetric
+          label="Monitoring"
+          value="Active"
+          detail={relativeTime(monitoringTimestamp)}
+          status={statusVariant}
+        />
+        <StatusMetric
+          label="Last settings sync"
+          value={formatTimestamp(monitoringTimestamp)}
+          detail={
+            settingsStorage
+              ? `Stored in ${settingsStorage}`
+              : "Loaded from the OpsLens settings store"
+          }
+        />
+        <StatusMetric
+          label="Portal"
+          value={portalLabel}
+          detail={`Settings session: ${userEmail || userId}`}
+        />
+      </AutoGrid>
 
-          <Tile compact>
-            <Flex direction="column" gap="small">
-              <Heading inline={true}>Workflow monitoring</Heading>
-              <Text>Keep the workflow list short so high-value automations stay visible.</Text>
-              <TextArea
-                label="Critical workflows"
-                name="criticalWorkflows"
-                value={criticalWorkflows}
-                onChange={(value) => setCriticalWorkflows(String(value))}
-                placeholder={"Quote Sync\nOwner Routing\nImport Cleanup"}
-                description="One workflow name per line."
-                readOnly={formLocked}
-                rows={5}
-              />
-            </Flex>
-          </Tile>
-
-          <Tile compact>
-            <Flex direction="column" gap="small">
-              <Flex justify="between" align="center" wrap gap="small">
-                <Heading inline={true}>Save state</Heading>
-                <StatusTag variant={settingsStatus.variant}>
-                  {settingsStatus.label}
-                </StatusTag>
-              </Flex>
-
-              <AutoGrid columnWidth={170} flexible={true} gap="small">
-                <DetailField label="Protection" value={protectionMessage} />
-                <DetailField label="Last saved" value={formatDate(lastSavedAt)} />
-                <DetailField label="Portal store" value="Hosted backend settings store" />
-                <DetailField
-                  label="Workflow count"
-                  value={workflowCount > 0 ? String(workflowCount) : "0"}
+      <Form onSubmit={saveSettings}>
+        <Flex direction="column" gap="small">
+          <AutoGrid gap="small" columnWidth={360}>
+            <Tile>
+              <Flex direction="column" gap="small">
+                <SectionHeader
+                  eyebrow="Alert routing"
+                  title="Send the right alerts to the right place"
+                  body="Choose where OpsLens should deliver workflow risk signals and how sensitive Slack should be for this portal."
                 />
-              </AutoGrid>
 
-              <Text>
-                {!hasLoadedSettings
-                  ? "Settings must load successfully before you can edit or save them."
-                  : saveMessage || "Changes save to the hosted portal settings store."}
-              </Text>
-              {errorMessage ? <Text>Error: {errorMessage}</Text> : null}
+                <Input
+                  label="Slack webhook URL"
+                  name="slackWebhookUrl"
+                  value={slackWebhookUrl}
+                  type="text"
+                  onChange={(value) => setSlackWebhookUrl(String(value ?? ""))}
+                  readOnly={formLocked}
+                  description="OpsLens posts Slack alerts to this incoming webhook when a monitored change meets the selected threshold."
+                />
 
-              <Flex align="center" gap="small" wrap>
-                {errorMessage ? (
+                <Select
+                  label="Slack alert threshold"
+                  name="alertThreshold"
+                  value={alertThreshold}
+                  onChange={(value) =>
+                    setAlertThreshold(String(value ?? "medium"))
+                  }
+                  readOnly={formLocked}
+                  description="Use a higher threshold for quiet client channels, or medium when consultants want earlier warning on schema edits."
+                  options={[
+                    { label: "Critical only", value: "critical" },
+                    { label: "High and critical", value: "high" },
+                    { label: "Medium, high, and critical", value: "medium" },
+                  ]}
+                />
+
+                <TextArea
+                  label="Critical workflows"
+                  name="criticalWorkflows"
+                  value={criticalWorkflows}
+                  onChange={(value) =>
+                    setCriticalWorkflows(String(value ?? ""))
+                  }
+                  readOnly={formLocked}
+                  rows={5}
+                  description="Add one workflow identifier per line so OpsLens can escalate changes that touch revenue-critical automation."
+                />
+
+                <AutoGrid gap="small" columnWidth={220}>
+                  <DeliveryToggle
+                    label="Send Slack alerts"
+                    checked={slackDeliveryEnabled}
+                    disabled={formLocked}
+                    onChange={setSlackDeliveryEnabled}
+                    description="Slack delivery is best for fast triage by the consultant or operations team watching the portal."
+                  />
+                  <DeliveryToggle
+                    label="Create HubSpot tickets"
+                    checked={ticketDeliveryEnabled}
+                    disabled={formLocked}
+                    onChange={setTicketDeliveryEnabled}
+                    description="Ticket delivery keeps a durable HubSpot record for issues that need owner assignment and follow-up."
+                  />
+                </AutoGrid>
+
+                <Flex justify="between" align="center" gap="small" wrap>
                   <Button
-                    onClick={() => {
-                      loadSettings().catch((err) =>
-                        console.error("Unexpected settings retry error", err)
-                      );
-                    }}
-                    disabled={loading || saving}
+                    type="button"
+                    variant="secondary"
+                    disabled={formLocked}
+                    onClick={handleTestAlert}
                   >
-                    Retry loading settings
+                    Test alert
                   </Button>
+                  <Button type="submit" variant="primary" disabled={formLocked}>
+                    {saving ? "Saving..." : "Save settings"}
+                  </Button>
+                </Flex>
+
+                {saveMessage ? (
+                  <Flex align="center" gap="small" wrap>
+                    <StatusTag variant="success">Saved</StatusTag>
+                    <Text>{saveMessage}</Text>
+                  </Flex>
                 ) : null}
-                <Button type="submit" disabled={formLocked}>
-                  {saving ? "Saving..." : "Save settings"}
-                </Button>
+                {testMessage ? (
+                  <Flex align="center" gap="small" wrap>
+                    <StatusTag variant="warning">Test unavailable</StatusTag>
+                    <Text>{testMessage}</Text>
+                  </Flex>
+                ) : null}
+                {errorMessage ? (
+                  <Flex align="center" gap="small" wrap>
+                    <StatusTag variant="danger">Error</StatusTag>
+                    <Text>{errorMessage}</Text>
+                  </Flex>
+                ) : null}
+                {!portalId ? (
+                  <StatusTag variant="warning">
+                    Portal context is still loading from HubSpot.
+                  </StatusTag>
+                ) : null}
               </Flex>
-            </Flex>
-          </Tile>
-        </AutoGrid>
+            </Tile>
+
+            <Tile>
+              <Flex direction="column" gap="small">
+                <Text format={{ fontWeight: "bold" }}>Slack preview</Text>
+                <Heading>{thresholdLabel(alertThreshold)}</Heading>
+                <Text>{previewExplanation(alertThreshold)}</Text>
+                <Divider />
+                <Box>
+                  <Flex direction="column" gap="small">
+                    <Flex align="center" gap="small" wrap>
+                      <Text>{thresholdEmoji(alertThreshold)}</Text>
+                      <Text format={{ fontWeight: "bold" }}>
+                        Property 'Lead Source' archived — 1 workflow(s) affected
+                      </Text>
+                    </Flex>
+                    <Text>
+                      Lead Source was archived in HubSpot, but the Lead Nurture
+                      workflow still references it in enrollment criteria. New
+                      contacts may skip the intended route until the property is
+                      restored or the workflow reference is replaced.
+                    </Text>
+                    <Flex direction="column" gap="small">
+                      <Text format={{ fontWeight: "bold" }}>
+                        Recommended action
+                      </Text>
+                      <Text>
+                        Open the workflow, replace the archived property
+                        reference, then rerun enrollment tests for recent leads.
+                      </Text>
+                    </Flex>
+                    <Divider />
+                    <Text>
+                      OpsLens • Portal {portalLabel} • Detected just now
+                    </Text>
+                  </Flex>
+                </Box>
+              </Flex>
+            </Tile>
+          </AutoGrid>
+        </Flex>
       </Form>
 
-      <Accordion title="Advanced context" size="small">
-        <Tile compact>
-          <AutoGrid columnWidth={220} flexible={true} gap="small">
-            <DetailField label="Portal ID" value={portalId} />
-            <DetailField label="User ID" value={userId} />
-            <DetailField label="User email" value={userEmail} />
-            <DetailField label="Settings URL" value={settingsUrl} />
+      <Tile>
+        <Flex direction="column" gap="small">
+          <SectionHeader
+            eyebrow="Monitoring coverage"
+            title="What OpsLens monitors"
+            body="OpsLens watches the HubSpot changes most likely to break automation, attribution, and operational follow-up."
+          />
+          <Divider />
+          <AutoGrid gap="small" columnWidth={260} flexible>
+            <MonitorItem
+              title="Archived properties"
+              severity="High"
+              variant="error"
+              description="A property archive can break workflow filters, branches, and personalization that still depend on the field."
+            />
+            <MonitorItem
+              title="Deleted properties"
+              severity="High"
+              variant="error"
+              description="Deleted fields remove the source data workflows expect, so OpsLens treats affected automation as urgent."
+            />
+            <MonitorItem
+              title="Renamed properties"
+              severity="Low"
+              variant="default"
+              description="Label changes usually preserve API names, but OpsLens still flags them so consultants can prevent confusion."
+            />
+            <MonitorItem
+              title="Property type changes"
+              severity="Medium"
+              variant="warning"
+              description="Changing field type can alter workflow comparisons, list membership, and downstream reporting logic."
+            />
+            <MonitorItem
+              title="Disabled workflows"
+              severity="High"
+              variant="error"
+              description="A disabled workflow can stop lead routing, lifecycle updates, or customer notifications without a visible failure."
+            />
+            <MonitorItem
+              title="Edited workflows"
+              severity="Medium"
+              variant="warning"
+              description="Workflow edits can change enrollment, branching, and actions, so OpsLens highlights them for review."
+            />
           </AutoGrid>
-        </Tile>
-      </Accordion>
+        </Flex>
+      </Tile>
     </Flex>
   );
-};
+}
 
 export default SettingsPage;
