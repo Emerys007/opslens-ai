@@ -430,5 +430,115 @@ class AlertAdminEndpointTests(unittest.TestCase):
         self.assertEqual(401, response.status_code)
 
 
+# ===========================================================================
+# Slack and ticket delivery admin endpoints
+# ===========================================================================
+
+
+class DeliveryAdminEndpointTests(unittest.TestCase):
+    """Covers POST /admin/alerts/deliver/{slack,tickets,all}."""
+
+    PORTAL_ID = "33333"
+
+    def setUp(self) -> None:
+        self._tempdir = tempfile.TemporaryDirectory()
+        self._database_url = (
+            f"sqlite:///{os.path.join(self._tempdir.name, 'admin-delivery-test.sqlite')}"
+        )
+        os.environ["DATABASE_URL"] = self._database_url
+        db_module._engine = None
+        db_module._SessionLocal = None
+        db_module.init_db()
+        self.client = TestClient(app)
+
+    def tearDown(self) -> None:
+        self.client.close()
+        if db_module._engine is not None:
+            db_module._engine.dispose()
+        db_module._engine = None
+        db_module._SessionLocal = None
+        os.environ.pop("DATABASE_URL", None)
+        self._tempdir.cleanup()
+
+    def _patched_admin_key(self):
+        return patch(
+            "app.api.v1.routes.admin_workflows.settings.maintenance_api_key",
+            "secret-key",
+        )
+
+    def test_slack_endpoint_requires_admin_key(self) -> None:
+        with self._patched_admin_key():
+            response = self.client.post(
+                "/api/v1/admin/alerts/deliver/slack",
+                headers={"X-OpsLens-Admin-Key": "wrong"},
+            )
+        self.assertEqual(401, response.status_code)
+
+    def test_slack_endpoint_returns_summary_on_happy_path(self) -> None:
+        fake_summary = {"attempted": 0, "succeeded": 0, "failed": 0}
+        with (
+            self._patched_admin_key(),
+            patch(
+                "app.api.v1.routes.admin_workflows.deliver_pending_alerts",
+                return_value=fake_summary,
+            ) as mock_deliver,
+        ):
+            response = self.client.post(
+                "/api/v1/admin/alerts/deliver/slack",
+                headers={"X-OpsLens-Admin-Key": "secret-key"},
+            )
+        self.assertEqual(200, response.status_code)
+        mock_deliver.assert_called_once()
+        self.assertEqual(fake_summary, response.json())
+
+    def test_tickets_endpoint_returns_summary_on_happy_path(self) -> None:
+        fake_summary = {"attempted": 1, "succeeded": 1, "failed": 0}
+        with (
+            self._patched_admin_key(),
+            patch(
+                "app.api.v1.routes.admin_workflows.deliver_pending_tickets",
+                return_value=fake_summary,
+            ) as mock_deliver,
+        ):
+            response = self.client.post(
+                "/api/v1/admin/alerts/deliver/tickets",
+                headers={"X-OpsLens-Admin-Key": "secret-key"},
+            )
+        self.assertEqual(200, response.status_code)
+        mock_deliver.assert_called_once()
+        self.assertEqual(fake_summary, response.json())
+
+    def test_all_endpoint_runs_both_in_sequence_and_returns_merged_summary(self) -> None:
+        slack_summary = {"attempted": 2, "succeeded": 2, "failed": 0}
+        ticket_summary = {"attempted": 2, "succeeded": 1, "failed": 1}
+        with (
+            self._patched_admin_key(),
+            patch(
+                "app.api.v1.routes.admin_workflows.deliver_pending_alerts",
+                return_value=slack_summary,
+            ),
+            patch(
+                "app.api.v1.routes.admin_workflows.deliver_pending_tickets",
+                return_value=ticket_summary,
+            ),
+        ):
+            response = self.client.post(
+                "/api/v1/admin/alerts/deliver/all",
+                headers={"X-OpsLens-Admin-Key": "secret-key"},
+            )
+        self.assertEqual(200, response.status_code)
+        payload = response.json()
+        self.assertEqual(slack_summary, payload["slack"])
+        self.assertEqual(ticket_summary, payload["tickets"])
+
+    def test_all_endpoint_requires_admin_key(self) -> None:
+        with self._patched_admin_key():
+            response = self.client.post(
+                "/api/v1/admin/alerts/deliver/all",
+                headers={"X-OpsLens-Admin-Key": "wrong"},
+            )
+        self.assertEqual(401, response.status_code)
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
