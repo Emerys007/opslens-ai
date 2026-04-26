@@ -10,8 +10,13 @@ LEGACY_SETTINGS_FILE = Path(__file__).resolve().parents[2] / "data" / "portal_se
 
 DEFAULT_SETTINGS = {
     "slackWebhookUrl": "",
-    "alertThreshold": "high",
+    # v2 default is `medium` — high+medium delivered, low suppressed. v1
+    # portals provisioned with `high` keep that value; the change only
+    # affects fresh installs.
+    "alertThreshold": "medium",
     "criticalWorkflows": "",
+    "slackDeliveryEnabled": True,
+    "ticketDeliveryEnabled": True,
 }
 
 SEVERITY_ORDER = {
@@ -22,24 +27,38 @@ SEVERITY_ORDER = {
 }
 
 
-def normalize_severity(value: Optional[str], fallback: str = "high") -> str:
+def normalize_severity(value: Optional[str], fallback: str = "medium") -> str:
     text = str(value or "").strip().lower()
     return text if text in SEVERITY_ORDER else fallback
+
+
+def severity_meets_threshold(severity: Optional[str], threshold: Optional[str]) -> bool:
+    """Returns True when an alert at ``severity`` should be delivered
+    given the portal's ``threshold``. Both are normalised against
+    ``SEVERITY_ORDER``; unknown values are treated as ``medium``.
+    """
+    severity_rank = SEVERITY_ORDER.get(normalize_severity(severity), 2)
+    threshold_rank = SEVERITY_ORDER.get(normalize_severity(threshold), 2)
+    return severity_rank >= threshold_rank
 
 
 def _settings_dict(
     portal_id: str,
     slack_webhook_url: str = "",
-    alert_threshold: str = "high",
+    alert_threshold: str = "medium",
     critical_workflows: str = "",
+    slack_delivery_enabled: bool = True,
+    ticket_delivery_enabled: bool = True,
     updated_at=None,
     storage: str = "postgres",
 ):
     return {
         "portalId": str(portal_id),
         "slackWebhookUrl": slack_webhook_url or "",
-        "alertThreshold": normalize_severity(alert_threshold, "high"),
+        "alertThreshold": normalize_severity(alert_threshold, "medium"),
         "criticalWorkflows": critical_workflows or "",
+        "slackDeliveryEnabled": bool(slack_delivery_enabled),
+        "ticketDeliveryEnabled": bool(ticket_delivery_enabled),
         "updatedAtUtc": updated_at.isoformat() if updated_at else None,
         "storage": storage,
     }
@@ -87,6 +106,8 @@ def load_portal_settings(session: Optional[Session], portal_id: Optional[str]):
             slack_webhook_url=row.slack_webhook_url,
             alert_threshold=row.alert_threshold,
             critical_workflows=row.critical_workflows,
+            slack_delivery_enabled=getattr(row, "slack_delivery_enabled", True),
+            ticket_delivery_enabled=getattr(row, "ticket_delivery_enabled", True),
             updated_at=row.updated_at,
             storage="postgres",
         )
@@ -98,6 +119,8 @@ def load_portal_settings(session: Optional[Session], portal_id: Optional[str]):
             slack_webhook_url=legacy["slackWebhookUrl"],
             alert_threshold=legacy["alertThreshold"],
             critical_workflows=legacy["criticalWorkflows"],
+            slack_delivery_enabled=True,
+            ticket_delivery_enabled=True,
         )
         session.add(row)
         session.commit()
@@ -108,6 +131,8 @@ def load_portal_settings(session: Optional[Session], portal_id: Optional[str]):
             slack_webhook_url=row.slack_webhook_url,
             alert_threshold=row.alert_threshold,
             critical_workflows=row.critical_workflows,
+            slack_delivery_enabled=getattr(row, "slack_delivery_enabled", True),
+            ticket_delivery_enabled=getattr(row, "ticket_delivery_enabled", True),
             updated_at=row.updated_at,
             storage="postgres-migrated-from-file",
         )
@@ -117,6 +142,8 @@ def load_portal_settings(session: Optional[Session], portal_id: Optional[str]):
         slack_webhook_url=DEFAULT_SETTINGS["slackWebhookUrl"],
         alert_threshold=DEFAULT_SETTINGS["alertThreshold"],
         critical_workflows=DEFAULT_SETTINGS["criticalWorkflows"],
+        slack_delivery_enabled=DEFAULT_SETTINGS["slackDeliveryEnabled"],
+        ticket_delivery_enabled=DEFAULT_SETTINGS["ticketDeliveryEnabled"],
         updated_at=None,
         storage="defaults",
     )
@@ -135,6 +162,8 @@ def ensure_default_portal_settings(session: Session, portal_id: str):
             slack_webhook_url=DEFAULT_SETTINGS["slackWebhookUrl"],
             alert_threshold=DEFAULT_SETTINGS["alertThreshold"],
             critical_workflows=DEFAULT_SETTINGS["criticalWorkflows"],
+            slack_delivery_enabled=DEFAULT_SETTINGS["slackDeliveryEnabled"],
+            ticket_delivery_enabled=DEFAULT_SETTINGS["ticketDeliveryEnabled"],
         )
         session.add(row)
         session.commit()
@@ -146,9 +175,30 @@ def ensure_default_portal_settings(session: Session, portal_id: str):
         slack_webhook_url=row.slack_webhook_url,
         alert_threshold=row.alert_threshold,
         critical_workflows=row.critical_workflows,
+        slack_delivery_enabled=getattr(row, "slack_delivery_enabled", True),
+        ticket_delivery_enabled=getattr(row, "ticket_delivery_enabled", True),
         updated_at=row.updated_at,
         storage="postgres",
     ), created
+
+
+def _coerce_bool(value, default: bool) -> bool:
+    """Be liberal in what we accept on the inbound payload — Slack and
+    ticket toggles are likely to come in via JSON (true/false), via
+    HTML forms (``"on"`` / ``""``), or omitted entirely.
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in ("true", "1", "yes", "on"):
+        return True
+    if text in ("false", "0", "no", "off", ""):
+        return False
+    return default
 
 
 def save_portal_settings(session: Session, portal_id: str, payload: dict):
@@ -162,8 +212,12 @@ def save_portal_settings(session: Session, portal_id: str, payload: dict):
         critical_workflows = "\n".join(str(item) for item in critical_workflows)
 
     row.slack_webhook_url = str(payload.get("slackWebhookUrl", "") or "")
-    row.alert_threshold = normalize_severity(payload.get("alertThreshold"), "high")
+    row.alert_threshold = normalize_severity(payload.get("alertThreshold"), "medium")
     row.critical_workflows = str(critical_workflows or "")
+    if "slackDeliveryEnabled" in payload:
+        row.slack_delivery_enabled = _coerce_bool(payload.get("slackDeliveryEnabled"), True)
+    if "ticketDeliveryEnabled" in payload:
+        row.ticket_delivery_enabled = _coerce_bool(payload.get("ticketDeliveryEnabled"), True)
 
     session.commit()
     session.refresh(row)
@@ -173,6 +227,8 @@ def save_portal_settings(session: Session, portal_id: str, payload: dict):
         slack_webhook_url=row.slack_webhook_url,
         alert_threshold=row.alert_threshold,
         critical_workflows=row.critical_workflows,
+        slack_delivery_enabled=getattr(row, "slack_delivery_enabled", True),
+        ticket_delivery_enabled=getattr(row, "ticket_delivery_enabled", True),
         updated_at=row.updated_at,
         storage="postgres",
     )
