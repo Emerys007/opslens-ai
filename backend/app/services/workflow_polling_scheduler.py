@@ -10,6 +10,8 @@ from app.config import settings
 from app.models.hubspot_installation import HubSpotInstallation
 from app.services.alert_correlation import correlate_unprocessed_events
 from app.services.property_polling import poll_portal_properties
+from app.services.slack_delivery import deliver_pending_alerts
+from app.services.ticket_delivery import deliver_pending_tickets
 from app.services.workflow_polling import poll_portal_workflows
 
 logger = logging.getLogger(__name__)
@@ -114,6 +116,10 @@ async def run_polling_cycle(session_factory: SessionFactory) -> dict[str, Any]:
         "propertiesPolled": 0,
         "propertyEventsEmitted": 0,
         "alertsCreated": 0,
+        "slackDelivered": 0,
+        "slackFailed": 0,
+        "ticketsCreated": 0,
+        "ticketsFailed": 0,
         "perPortal": [],
     }
 
@@ -202,6 +208,67 @@ async def run_polling_cycle(session_factory: SessionFactory) -> dict[str, Any]:
 
     summary["alertsCreated"] = int(correlation_summary.get("alerts_created") or 0)
     summary["correlation"] = correlation_summary
+
+    # Deliver fresh alerts to Slack and to the OpsLens Alerts ticket
+    # pipeline. Both run on their own session, both are best-effort:
+    # a failure in one does not block the other and never aborts the
+    # cycle. Re-attempts happen automatically next cycle because
+    # ``slack_delivered_at`` / ``hubspot_ticket_id`` stay null on
+    # failure.
+    slack_summary: dict[str, Any] = {"attempted": 0, "succeeded": 0, "failed": 0}
+    slack_session = session_factory()
+    if slack_session is not None:
+        try:
+            try:
+                slack_summary = deliver_pending_alerts(slack_session)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "slack_delivery_scheduler.cycle_failed",
+                    extra={"error": repr(exc)},
+                )
+                try:
+                    slack_session.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
+                slack_summary = {
+                    "attempted": 0,
+                    "succeeded": 0,
+                    "failed": 0,
+                    "error": f"unhandled_exception: {exc}",
+                }
+        finally:
+            slack_session.close()
+
+    ticket_summary: dict[str, Any] = {"attempted": 0, "succeeded": 0, "failed": 0}
+    ticket_session = session_factory()
+    if ticket_session is not None:
+        try:
+            try:
+                ticket_summary = deliver_pending_tickets(ticket_session)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "ticket_delivery_scheduler.cycle_failed",
+                    extra={"error": repr(exc)},
+                )
+                try:
+                    ticket_session.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
+                ticket_summary = {
+                    "attempted": 0,
+                    "succeeded": 0,
+                    "failed": 0,
+                    "error": f"unhandled_exception: {exc}",
+                }
+        finally:
+            ticket_session.close()
+
+    summary["slackDelivered"] = int(slack_summary.get("succeeded") or 0)
+    summary["slackFailed"] = int(slack_summary.get("failed") or 0)
+    summary["ticketsCreated"] = int(ticket_summary.get("succeeded") or 0)
+    summary["ticketsFailed"] = int(ticket_summary.get("failed") or 0)
+    summary["slack"] = slack_summary
+    summary["tickets"] = ticket_summary
 
     summary["status"] = summary.get("status") or "ok"
     return summary
