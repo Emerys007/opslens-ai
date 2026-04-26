@@ -219,7 +219,15 @@ class HubSpotBootstrapScopeTests(unittest.TestCase):
         with patch.object(hubspot_oauth.settings, "hubspot_scopes", "oauth crm.objects.contacts.read crm.objects.contacts.write tickets"):
             scopes = hubspot_oauth._required_scopes().split()
 
-        self.assertIn("crm.schemas.contacts.write", scopes)
+        for required_scope in (
+            "crm.schemas.contacts.write",
+            "automation",
+            "crm.schemas.contacts.read",
+            "crm.schemas.companies.read",
+            "crm.schemas.deals.read",
+            "crm.schemas.tickets.read",
+        ):
+            self.assertIn(required_scope, scopes)
 
 
 class AutoResolveProvisioningSkipTests(unittest.TestCase):
