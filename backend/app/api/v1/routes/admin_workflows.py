@@ -11,6 +11,7 @@ from app.services.alert_correlation import (
     correlate_unprocessed_events,
     list_alerts_for_portal,
 )
+from app.services.alert_rewriter import rewrite_pending_alerts
 from app.services.slack_delivery import deliver_pending_alerts
 from app.services.ticket_delivery import deliver_pending_tickets
 from app.services.dependency_mapping import (
@@ -385,6 +386,21 @@ def _run_session_scoped(callable_taking_session) -> dict[str, Any]:
             raise
     finally:
         session.close()
+
+
+@router.post("/admin/alerts/rewrite")
+def trigger_alert_rewrite(
+    x_opslens_admin_key: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Rewrite every pending alert that doesn't yet have a
+    plain-English explanation.
+
+    Useful for the demo and after a kill-switch flip where alerts
+    accumulated without rewrites. Same auth as the other admin
+    endpoints.
+    """
+    _require_admin_key(x_opslens_admin_key)
+    return _run_session_scoped(rewrite_pending_alerts)
 
 
 @router.post("/admin/alerts/deliver/slack")
