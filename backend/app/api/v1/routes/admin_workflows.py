@@ -11,6 +11,8 @@ from app.services.alert_correlation import (
     correlate_unprocessed_events,
     list_alerts_for_portal,
 )
+from app.services.slack_delivery import deliver_pending_alerts
+from app.services.ticket_delivery import deliver_pending_tickets
 from app.services.dependency_mapping import (
     find_workflows_affected_by_email_template,
     find_workflows_affected_by_list,
@@ -360,4 +362,62 @@ def list_alerts_for_portal_endpoint(
         "portalId": portal_key,
         "count": len(alerts),
         "alerts": alerts,
+    }
+
+
+# ----------------------------------------------------------------------
+# Alert delivery — Slack and tickets
+# ----------------------------------------------------------------------
+
+
+def _run_session_scoped(callable_taking_session) -> dict[str, Any]:
+    """Open a session, run the callable, close. Used by the delivery
+    admin endpoints to keep handler bodies short.
+    """
+    session = get_session()
+    if session is None:
+        raise HTTPException(status_code=503, detail="Database is not configured.")
+    try:
+        try:
+            return callable_taking_session(session)
+        except Exception:  # noqa: BLE001
+            session.rollback()
+            raise
+    finally:
+        session.close()
+
+
+@router.post("/admin/alerts/deliver/slack")
+def trigger_slack_delivery(
+    x_opslens_admin_key: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Push every pending Slack-undelivered alert to its portal's
+    configured webhook. Same auth as the other admin endpoints.
+    """
+    _require_admin_key(x_opslens_admin_key)
+    return _run_session_scoped(deliver_pending_alerts)
+
+
+@router.post("/admin/alerts/deliver/tickets")
+def trigger_ticket_delivery(
+    x_opslens_admin_key: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Create HubSpot tickets for every pending un-ticketed alert."""
+    _require_admin_key(x_opslens_admin_key)
+    return _run_session_scoped(deliver_pending_tickets)
+
+
+@router.post("/admin/alerts/deliver/all")
+def trigger_all_delivery(
+    x_opslens_admin_key: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Run Slack delivery first, then ticket creation. Returns the
+    merged summary so an operator can see both numbers in one response.
+    """
+    _require_admin_key(x_opslens_admin_key)
+    slack_result = _run_session_scoped(deliver_pending_alerts)
+    ticket_result = _run_session_scoped(deliver_pending_tickets)
+    return {
+        "slack": slack_result,
+        "tickets": ticket_result,
     }
