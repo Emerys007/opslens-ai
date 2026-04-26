@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import base64
 import hashlib
@@ -30,7 +30,6 @@ REQUIRED_HUBSPOT_SCOPES = (
     "crm.schemas.contacts.read",
     "crm.schemas.companies.read",
     "crm.schemas.deals.read",
-    "crm.schemas.tickets.read",
 )
 
 
