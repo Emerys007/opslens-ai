@@ -435,6 +435,63 @@ class AlertAdminEndpointTests(unittest.TestCase):
 # ===========================================================================
 
 
+class AlertRewriterAdminEndpointTests(unittest.TestCase):
+    """Covers POST /admin/alerts/rewrite."""
+
+    def setUp(self) -> None:
+        self._tempdir = tempfile.TemporaryDirectory()
+        self._database_url = (
+            f"sqlite:///{os.path.join(self._tempdir.name, 'admin-rewriter-test.sqlite')}"
+        )
+        os.environ["DATABASE_URL"] = self._database_url
+        db_module._engine = None
+        db_module._SessionLocal = None
+        db_module.init_db()
+        self.client = TestClient(app)
+
+    def tearDown(self) -> None:
+        self.client.close()
+        if db_module._engine is not None:
+            db_module._engine.dispose()
+        db_module._engine = None
+        db_module._SessionLocal = None
+        os.environ.pop("DATABASE_URL", None)
+        self._tempdir.cleanup()
+
+    def _patched_admin_key(self):
+        return patch(
+            "app.api.v1.routes.admin_workflows.settings.maintenance_api_key",
+            "secret-key",
+        )
+
+    def test_rewrite_endpoint_runs_rewriter_and_returns_summary(self) -> None:
+        fake_summary = {
+            "attempted": 2,
+            "succeeded": 2,
+            "failed": 0,
+            "skipped_disabled": 0,
+        }
+        with (
+            self._patched_admin_key(),
+            patch(
+                "app.api.v1.routes.admin_workflows.rewrite_pending_alerts",
+                return_value=fake_summary,
+            ) as mock_rewrite,
+        ):
+            response = self.client.post(
+                "/api/v1/admin/alerts/rewrite",
+                headers={"X-OpsLens-Admin-Key": "secret-key"},
+            )
+        self.assertEqual(200, response.status_code)
+        mock_rewrite.assert_called_once()
+        self.assertEqual(fake_summary, response.json())
+
+    def test_rewrite_endpoint_requires_admin_key(self) -> None:
+        with self._patched_admin_key():
+            response = self.client.post("/api/v1/admin/alerts/rewrite")
+        self.assertEqual(401, response.status_code)
+
+
 class DeliveryAdminEndpointTests(unittest.TestCase):
     """Covers POST /admin/alerts/deliver/{slack,tickets,all}."""
 
