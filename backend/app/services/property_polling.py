@@ -41,9 +41,10 @@ from app.services.hubspot_oauth import get_portal_access_token
 logger = logging.getLogger(__name__)
 
 
-# CRM Properties API base. The Properties API ignores `archived=true`
-# on some legacy paths; we always pass it explicitly because we need
-# archived rows in the response to detect archive flips.
+# CRM Properties API base. HubSpot returns only active properties by
+# default, and only archived properties when ``archived=true`` is
+# passed. We merge both responses in-memory so the polling loop sees
+# the full set and can detect archive flips.
 HUBSPOT_PROPERTIES_URL = "https://api.hubapi.com/crm/v3/properties/{object_type}"
 
 # The four core object types OpsLens v2 monitors. Each entry is
@@ -95,13 +96,30 @@ def _http_get_json(url: str, access_token: str) -> dict[str, Any]:
         return json.loads(body) if body.strip() else {}
 
 
+def _merge_property_results(
+    active_results: Any,
+    archived_results: Any,
+) -> list[dict[str, Any]]:
+    merged_by_name: dict[str, dict[str, Any]] = {}
+    for results in (active_results, archived_results):
+        if not isinstance(results, list):
+            continue
+        for item in results:
+            if not isinstance(item, dict):
+                continue
+            property_name = str(item.get("name") or "").strip()
+            if property_name:
+                merged_by_name[property_name] = item
+    return list(merged_by_name.values())
+
+
 def fetch_object_type_properties(
     session: Session,
     portal_id: str,
     object_type: str,
 ) -> list[dict[str, Any]]:
-    """Fetch every property (including archived) for one CRM object
-    type from HubSpot. Returns the parsed `results` list.
+    """Fetch every property (active + archived) for one CRM object
+    type from HubSpot. Returns the merged, de-duplicated ``results`` list.
 
     ``object_type`` is the path segment HubSpot expects
     (``contacts``, ``companies``, ``deals``, ``tickets``, or a custom
@@ -115,15 +133,18 @@ def fetch_object_type_properties(
         raise ValueError("object_type is required.")
 
     access_token = get_portal_access_token(session, portal_key)
-    url = HUBSPOT_PROPERTIES_URL.format(
+    base_url = HUBSPOT_PROPERTIES_URL.format(
         object_type=urllib.parse.quote(object_type_path, safe=""),
     )
+    archived_url = f"{base_url}?{urllib.parse.urlencode({'archived': 'true'})}"
 
-    payload = _http_get_json(url, access_token)
-    results = payload.get("results") or []
-    if not isinstance(results, list):
-        return []
-    return [item for item in results if isinstance(item, dict)]
+    active_payload = _http_get_json(base_url, access_token)
+    archived_payload = _http_get_json(archived_url, access_token)
+
+    return _merge_property_results(
+        active_payload.get("results"),
+        archived_payload.get("results"),
+    )
 
 
 def _record_event(
@@ -251,12 +272,14 @@ def poll_portal_properties(
     aborted = False
 
     for object_type_path, object_type_id in types_to_poll:
-        url = HUBSPOT_PROPERTIES_URL.format(
+        base_url = HUBSPOT_PROPERTIES_URL.format(
             object_type=urllib.parse.quote(object_type_path, safe=""),
         )
+        archived_url = f"{base_url}?{urllib.parse.urlencode({'archived': 'true'})}"
 
         try:
-            payload = _http_get_json(url, access_token)
+            active_payload = _http_get_json(base_url, access_token)
+            archived_payload = _http_get_json(archived_url, access_token)
         except urllib.error.HTTPError as http_err:
             status, reason = _classify_object_type_error(http_err)
             summary["errors"].append(
@@ -289,14 +312,14 @@ def poll_portal_properties(
             )
             continue
 
-        results = payload.get("results") or []
-        if not isinstance(results, list):
-            results = []
+        results = _merge_property_results(
+            active_payload.get("results"),
+            archived_payload.get("results"),
+        )
 
         polled_for_type = 0
+
         for item in results:
-            if not isinstance(item, dict):
-                continue
             property_name = _normalise(item.get("name"))
             if not property_name:
                 continue
