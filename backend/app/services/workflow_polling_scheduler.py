@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.models.hubspot_installation import HubSpotInstallation
 from app.services.alert_correlation import correlate_unprocessed_events
+from app.services.alert_rewriter import rewrite_pending_alerts
 from app.services.property_polling import poll_portal_properties
 from app.services.slack_delivery import deliver_pending_alerts
 from app.services.ticket_delivery import deliver_pending_tickets
@@ -116,6 +117,8 @@ async def run_polling_cycle(session_factory: SessionFactory) -> dict[str, Any]:
         "propertiesPolled": 0,
         "propertyEventsEmitted": 0,
         "alertsCreated": 0,
+        "alertsRewritten": 0,
+        "alertsRewriteFailed": 0,
         "slackDelivered": 0,
         "slackFailed": 0,
         "ticketsCreated": 0,
@@ -208,6 +211,46 @@ async def run_polling_cycle(session_factory: SessionFactory) -> dict[str, Any]:
 
     summary["alertsCreated"] = int(correlation_summary.get("alerts_created") or 0)
     summary["correlation"] = correlation_summary
+
+    # Plain-English rewriter — calls Anthropic's Haiku to populate
+    # ``plain_english_explanation`` and ``recommended_action`` on
+    # freshly-created alerts. Runs BEFORE Slack/ticket delivery so
+    # those bodies pick up the rewritten text. Failures are
+    # best-effort: the delivery layer falls back to the structured
+    # rendering when ``plain_english_explanation`` is null.
+    rewrite_summary: dict[str, Any] = {
+        "attempted": 0,
+        "succeeded": 0,
+        "failed": 0,
+        "skipped_disabled": 0,
+    }
+    rewrite_session = session_factory()
+    if rewrite_session is not None:
+        try:
+            try:
+                rewrite_summary = rewrite_pending_alerts(rewrite_session)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "alert_rewriter_scheduler.cycle_failed",
+                    extra={"error": repr(exc)},
+                )
+                try:
+                    rewrite_session.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
+                rewrite_summary = {
+                    "attempted": 0,
+                    "succeeded": 0,
+                    "failed": 0,
+                    "skipped_disabled": 0,
+                    "error": f"unhandled_exception: {exc}",
+                }
+        finally:
+            rewrite_session.close()
+
+    summary["alertsRewritten"] = int(rewrite_summary.get("succeeded") or 0)
+    summary["alertsRewriteFailed"] = int(rewrite_summary.get("failed") or 0)
+    summary["rewriter"] = rewrite_summary
 
     # Deliver fresh alerts to Slack and to the OpsLens Alerts ticket
     # pipeline. Both run on their own session, both are best-effort:
