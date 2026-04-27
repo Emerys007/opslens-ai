@@ -1,3 +1,6 @@
+import json
+import urllib.parse
+import urllib.request
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Request
@@ -6,11 +9,19 @@ from sqlalchemy import case, desc, func, select
 from app.db import get_session, init_db
 from app.models.alert import STATUS_OPEN, STATUS_RESOLVED, Alert
 from app.models.alert_event import AlertEvent
+from app.models.email_template_change_event import EmailTemplateChangeEvent
+from app.models.email_template_snapshot import EmailTemplateSnapshot
+from app.models.list_change_event import ListChangeEvent
+from app.models.list_snapshot import ListSnapshot
 from app.models.monitoring_exclusion import (
+    EXCLUSION_TYPE_LIST,
     EXCLUSION_TYPE_PROPERTY,
+    EXCLUSION_TYPE_TEMPLATE,
     EXCLUSION_TYPE_WORKFLOW,
     MonitoringExclusion,
 )
+from app.models.owner_change_event import OwnerChangeEvent
+from app.models.owner_snapshot import OwnerSnapshot
 from app.models.portal_setting import PortalSetting
 from app.models.property_change_event import PropertyChangeEvent
 from app.models.property_snapshot import PropertySnapshot
@@ -24,19 +35,40 @@ from app.services.monitoring_config import (
     load_monitoring_coverage,
     merge_monitoring_coverage_update,
 )
+from app.services.alert_correlation import correlate_unprocessed_events
+from app.services.email_template_polling import poll_portal_email_templates
+from app.services.list_polling import poll_portal_lists
+from app.services.owner_polling import poll_portal_owners
+from app.services.property_polling import poll_portal_properties
 from app.services.portal_entitlements import get_portal_entitlement, portal_is_entitled
 from app.services.portal_settings import (
     SEVERITY_ORDER,
     load_portal_settings,
     normalize_severity,
 )
+from app.services.hubspot_oauth import get_portal_access_token
+from app.services.workflow_polling import poll_portal_workflows
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
 ACTION_REQUIRED_SEVERITIES = ("critical", "high")
 WATCHING_SEVERITY = "medium"
-VALID_EXCLUSION_TYPES = (EXCLUSION_TYPE_WORKFLOW, EXCLUSION_TYPE_PROPERTY)
+VALID_EXCLUSION_TYPES = (
+    EXCLUSION_TYPE_WORKFLOW,
+    EXCLUSION_TYPE_PROPERTY,
+    EXCLUSION_TYPE_LIST,
+    EXCLUSION_TYPE_TEMPLATE,
+)
 VALID_ACTION_PAGE_SIZES = (3, 5, 10, 25, 50)
+HUBSPOT_PROPERTIES_URL = "https://api.hubapi.com/crm/v3/properties/{object_type}"
+POLL_NOW_RATE_LIMIT_SECONDS = 30
+_LAST_POLL_AT: dict[str, datetime] = {}
+OBJECT_TYPE_ID_TO_PROPERTIES_PATH = {
+    "0-1": "contacts",
+    "0-2": "companies",
+    "0-3": "deals",
+    "0-5": "tickets",
+}
 
 
 def _resolved_level(row: AlertEvent, threshold: str) -> str:
@@ -160,6 +192,40 @@ def _action_page(value) -> int:
     return parsed if parsed >= 1 else 1
 
 
+def _event_count_from_poll_summary(summary: dict) -> int:
+    return sum(
+        int(summary.get(key) or 0)
+        for key in (
+            "createdEvents",
+            "deletedEvents",
+            "editedEvents",
+            "enabledEvents",
+            "disabledEvents",
+            "archivedEvents",
+            "unarchivedEvents",
+            "typeChangedEvents",
+            "renamedEvents",
+            "criteriaChangedEvents",
+            "deactivatedEvents",
+            "reactivatedEvents",
+        )
+    )
+
+
+def _hubspot_get_json(url: str, access_token: str) -> dict:
+    request = urllib.request.Request(
+        url,
+        method="GET",
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Accept": "application/json",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        body = response.read().decode("utf-8", errors="replace")
+        return json.loads(body) if body.strip() else {}
+
+
 def _action_required_ordering():
     severity_rank = case(
         (func.lower(Alert.severity) == "critical", 0),
@@ -209,8 +275,24 @@ def _action_summary(
     last_poll = _max_timestamp(
         _latest_timestamp(session, portal_id, WorkflowSnapshot, WorkflowSnapshot.last_seen_at),
         _latest_timestamp(session, portal_id, PropertySnapshot, PropertySnapshot.last_seen_at),
+        _latest_timestamp(session, portal_id, ListSnapshot, ListSnapshot.last_seen_at),
+        _latest_timestamp(
+            session,
+            portal_id,
+            EmailTemplateSnapshot,
+            EmailTemplateSnapshot.last_seen_at,
+        ),
+        _latest_timestamp(session, portal_id, OwnerSnapshot, OwnerSnapshot.last_seen_at),
         _latest_timestamp(session, portal_id, WorkflowChangeEvent, WorkflowChangeEvent.detected_at),
         _latest_timestamp(session, portal_id, PropertyChangeEvent, PropertyChangeEvent.detected_at),
+        _latest_timestamp(session, portal_id, ListChangeEvent, ListChangeEvent.detected_at),
+        _latest_timestamp(
+            session,
+            portal_id,
+            EmailTemplateChangeEvent,
+            EmailTemplateChangeEvent.detected_at,
+        ),
+        _latest_timestamp(session, portal_id, OwnerChangeEvent, OwnerChangeEvent.detected_at),
     )
 
     return {
@@ -332,6 +414,50 @@ def _exclusion_exists(
     return session.execute(stmt).scalar_one_or_none() is not None
 
 
+def _workflow_picker_payload(row: WorkflowSnapshot) -> dict:
+    workflow_id = str(row.workflow_id or "").strip()
+    return {
+        "id": workflow_id,
+        "name": str(row.name or "").strip() or workflow_id,
+        "isEnabled": bool(row.is_enabled),
+    }
+
+
+def _list_picker_payload(row: ListSnapshot) -> dict:
+    list_id = str(row.list_id or "").strip()
+    return {
+        "id": list_id,
+        "name": str(row.list_name or "").strip() or list_id,
+        "isArchived": bool(row.is_archived),
+    }
+
+
+def _template_picker_payload(row: EmailTemplateSnapshot) -> dict:
+    template_id = str(row.template_id or "").strip()
+    return {
+        "id": template_id,
+        "name": str(row.template_name or "").strip() or template_id,
+        "subject": str(row.subject or "").strip(),
+        "isArchived": bool(row.is_archived),
+    }
+
+
+def _property_picker_payload(row: dict) -> dict | None:
+    name = str(row.get("name") or "").strip()
+    if not name:
+        return None
+    return {
+        "name": name,
+        "label": str(row.get("label") or "").strip() or name,
+        "type": str(row.get("type") or "").strip(),
+    }
+
+
+def _properties_path_for_object_type(object_type_id: str) -> str:
+    cleaned = str(object_type_id or "").strip()
+    return OBJECT_TYPE_ID_TO_PROPERTIES_PATH.get(cleaned, cleaned)
+
+
 @router.get("/overview")
 def dashboard_overview(request: Request):
     query = request.query_params
@@ -449,6 +575,172 @@ def dashboard_overview(request: Request):
         session.close()
 
 
+@router.post("/poll-now")
+def dashboard_poll_now(request: Request):
+    portal_id = str(request.query_params.get("portalId", "")).strip()
+    if not portal_id:
+        raise HTTPException(status_code=400, detail="portalId is required.")
+
+    now = _utc_now()
+    previous = _LAST_POLL_AT.get(portal_id)
+    if previous is not None:
+        if getattr(previous, "tzinfo", None) is None:
+            previous = previous.replace(tzinfo=timezone.utc)
+        elapsed = (now - previous.astimezone(timezone.utc)).total_seconds()
+        if elapsed < POLL_NOW_RATE_LIMIT_SECONDS:
+            raise HTTPException(
+                status_code=429,
+                detail="Poll already requested recently.",
+            )
+
+    db_ready = init_db()
+    session = get_session()
+    if not db_ready or session is None:
+        raise HTTPException(status_code=503, detail="Database is not configured.")
+
+    _LAST_POLL_AT[portal_id] = now
+    try:
+        workflow_summary = poll_portal_workflows(session, portal_id)
+        property_summary = poll_portal_properties(session, portal_id)
+        list_summary = poll_portal_lists(session, portal_id)
+        template_summary = poll_portal_email_templates(session, portal_id)
+        owner_summary = poll_portal_owners(session, portal_id)
+        correlation_summary = correlate_unprocessed_events(session)
+        return {
+            "status": "ok",
+            "eventsDetected": _event_count_from_poll_summary(workflow_summary)
+            + _event_count_from_poll_summary(property_summary)
+            + _event_count_from_poll_summary(list_summary)
+            + _event_count_from_poll_summary(template_summary)
+            + _event_count_from_poll_summary(owner_summary),
+            "alertsCreated": int(correlation_summary.get("alerts_created") or 0),
+        }
+    except Exception:
+        _LAST_POLL_AT.pop(portal_id, None)
+        try:
+            session.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        session.close()
+
+
+@router.get("/workflows")
+def dashboard_workflows(request: Request):
+    portal_id = str(request.query_params.get("portalId", "")).strip()
+    if not portal_id:
+        raise HTTPException(status_code=400, detail="portalId is required.")
+
+    db_ready = init_db()
+    session = get_session()
+    if not db_ready or session is None:
+        return []
+
+    try:
+        stmt = (
+            select(WorkflowSnapshot)
+            .where(WorkflowSnapshot.portal_id == portal_id)
+            .order_by(func.lower(WorkflowSnapshot.name), WorkflowSnapshot.workflow_id)
+            .limit(200)
+        )
+        return [_workflow_picker_payload(row) for row in session.execute(stmt).scalars().all()]
+    finally:
+        session.close()
+
+
+@router.get("/lists")
+def dashboard_lists(request: Request):
+    portal_id = str(request.query_params.get("portalId", "")).strip()
+    if not portal_id:
+        raise HTTPException(status_code=400, detail="portalId is required.")
+
+    db_ready = init_db()
+    session = get_session()
+    if not db_ready or session is None:
+        return []
+
+    try:
+        stmt = (
+            select(ListSnapshot)
+            .where(ListSnapshot.portal_id == portal_id)
+            .order_by(func.lower(ListSnapshot.list_name), ListSnapshot.list_id)
+            .limit(200)
+        )
+        return [_list_picker_payload(row) for row in session.execute(stmt).scalars().all()]
+    finally:
+        session.close()
+
+
+@router.get("/templates")
+def dashboard_templates(request: Request):
+    portal_id = str(request.query_params.get("portalId", "")).strip()
+    if not portal_id:
+        raise HTTPException(status_code=400, detail="portalId is required.")
+
+    db_ready = init_db()
+    session = get_session()
+    if not db_ready or session is None:
+        return []
+
+    try:
+        stmt = (
+            select(EmailTemplateSnapshot)
+            .where(EmailTemplateSnapshot.portal_id == portal_id)
+            .order_by(
+                func.lower(EmailTemplateSnapshot.template_name),
+                EmailTemplateSnapshot.template_id,
+            )
+            .limit(200)
+        )
+        return [_template_picker_payload(row) for row in session.execute(stmt).scalars().all()]
+    finally:
+        session.close()
+
+
+@router.get("/properties")
+def dashboard_properties(request: Request):
+    portal_id = str(request.query_params.get("portalId", "")).strip()
+    object_type_id = str(request.query_params.get("objectTypeId", "")).strip()
+    if not portal_id:
+        raise HTTPException(status_code=400, detail="portalId is required.")
+    if not object_type_id:
+        raise HTTPException(status_code=400, detail="objectTypeId is required.")
+
+    db_ready = init_db()
+    session = get_session()
+    if not db_ready or session is None:
+        return []
+
+    try:
+        try:
+            access_token = get_portal_access_token(session, portal_id)
+        except Exception:
+            return []
+
+        object_type_path = _properties_path_for_object_type(object_type_id)
+        url = HUBSPOT_PROPERTIES_URL.format(
+            object_type=urllib.parse.quote(object_type_path, safe=""),
+        )
+        try:
+            payload = _hubspot_get_json(url, access_token)
+        except Exception:
+            return []
+        if not isinstance(payload, dict):
+            return []
+        rows = [
+            normalized
+            for item in payload.get("results", [])
+            if isinstance(item, dict)
+            for normalized in [_property_picker_payload(item)]
+            if normalized is not None
+        ]
+        rows.sort(key=lambda item: (item["label"].lower(), item["name"].lower()))
+        return rows[:500]
+    finally:
+        session.close()
+
+
 @router.get("/monitoring-coverage")
 def get_monitoring_coverage(request: Request):
     portal_id = str(request.query_params.get("portalId", "")).strip()
@@ -502,7 +794,10 @@ def list_monitoring_exclusions(request: Request):
     if not portal_id:
         raise HTTPException(status_code=400, detail="portalId is required.")
     if exclusion_type and exclusion_type not in VALID_EXCLUSION_TYPES:
-        raise HTTPException(status_code=400, detail="type must be workflow or property.")
+        raise HTTPException(
+            status_code=400,
+            detail="type must be workflow, property, or list.",
+        )
 
     db_ready = init_db()
     session = get_session()
@@ -537,7 +832,10 @@ def create_monitoring_exclusion(payload: dict, request: Request):
     reason = str(payload.get("reason", "")).strip() or None
 
     if exclusion_type not in VALID_EXCLUSION_TYPES:
-        raise HTTPException(status_code=400, detail="type must be workflow or property.")
+        raise HTTPException(
+            status_code=400,
+            detail="type must be workflow, property, or list.",
+        )
     if not exclusion_id:
         raise HTTPException(status_code=400, detail="id is required.")
     if exclusion_type == EXCLUSION_TYPE_PROPERTY and not object_type_id:
@@ -546,6 +844,8 @@ def create_monitoring_exclusion(payload: dict, request: Request):
             detail="objectTypeId is required for property exclusions.",
         )
     if exclusion_type == EXCLUSION_TYPE_WORKFLOW:
+        object_type_id = None
+    if exclusion_type in (EXCLUSION_TYPE_LIST, EXCLUSION_TYPE_TEMPLATE):
         object_type_id = None
 
     db_ready = init_db()

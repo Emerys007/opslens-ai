@@ -4,10 +4,12 @@ import os
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
 from app import db as db_module
+from app.api.v1.routes import dashboard as dashboard_module
 from app.main import app
 from app.models.alert import (
     SEVERITY_HIGH,
@@ -18,7 +20,10 @@ from app.models.alert import (
     STATUS_RESOLVED,
     Alert,
 )
+from app.models.email_template_snapshot import EmailTemplateSnapshot
+from app.models.list_snapshot import ListSnapshot
 from app.models.portal_setting import PortalSetting
+from app.models.workflow_snapshot import WorkflowSnapshot
 
 
 SEVERITY_CRITICAL = "critical"
@@ -36,6 +41,7 @@ class DashboardEndpointTests(unittest.TestCase):
         os.environ["DATABASE_URL"] = self._database_url
         db_module._engine = None
         db_module._SessionLocal = None
+        dashboard_module._LAST_POLL_AT.clear()
         db_module.init_db()
         self.client = TestClient(app)
 
@@ -45,6 +51,7 @@ class DashboardEndpointTests(unittest.TestCase):
             db_module._engine.dispose()
         db_module._engine = None
         db_module._SessionLocal = None
+        dashboard_module._LAST_POLL_AT.clear()
         os.environ.pop("DATABASE_URL", None)
         self._tempdir.cleanup()
 
@@ -123,6 +130,68 @@ class DashboardEndpointTests(unittest.TestCase):
 
     def _action_titles(self, summary: dict) -> list[str]:
         return [row["title"] for row in summary["actionRequired"]]
+
+    def _seed_workflow(
+        self,
+        session,
+        *,
+        portal_id: str | None = None,
+        workflow_id: str = "workflow-1",
+        name: str = "Workflow",
+        is_enabled: bool = True,
+    ) -> WorkflowSnapshot:
+        row = WorkflowSnapshot(
+            portal_id=portal_id or self.PORTAL_ID,
+            workflow_id=workflow_id,
+            name=name,
+            is_enabled=is_enabled,
+        )
+        session.add(row)
+        session.commit()
+        session.refresh(row)
+        return row
+
+    def _seed_list(
+        self,
+        session,
+        *,
+        portal_id: str | None = None,
+        list_id: str = "list-1",
+        list_name: str = "List",
+        is_archived: bool = False,
+    ) -> ListSnapshot:
+        row = ListSnapshot(
+            portal_id=portal_id or self.PORTAL_ID,
+            list_id=list_id,
+            list_name=list_name,
+            is_archived=is_archived,
+        )
+        session.add(row)
+        session.commit()
+        session.refresh(row)
+        return row
+
+    def _seed_template(
+        self,
+        session,
+        *,
+        portal_id: str | None = None,
+        template_id: str = "template-1",
+        template_name: str = "Template",
+        subject: str = "Hello",
+        is_archived: bool = False,
+    ) -> EmailTemplateSnapshot:
+        row = EmailTemplateSnapshot(
+            portal_id=portal_id or self.PORTAL_ID,
+            template_id=template_id,
+            template_name=template_name,
+            subject=subject,
+            is_archived=is_archived,
+        )
+        session.add(row)
+        session.commit()
+        session.refresh(row)
+        return row
 
     def test_overview_default_action_page_returns_10_rows_and_total_count(
         self,
@@ -496,6 +565,334 @@ class DashboardEndpointTests(unittest.TestCase):
             first.json()["resolvedAtUtc"],
             second.json()["resolvedAtUtc"],
         )
+
+    def test_workflows_endpoint_returns_sorted_rows_capped_at_200(self) -> None:
+        session = self._session()
+        try:
+            for index in range(205):
+                self._seed_workflow(
+                    session,
+                    workflow_id=f"workflow-{index:03d}",
+                    name=f"Workflow {205 - index:03d}",
+                    is_enabled=index % 2 == 0,
+                )
+            self._seed_workflow(
+                session,
+                portal_id=self.OTHER_PORTAL_ID,
+                workflow_id="other-workflow",
+                name="A different portal",
+            )
+        finally:
+            session.close()
+
+        response = self.client.get(
+            f"/api/v1/dashboard/workflows?portalId={self.PORTAL_ID}"
+        )
+
+        self.assertEqual(200, response.status_code)
+        payload = response.json()
+        self.assertEqual(200, len(payload))
+        self.assertEqual("Workflow 001", payload[0]["name"])
+        self.assertEqual("Workflow 200", payload[-1]["name"])
+        self.assertEqual({"id", "name", "isEnabled"}, set(payload[0].keys()))
+        self.assertNotIn("other-workflow", {row["id"] for row in payload})
+
+    def test_workflows_endpoint_returns_empty_array_without_rows(self) -> None:
+        response = self.client.get(
+            f"/api/v1/dashboard/workflows?portalId={self.PORTAL_ID}"
+        )
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual([], response.json())
+
+    def test_lists_endpoint_returns_sorted_rows_capped_at_200(self) -> None:
+        session = self._session()
+        try:
+            for index in range(205):
+                self._seed_list(
+                    session,
+                    list_id=f"list-{index:03d}",
+                    list_name=f"List {205 - index:03d}",
+                    is_archived=index % 2 == 0,
+                )
+            self._seed_list(
+                session,
+                portal_id=self.OTHER_PORTAL_ID,
+                list_id="other-list",
+                list_name="A different portal",
+            )
+        finally:
+            session.close()
+
+        response = self.client.get(
+            f"/api/v1/dashboard/lists?portalId={self.PORTAL_ID}"
+        )
+
+        self.assertEqual(200, response.status_code)
+        payload = response.json()
+        self.assertEqual(200, len(payload))
+        self.assertEqual("List 001", payload[0]["name"])
+        self.assertEqual("List 200", payload[-1]["name"])
+        self.assertEqual({"id", "name", "isArchived"}, set(payload[0].keys()))
+        self.assertNotIn("other-list", {row["id"] for row in payload})
+
+    def test_lists_endpoint_returns_empty_array_without_rows(self) -> None:
+        response = self.client.get(
+            f"/api/v1/dashboard/lists?portalId={self.PORTAL_ID}"
+        )
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual([], response.json())
+
+    def test_templates_endpoint_returns_sorted_rows_capped_at_200(self) -> None:
+        session = self._session()
+        try:
+            for index in range(205):
+                self._seed_template(
+                    session,
+                    template_id=f"template-{index:03d}",
+                    template_name=f"Template {205 - index:03d}",
+                    subject=f"Subject {index:03d}",
+                    is_archived=index % 2 == 0,
+                )
+            self._seed_template(
+                session,
+                portal_id=self.OTHER_PORTAL_ID,
+                template_id="other-template",
+                template_name="A different portal",
+            )
+        finally:
+            session.close()
+
+        response = self.client.get(
+            f"/api/v1/dashboard/templates?portalId={self.PORTAL_ID}"
+        )
+
+        self.assertEqual(200, response.status_code)
+        payload = response.json()
+        self.assertEqual(200, len(payload))
+        self.assertEqual("Template 001", payload[0]["name"])
+        self.assertEqual("Template 200", payload[-1]["name"])
+        self.assertEqual(
+            {"id", "name", "subject", "isArchived"},
+            set(payload[0].keys()),
+        )
+        self.assertNotIn("other-template", {row["id"] for row in payload})
+
+    def test_templates_endpoint_returns_empty_array_without_rows(self) -> None:
+        response = self.client.get(
+            f"/api/v1/dashboard/templates?portalId={self.PORTAL_ID}"
+        )
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual([], response.json())
+
+    def test_properties_endpoint_returns_shape_when_hubspot_api_succeeds(self) -> None:
+        hubspot_payload = {
+            "results": [
+                {"name": "z_internal", "label": "Zeta", "type": "string"},
+                {"name": "lead_source", "label": "Lead Source", "type": "enumeration"},
+            ]
+        }
+
+        with (
+            patch(
+                "app.api.v1.routes.dashboard.get_portal_access_token",
+                return_value="access-token",
+            ) as token_mock,
+            patch(
+                "app.api.v1.routes.dashboard._hubspot_get_json",
+                return_value=hubspot_payload,
+            ) as get_json_mock,
+        ):
+            response = self.client.get(
+                f"/api/v1/dashboard/properties?portalId={self.PORTAL_ID}&objectTypeId=0-1"
+            )
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(
+            [
+                {
+                    "name": "lead_source",
+                    "label": "Lead Source",
+                    "type": "enumeration",
+                },
+                {"name": "z_internal", "label": "Zeta", "type": "string"},
+            ],
+            response.json(),
+        )
+        token_mock.assert_called_once()
+        called_url, called_token = get_json_mock.call_args.args
+        self.assertIn("/crm/v3/properties/contacts", called_url)
+        self.assertEqual("access-token", called_token)
+
+    def test_properties_endpoint_returns_empty_array_when_portal_has_no_token(self) -> None:
+        with patch("app.api.v1.routes.dashboard._hubspot_get_json") as get_json_mock:
+            response = self.client.get(
+                f"/api/v1/dashboard/properties?portalId={self.PORTAL_ID}&objectTypeId=0-1"
+            )
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual([], response.json())
+        get_json_mock.assert_not_called()
+
+    def test_properties_endpoint_passes_invalid_object_type_id_without_crashing(
+        self,
+    ) -> None:
+        with (
+            patch(
+                "app.api.v1.routes.dashboard.get_portal_access_token",
+                return_value="access-token",
+            ),
+            patch(
+                "app.api.v1.routes.dashboard._hubspot_get_json",
+                return_value={"results": []},
+            ) as get_json_mock,
+        ):
+            response = self.client.get(
+                f"/api/v1/dashboard/properties?portalId={self.PORTAL_ID}&objectTypeId=custom-object"
+            )
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual([], response.json())
+        called_url, _called_token = get_json_mock.call_args.args
+        self.assertIn("/crm/v3/properties/custom-object", called_url)
+
+    def test_poll_now_endpoint_runs_polling_for_portal(self) -> None:
+        with (
+            patch(
+                "app.api.v1.routes.dashboard.poll_portal_workflows",
+                return_value={
+                    "status": "ok",
+                    "createdEvents": 1,
+                    "editedEvents": 2,
+                },
+            ) as workflow_mock,
+            patch(
+                "app.api.v1.routes.dashboard.poll_portal_properties",
+                return_value={
+                    "status": "ok",
+                    "archivedEvents": 1,
+                    "typeChangedEvents": 1,
+                },
+            ) as property_mock,
+            patch(
+                "app.api.v1.routes.dashboard.poll_portal_lists",
+                return_value={
+                    "status": "ok",
+                    "archivedEvents": 1,
+                    "criteriaChangedEvents": 1,
+                },
+            ) as list_mock,
+            patch(
+                "app.api.v1.routes.dashboard.poll_portal_email_templates",
+                return_value={"status": "ok", "editedEvents": 1},
+            ) as template_mock,
+            patch(
+                "app.api.v1.routes.dashboard.poll_portal_owners",
+                return_value={"status": "ok", "deactivatedEvents": 1},
+            ) as owner_mock,
+            patch(
+                "app.api.v1.routes.dashboard.correlate_unprocessed_events",
+                return_value={"alerts_created": 6},
+            ) as correlation_mock,
+        ):
+            response = self.client.post(
+                f"/api/v1/dashboard/poll-now?portalId={self.PORTAL_ID}"
+            )
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(
+            {"status": "ok", "eventsDetected": 9, "alertsCreated": 6},
+            response.json(),
+        )
+        workflow_mock.assert_called_once()
+        property_mock.assert_called_once()
+        list_mock.assert_called_once()
+        template_mock.assert_called_once()
+        owner_mock.assert_called_once()
+        correlation_mock.assert_called_once()
+        self.assertEqual(self.PORTAL_ID, workflow_mock.call_args.args[1])
+        self.assertEqual(self.PORTAL_ID, property_mock.call_args.args[1])
+        self.assertEqual(self.PORTAL_ID, list_mock.call_args.args[1])
+        self.assertEqual(self.PORTAL_ID, template_mock.call_args.args[1])
+        self.assertEqual(self.PORTAL_ID, owner_mock.call_args.args[1])
+
+    def test_poll_now_endpoint_returns_429_when_called_twice_within_30s(self) -> None:
+        with (
+            patch(
+                "app.api.v1.routes.dashboard.poll_portal_workflows",
+                return_value={"status": "ok"},
+            ),
+            patch(
+                "app.api.v1.routes.dashboard.poll_portal_properties",
+                return_value={"status": "ok"},
+            ),
+            patch(
+                "app.api.v1.routes.dashboard.poll_portal_lists",
+                return_value={"status": "ok"},
+            ),
+            patch(
+                "app.api.v1.routes.dashboard.poll_portal_email_templates",
+                return_value={"status": "ok"},
+            ),
+            patch(
+                "app.api.v1.routes.dashboard.poll_portal_owners",
+                return_value={"status": "ok"},
+            ),
+            patch(
+                "app.api.v1.routes.dashboard.correlate_unprocessed_events",
+                return_value={"alerts_created": 0},
+            ),
+        ):
+            first = self.client.post(
+                f"/api/v1/dashboard/poll-now?portalId={self.PORTAL_ID}"
+            )
+            second = self.client.post(
+                f"/api/v1/dashboard/poll-now?portalId={self.PORTAL_ID}"
+            )
+
+        self.assertEqual(200, first.status_code)
+        self.assertEqual(429, second.status_code)
+
+    def test_poll_now_endpoint_resets_rate_limit_after_window(self) -> None:
+        dashboard_module._LAST_POLL_AT[self.PORTAL_ID] = datetime.now(
+            timezone.utc
+        ) - timedelta(seconds=31)
+
+        with (
+            patch(
+                "app.api.v1.routes.dashboard.poll_portal_workflows",
+                return_value={"status": "ok", "createdEvents": 1},
+            ) as workflow_mock,
+            patch(
+                "app.api.v1.routes.dashboard.poll_portal_properties",
+                return_value={"status": "ok"},
+            ),
+            patch(
+                "app.api.v1.routes.dashboard.poll_portal_lists",
+                return_value={"status": "ok"},
+            ),
+            patch(
+                "app.api.v1.routes.dashboard.poll_portal_email_templates",
+                return_value={"status": "ok"},
+            ),
+            patch(
+                "app.api.v1.routes.dashboard.poll_portal_owners",
+                return_value={"status": "ok"},
+            ),
+            patch(
+                "app.api.v1.routes.dashboard.correlate_unprocessed_events",
+                return_value={"alerts_created": 1},
+            ),
+        ):
+            response = self.client.post(
+                f"/api/v1/dashboard/poll-now?portalId={self.PORTAL_ID}"
+            )
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(1, response.json()["eventsDetected"])
+        workflow_mock.assert_called_once()
 
 
 if __name__ == "__main__":

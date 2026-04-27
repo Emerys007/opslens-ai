@@ -25,6 +25,7 @@ from app.services import workflow_polling
 from app.services.dependency_mapping import (
     find_workflows_affected_by_email_template,
     find_workflows_affected_by_list,
+    find_workflows_affected_by_owner,
     find_workflows_affected_by_property,
     list_workflow_dependencies,
     rebuild_workflow_dependencies,
@@ -461,6 +462,28 @@ class ReverseQueryTests(unittest.TestCase):
             results = find_workflows_affected_by_email_template(
                 session, self.PORTAL_ID, "9001",
             )
+            self.assertEqual(["100"], [r["workflow_id"] for r in results])
+        finally:
+            session.close()
+
+    def test_find_workflows_affected_by_owner(self) -> None:
+        session = self._session()
+        try:
+            self._seed_snapshot(session, "100", name="Assignment workflow")
+            self._seed_dependency(
+                session,
+                workflow_id="100",
+                dependency_type="owner",
+                dependency_id="501",
+            )
+            session.commit()
+
+            results = find_workflows_affected_by_owner(
+                session,
+                self.PORTAL_ID,
+                "501",
+            )
+
             self.assertEqual(["100"], [r["workflow_id"] for r in results])
         finally:
             session.close()

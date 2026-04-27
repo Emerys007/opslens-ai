@@ -10,6 +10,9 @@ from app.config import settings
 from app.models.hubspot_installation import HubSpotInstallation
 from app.services.alert_correlation import correlate_unprocessed_events
 from app.services.alert_rewriter import rewrite_pending_alerts
+from app.services.email_template_polling import poll_portal_email_templates
+from app.services.list_polling import poll_portal_lists
+from app.services.owner_polling import poll_portal_owners
 from app.services.property_polling import poll_portal_properties
 from app.services.slack_delivery import deliver_pending_alerts
 from app.services.ticket_delivery import deliver_pending_tickets
@@ -116,6 +119,12 @@ async def run_polling_cycle(session_factory: SessionFactory) -> dict[str, Any]:
         "portalsErrored": 0,
         "propertiesPolled": 0,
         "propertyEventsEmitted": 0,
+        "listsPolled": 0,
+        "listEventsEmitted": 0,
+        "templatesPolled": 0,
+        "templateEventsEmitted": 0,
+        "ownersPolled": 0,
+        "ownerEventsEmitted": 0,
         "alertsCreated": 0,
         "alertsRewritten": 0,
         "alertsRewriteFailed": 0,
@@ -145,11 +154,29 @@ async def run_polling_cycle(session_factory: SessionFactory) -> dict[str, Any]:
             poll_portal_workflows,
             "workflow_polling_scheduler",
         )
+        list_summary = _run_portal_pass(
+            session_factory,
+            portal_id,
+            poll_portal_lists,
+            "list_polling_scheduler",
+        )
+        template_summary = _run_portal_pass(
+            session_factory,
+            portal_id,
+            poll_portal_email_templates,
+            "email_template_polling_scheduler",
+        )
         property_summary = _run_portal_pass(
             session_factory,
             portal_id,
             poll_portal_properties,
             "property_polling_scheduler",
+        )
+        owner_summary = _run_portal_pass(
+            session_factory,
+            portal_id,
+            poll_portal_owners,
+            "owner_polling_scheduler",
         )
 
         if isinstance(property_summary, dict):
@@ -166,11 +193,32 @@ async def run_polling_cycle(session_factory: SessionFactory) -> dict[str, Any]:
                 )
             )
 
+        if isinstance(list_summary, dict):
+            summary["listsPolled"] += int(list_summary.get("polled") or 0)
+            summary["listEventsEmitted"] += int(
+                list_summary.get("events_emitted") or 0
+            )
+
+        if isinstance(template_summary, dict):
+            summary["templatesPolled"] += int(template_summary.get("polled") or 0)
+            summary["templateEventsEmitted"] += int(
+                template_summary.get("events_emitted") or 0
+            )
+
+        if isinstance(owner_summary, dict):
+            summary["ownersPolled"] += int(owner_summary.get("polled") or 0)
+            summary["ownerEventsEmitted"] += int(
+                owner_summary.get("events_emitted") or 0
+            )
+
         summary["perPortal"].append(
             {
                 "portalId": portal_id,
                 "workflow": workflow_summary,
+                "list": list_summary,
+                "template": template_summary,
                 "property": property_summary,
+                "owner": owner_summary,
             }
         )
         _accumulate_status(summary, workflow_summary.get("status"))
