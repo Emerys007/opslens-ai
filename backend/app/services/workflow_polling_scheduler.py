@@ -10,6 +10,7 @@ from app.config import settings
 from app.models.hubspot_installation import HubSpotInstallation
 from app.services.alert_correlation import correlate_unprocessed_events
 from app.services.alert_rewriter import rewrite_pending_alerts
+from app.services.email_template_polling import poll_portal_email_templates
 from app.services.list_polling import poll_portal_lists
 from app.services.property_polling import poll_portal_properties
 from app.services.slack_delivery import deliver_pending_alerts
@@ -119,6 +120,8 @@ async def run_polling_cycle(session_factory: SessionFactory) -> dict[str, Any]:
         "propertyEventsEmitted": 0,
         "listsPolled": 0,
         "listEventsEmitted": 0,
+        "templatesPolled": 0,
+        "templateEventsEmitted": 0,
         "alertsCreated": 0,
         "alertsRewritten": 0,
         "alertsRewriteFailed": 0,
@@ -154,6 +157,12 @@ async def run_polling_cycle(session_factory: SessionFactory) -> dict[str, Any]:
             poll_portal_lists,
             "list_polling_scheduler",
         )
+        template_summary = _run_portal_pass(
+            session_factory,
+            portal_id,
+            poll_portal_email_templates,
+            "email_template_polling_scheduler",
+        )
         property_summary = _run_portal_pass(
             session_factory,
             portal_id,
@@ -181,11 +190,18 @@ async def run_polling_cycle(session_factory: SessionFactory) -> dict[str, Any]:
                 list_summary.get("events_emitted") or 0
             )
 
+        if isinstance(template_summary, dict):
+            summary["templatesPolled"] += int(template_summary.get("polled") or 0)
+            summary["templateEventsEmitted"] += int(
+                template_summary.get("events_emitted") or 0
+            )
+
         summary["perPortal"].append(
             {
                 "portalId": portal_id,
                 "workflow": workflow_summary,
                 "list": list_summary,
+                "template": template_summary,
                 "property": property_summary,
             }
         )

@@ -20,6 +20,7 @@ from app.models.alert import (
     STATUS_RESOLVED,
     Alert,
 )
+from app.models.email_template_snapshot import EmailTemplateSnapshot
 from app.models.list_snapshot import ListSnapshot
 from app.models.portal_setting import PortalSetting
 from app.models.workflow_snapshot import WorkflowSnapshot
@@ -163,6 +164,28 @@ class DashboardEndpointTests(unittest.TestCase):
             portal_id=portal_id or self.PORTAL_ID,
             list_id=list_id,
             list_name=list_name,
+            is_archived=is_archived,
+        )
+        session.add(row)
+        session.commit()
+        session.refresh(row)
+        return row
+
+    def _seed_template(
+        self,
+        session,
+        *,
+        portal_id: str | None = None,
+        template_id: str = "template-1",
+        template_name: str = "Template",
+        subject: str = "Hello",
+        is_archived: bool = False,
+    ) -> EmailTemplateSnapshot:
+        row = EmailTemplateSnapshot(
+            portal_id=portal_id or self.PORTAL_ID,
+            template_id=template_id,
+            template_name=template_name,
+            subject=subject,
             is_archived=is_archived,
         )
         session.add(row)
@@ -616,6 +639,49 @@ class DashboardEndpointTests(unittest.TestCase):
     def test_lists_endpoint_returns_empty_array_without_rows(self) -> None:
         response = self.client.get(
             f"/api/v1/dashboard/lists?portalId={self.PORTAL_ID}"
+        )
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual([], response.json())
+
+    def test_templates_endpoint_returns_sorted_rows_capped_at_200(self) -> None:
+        session = self._session()
+        try:
+            for index in range(205):
+                self._seed_template(
+                    session,
+                    template_id=f"template-{index:03d}",
+                    template_name=f"Template {205 - index:03d}",
+                    subject=f"Subject {index:03d}",
+                    is_archived=index % 2 == 0,
+                )
+            self._seed_template(
+                session,
+                portal_id=self.OTHER_PORTAL_ID,
+                template_id="other-template",
+                template_name="A different portal",
+            )
+        finally:
+            session.close()
+
+        response = self.client.get(
+            f"/api/v1/dashboard/templates?portalId={self.PORTAL_ID}"
+        )
+
+        self.assertEqual(200, response.status_code)
+        payload = response.json()
+        self.assertEqual(200, len(payload))
+        self.assertEqual("Template 001", payload[0]["name"])
+        self.assertEqual("Template 200", payload[-1]["name"])
+        self.assertEqual(
+            {"id", "name", "subject", "isArchived"},
+            set(payload[0].keys()),
+        )
+        self.assertNotIn("other-template", {row["id"] for row in payload})
+
+    def test_templates_endpoint_returns_empty_array_without_rows(self) -> None:
+        response = self.client.get(
+            f"/api/v1/dashboard/templates?portalId={self.PORTAL_ID}"
         )
 
         self.assertEqual(200, response.status_code)

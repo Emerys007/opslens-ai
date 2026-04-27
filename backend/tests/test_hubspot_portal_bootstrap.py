@@ -226,6 +226,7 @@ class HubSpotBootstrapScopeTests(unittest.TestCase):
             "crm.schemas.companies.read",
             "crm.schemas.deals.read",
             "crm.lists.read",
+            "content",
         ):
             self.assertIn(required_scope, scopes)
 

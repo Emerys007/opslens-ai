@@ -180,6 +180,14 @@ function isListAlert(sourceEventType?: string | null) {
   );
 }
 
+function isTemplateAlert(sourceEventType?: string | null) {
+  return (
+    sourceEventType === "template_archived" ||
+    sourceEventType === "template_deleted" ||
+    sourceEventType === "template_edited"
+  );
+}
+
 function propertySettingsUrl(portalId: string, sourceObjectTypeId?: string | null) {
   const type = encodeURIComponent(String(sourceObjectTypeId || "0-1"));
   return `https://app.hubspot.com/property-settings/${portalId}/properties?type=${type}`;
@@ -191,6 +199,10 @@ function workflowUrl(portalId: string, workflowId?: string | null) {
 
 function listUrl(portalId: string, listId?: string | null) {
   return `https://app.hubspot.com/contacts/${portalId}/objectLists/${listId}/filters`;
+}
+
+function templateUrl(portalId: string, templateId?: string | null) {
+  return `https://app.hubspot.com/email/${portalId}/edit/${templateId}/content`;
 }
 
 function StatusMetric({
@@ -258,6 +270,19 @@ function HubSpotLinks({
       links.push({
         label: "Open list",
         url: listUrl(portalId, alert.sourceDependencyId),
+      });
+    }
+    if (alert.impactedWorkflowId) {
+      links.push({
+        label: "Open workflow",
+        url: workflowUrl(portalId, alert.impactedWorkflowId),
+      });
+    }
+  } else if (isTemplateAlert(alert.sourceEventType)) {
+    if (alert.sourceDependencyId) {
+      links.push({
+        label: "Open template",
+        url: templateUrl(portalId, alert.sourceDependencyId),
       });
     }
     if (alert.impactedWorkflowId) {

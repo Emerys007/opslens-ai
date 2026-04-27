@@ -59,7 +59,7 @@ type MonitoringCoverageResponse = {
   categories?: MonitoringCategory[];
 };
 
-type ExclusionType = "workflow" | "property" | "list";
+type ExclusionType = "workflow" | "property" | "list" | "template";
 
 type MonitoringExclusion = {
   id: number;
@@ -90,6 +90,13 @@ type ListPickerOption = {
   isArchived: boolean;
 };
 
+type TemplatePickerOption = {
+  id: string;
+  name: string;
+  subject?: string;
+  isArchived: boolean;
+};
+
 const CATEGORY_LABELS: Record<string, string> = {
   property_archived: "Archived properties",
   property_deleted: "Deleted properties",
@@ -100,6 +107,9 @@ const CATEGORY_LABELS: Record<string, string> = {
   list_archived: "Archived lists",
   list_deleted: "Deleted lists",
   list_criteria_changed: "List criteria changes",
+  template_archived: "Archived email templates",
+  template_deleted: "Deleted email templates",
+  template_edited: "Edited email templates",
 };
 
 const COVERAGE_CATEGORY_GROUPS: Array<{ label: string; names: string[] }> = [
@@ -119,6 +129,10 @@ const COVERAGE_CATEGORY_GROUPS: Array<{ label: string; names: string[] }> = [
   {
     label: "List changes",
     names: ["list_archived", "list_deleted", "list_criteria_changed"],
+  },
+  {
+    label: "Email template changes",
+    names: ["template_archived", "template_deleted", "template_edited"],
   },
 ];
 
@@ -280,6 +294,14 @@ function listOptionLabel(list: ListPickerOption) {
   return `${name} (${list.id}, ${status})`;
 }
 
+function templateOptionLabel(template: TemplatePickerOption) {
+  const name = String(template.name || template.id).trim();
+  const subject = String(template.subject || "").trim();
+  const status = template.isArchived ? "archived" : "active";
+  const detail = subject ? `${template.id}, ${subject}, ${status}` : `${template.id}, ${status}`;
+  return `${name} (${detail})`;
+}
+
 function SectionHeader({
   eyebrow,
   title,
@@ -373,6 +395,7 @@ function SettingsPage({ context }: { context: any }) {
   const [exclusionsError, setExclusionsError] = useState("");
   const [workflowExclusions, setWorkflowExclusions] = useState<MonitoringExclusion[]>([]);
   const [listExclusions, setListExclusions] = useState<MonitoringExclusion[]>([]);
+  const [templateExclusions, setTemplateExclusions] = useState<MonitoringExclusion[]>([]);
   const [propertyExclusions, setPropertyExclusions] = useState<MonitoringExclusion[]>([]);
   const [workflowPickerOptions, setWorkflowPickerOptions] = useState<WorkflowPickerOption[]>([]);
   const [workflowPickerLoading, setWorkflowPickerLoading] = useState(false);
@@ -380,6 +403,9 @@ function SettingsPage({ context }: { context: any }) {
   const [listPickerOptions, setListPickerOptions] = useState<ListPickerOption[]>([]);
   const [listPickerLoading, setListPickerLoading] = useState(false);
   const [listPickerError, setListPickerError] = useState("");
+  const [templatePickerOptions, setTemplatePickerOptions] = useState<TemplatePickerOption[]>([]);
+  const [templatePickerLoading, setTemplatePickerLoading] = useState(false);
+  const [templatePickerError, setTemplatePickerError] = useState("");
   const [propertyPickerOptions, setPropertyPickerOptions] = useState<PropertyPickerOption[]>([]);
   const [propertyPickerLoading, setPropertyPickerLoading] = useState(false);
   const [propertyPickerError, setPropertyPickerError] = useState("");
@@ -387,6 +413,8 @@ function SettingsPage({ context }: { context: any }) {
   const [workflowExclusionReason, setWorkflowExclusionReason] = useState("");
   const [listExclusionId, setListExclusionId] = useState("");
   const [listExclusionReason, setListExclusionReason] = useState("");
+  const [templateExclusionId, setTemplateExclusionId] = useState("");
+  const [templateExclusionReason, setTemplateExclusionReason] = useState("");
   const [propertyExclusionId, setPropertyExclusionId] = useState("");
   const [propertyExclusionObjectTypeId, setPropertyExclusionObjectTypeId] = useState("0-1");
   const [propertyExclusionReason, setPropertyExclusionReason] = useState("");
@@ -410,6 +438,10 @@ function SettingsPage({ context }: { context: any }) {
   );
   const listsUrl = useMemo(
     () => buildUrl(`${DASHBOARD_API_BASE}/lists`, { portalId }),
+    [portalId]
+  );
+  const templatesUrl = useMemo(
+    () => buildUrl(`${DASHBOARD_API_BASE}/templates`, { portalId }),
     [portalId]
   );
   const propertiesUrl = useMemo(
@@ -438,6 +470,7 @@ function SettingsPage({ context }: { context: any }) {
   const monitoringCoverageTitle = `Monitoring coverage (${enabledCategoryCount} enabled / ${coverageCategoryCount})`;
   const excludedWorkflowsTitle = `Excluded workflows (${workflowExclusions.length})`;
   const excludedListsTitle = `Excluded lists (${listExclusions.length})`;
+  const excludedTemplatesTitle = `Excluded templates (${templateExclusions.length})`;
   const excludedPropertiesTitle = `Excluded properties (${propertyExclusions.length})`;
   const workflowSelectOptions = [
     {
@@ -459,6 +492,18 @@ function SettingsPage({ context }: { context: any }) {
     ...listPickerOptions.map((list) => ({
       label: listOptionLabel(list),
       value: list.id,
+    })),
+  ];
+  const templateSelectOptions = [
+    {
+      label: templatePickerLoading
+        ? "Loading monitored email templates..."
+        : "Select an email template",
+      value: "",
+    },
+    ...templatePickerOptions.map((template) => ({
+      label: templateOptionLabel(template),
+      value: template.id,
     })),
   ];
   const propertySelectOptions = [
@@ -534,7 +579,8 @@ function SettingsPage({ context }: { context: any }) {
     loadExclusions();
     loadWorkflowPickerOptions();
     loadListPickerOptions();
-  }, [coverageUrl, listsUrl, portalId, workflowsUrl]);
+    loadTemplatePickerOptions();
+  }, [coverageUrl, listsUrl, portalId, templatesUrl, workflowsUrl]);
 
   useEffect(() => {
     if (!portalId || !propertyExclusionObjectTypeId) {
@@ -640,20 +686,25 @@ function SettingsPage({ context }: { context: any }) {
     setExclusionsError("");
 
     try {
-      const [workflowResponse, listResponse, propertyResponse] = await Promise.all([
-        hubspot.fetch(exclusionsUrl("workflow"), {
-          method: "GET",
-          timeout: 15000,
-        }),
-        hubspot.fetch(exclusionsUrl("list"), {
-          method: "GET",
-          timeout: 15000,
-        }),
-        hubspot.fetch(exclusionsUrl("property"), {
-          method: "GET",
-          timeout: 15000,
-        }),
-      ]);
+      const [workflowResponse, listResponse, templateResponse, propertyResponse] =
+        await Promise.all([
+          hubspot.fetch(exclusionsUrl("workflow"), {
+            method: "GET",
+            timeout: 15000,
+          }),
+          hubspot.fetch(exclusionsUrl("list"), {
+            method: "GET",
+            timeout: 15000,
+          }),
+          hubspot.fetch(exclusionsUrl("template"), {
+            method: "GET",
+            timeout: 15000,
+          }),
+          hubspot.fetch(exclusionsUrl("property"), {
+            method: "GET",
+            timeout: 15000,
+          }),
+        ]);
 
       if (!workflowResponse.ok) {
         throw new Error(
@@ -662,6 +713,11 @@ function SettingsPage({ context }: { context: any }) {
       }
       if (!listResponse.ok) {
         throw new Error(`List exclusions returned status ${listResponse.status}`);
+      }
+      if (!templateResponse.ok) {
+        throw new Error(
+          `Template exclusions returned status ${templateResponse.status}`
+        );
       }
       if (!propertyResponse.ok) {
         throw new Error(
@@ -674,6 +730,9 @@ function SettingsPage({ context }: { context: any }) {
       );
       setListExclusions(
         ((await listResponse.json()) as MonitoringExclusion[]) ?? []
+      );
+      setTemplateExclusions(
+        ((await templateResponse.json()) as MonitoringExclusion[]) ?? []
       );
       setPropertyExclusions(
         ((await propertyResponse.json()) as MonitoringExclusion[]) ?? []
@@ -753,6 +812,42 @@ function SettingsPage({ context }: { context: any }) {
       setListPickerError(message);
     } finally {
       setListPickerLoading(false);
+    }
+  }
+
+  async function loadTemplatePickerOptions() {
+    if (!portalId) {
+      return;
+    }
+
+    setTemplatePickerLoading(true);
+    setTemplatePickerError("");
+
+    try {
+      const response = await hubspot.fetch(templatesUrl, {
+        method: "GET",
+        timeout: 15000,
+      });
+      if (!response.ok) {
+        throw new Error(`Backend returned status ${response.status}`);
+      }
+
+      const rows = ((await response.json()) as TemplatePickerOption[]) ?? [];
+      setTemplatePickerOptions(
+        rows
+          .map((row) => ({
+            id: String(row.id ?? "").trim(),
+            name: String(row.name ?? "").trim(),
+            subject: String(row.subject ?? "").trim(),
+            isArchived: row.isArchived === true,
+          }))
+          .filter((row) => row.id)
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setTemplatePickerError(message);
+    } finally {
+      setTemplatePickerLoading(false);
     }
   }
 
@@ -866,6 +961,43 @@ function SettingsPage({ context }: { context: any }) {
     }
   }
 
+  async function addTemplateExclusion() {
+    const id = templateExclusionId.trim();
+    if (!id) {
+      return;
+    }
+
+    setExclusionsSaving(true);
+    setExclusionsError("");
+
+    try {
+      const response = await hubspot.fetch(exclusionsUrl(), {
+        method: "POST",
+        body: {
+          type: "template",
+          id,
+          reason: templateExclusionReason.trim() || undefined,
+        },
+        timeout: 15000,
+      });
+      if (response.status === 409) {
+        throw new Error("This email template is already excluded.");
+      }
+      if (!response.ok) {
+        throw new Error(`Backend returned status ${response.status}`);
+      }
+
+      setTemplateExclusionId("");
+      setTemplateExclusionReason("");
+      await loadExclusions();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setExclusionsError(message);
+    } finally {
+      setExclusionsSaving(false);
+    }
+  }
+
   async function addPropertyExclusion() {
     const id = propertyExclusionId.trim();
     if (!id) {
@@ -907,6 +1039,7 @@ function SettingsPage({ context }: { context: any }) {
   async function removeExclusion(exclusion: MonitoringExclusion) {
     const previousWorkflows = workflowExclusions;
     const previousLists = listExclusions;
+    const previousTemplates = templateExclusions;
     const previousProperties = propertyExclusions;
     const url = buildUrl(
       `${DASHBOARD_API_BASE}/exclusions/${exclusion.id}`,
@@ -919,6 +1052,10 @@ function SettingsPage({ context }: { context: any }) {
       );
     } else if (exclusion.type === "list") {
       setListExclusions((rows) =>
+        rows.filter((row) => row.id !== exclusion.id)
+      );
+    } else if (exclusion.type === "template") {
+      setTemplateExclusions((rows) =>
         rows.filter((row) => row.id !== exclusion.id)
       );
     } else {
@@ -943,6 +1080,7 @@ function SettingsPage({ context }: { context: any }) {
     } catch (error) {
       setWorkflowExclusions(previousWorkflows);
       setListExclusions(previousLists);
+      setTemplateExclusions(previousTemplates);
       setPropertyExclusions(previousProperties);
       const message = error instanceof Error ? error.message : String(error);
       setExclusionsError(message);
@@ -1330,8 +1468,8 @@ function SettingsPage({ context }: { context: any }) {
 
             {coverageCategories.length > 0 ? (
               <Text variant="microcopy">
-                Tip: To stop alerts for a specific workflow, list, or property,
-                use the Excluded sections below.
+                Tip: To stop alerts for a specific workflow, list, email
+                template, or property, use the Excluded sections below.
               </Text>
             ) : null}
 
@@ -1573,6 +1711,119 @@ function SettingsPage({ context }: { context: any }) {
                     !listExclusionId.trim()
                   }
                   onClick={addListExclusion}
+                >
+                  Add exclusion
+                </Button>
+              </Flex>
+            </Flex>
+          </Flex>
+        </Tile>
+      </Accordion>
+
+      <Accordion title={excludedTemplatesTitle} size="md">
+        <Tile>
+          <Flex direction="column" gap="medium">
+            <SectionHeader
+              eyebrow="Exclusions"
+              title="Excluded email templates"
+              body="Email templates in this list will not generate alerts when archived, deleted, or edited."
+            />
+            <Divider />
+
+            {exclusionsLoading ? <Text>Loading exclusions...</Text> : null}
+
+            <Flex direction="column" gap="small">
+              {templateExclusions.length === 0 ? (
+                <Flex direction="column" gap="extra-small" align="center">
+                  <Text variant="microcopy">
+                    No excluded email templates yet.
+                  </Text>
+                  <Text variant="microcopy">
+                    Pick a monitored template below to suppress future template alerts.
+                  </Text>
+                </Flex>
+              ) : (
+                templateExclusions.map((exclusion) => (
+                  <Flex
+                    key={exclusionKey(exclusion)}
+                    direction="row"
+                    justify="between"
+                    align="center"
+                    gap="small"
+                    wrap
+                  >
+                    <Box flex={1}>
+                      <Flex direction="column" gap="extra-small">
+                        <Text format={{ fontWeight: "bold" }}>
+                          {exclusion.exclusionId}
+                        </Text>
+                        {exclusion.reason ? (
+                          <Text>{exclusion.reason}</Text>
+                        ) : null}
+                      </Flex>
+                    </Box>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      disabled={exclusionsSaving}
+                      onClick={() => removeExclusion(exclusion)}
+                    >
+                      Remove
+                    </Button>
+                  </Flex>
+                ))
+              )}
+            </Flex>
+
+            <Divider />
+
+            <Flex direction="column" gap="small">
+              <Flex direction="row" gap="small" align="start" wrap>
+                <Box flex={2}>
+                  <Select
+                    label="Email template"
+                    name="templateExclusionId"
+                    value={templateExclusionId}
+                    onChange={(value) =>
+                      setTemplateExclusionId(String(value ?? ""))
+                    }
+                    readOnly={
+                      exclusionsSaving ||
+                      templatePickerLoading ||
+                      templatePickerOptions.length === 0 ||
+                      !portalId
+                    }
+                    description="Choose from automated marketing emails OpsLens has already observed."
+                    error={Boolean(templatePickerError)}
+                    validationMessage={templatePickerError || undefined}
+                    options={templateSelectOptions}
+                  />
+                </Box>
+                <Box flex={1}>
+                  <Input
+                    label="Reason"
+                    name="templateExclusionReason"
+                    value={templateExclusionReason}
+                    type="text"
+                    onChange={(value) =>
+                      setTemplateExclusionReason(String(value ?? ""))
+                    }
+                    readOnly={exclusionsSaving || !portalId}
+                    description="Optional note for future admins."
+                  />
+                </Box>
+              </Flex>
+              <Flex direction="row" justify="end" gap="small">
+                <Button
+                  type="button"
+                  variant="primary"
+                  disabled={
+                    exclusionsSaving ||
+                    templatePickerLoading ||
+                    !portalId ||
+                    !templateExclusionId.trim()
+                  }
+                  onClick={addTemplateExclusion}
                 >
                   Add exclusion
                 </Button>

@@ -9,11 +9,14 @@ from sqlalchemy import case, desc, func, select
 from app.db import get_session, init_db
 from app.models.alert import STATUS_OPEN, STATUS_RESOLVED, Alert
 from app.models.alert_event import AlertEvent
+from app.models.email_template_change_event import EmailTemplateChangeEvent
+from app.models.email_template_snapshot import EmailTemplateSnapshot
 from app.models.list_change_event import ListChangeEvent
 from app.models.list_snapshot import ListSnapshot
 from app.models.monitoring_exclusion import (
     EXCLUSION_TYPE_LIST,
     EXCLUSION_TYPE_PROPERTY,
+    EXCLUSION_TYPE_TEMPLATE,
     EXCLUSION_TYPE_WORKFLOW,
     MonitoringExclusion,
 )
@@ -49,6 +52,7 @@ VALID_EXCLUSION_TYPES = (
     EXCLUSION_TYPE_WORKFLOW,
     EXCLUSION_TYPE_PROPERTY,
     EXCLUSION_TYPE_LIST,
+    EXCLUSION_TYPE_TEMPLATE,
 )
 VALID_ACTION_PAGE_SIZES = (3, 5, 10, 25, 50)
 HUBSPOT_PROPERTIES_URL = "https://api.hubapi.com/crm/v3/properties/{object_type}"
@@ -265,9 +269,21 @@ def _action_summary(
         _latest_timestamp(session, portal_id, WorkflowSnapshot, WorkflowSnapshot.last_seen_at),
         _latest_timestamp(session, portal_id, PropertySnapshot, PropertySnapshot.last_seen_at),
         _latest_timestamp(session, portal_id, ListSnapshot, ListSnapshot.last_seen_at),
+        _latest_timestamp(
+            session,
+            portal_id,
+            EmailTemplateSnapshot,
+            EmailTemplateSnapshot.last_seen_at,
+        ),
         _latest_timestamp(session, portal_id, WorkflowChangeEvent, WorkflowChangeEvent.detected_at),
         _latest_timestamp(session, portal_id, PropertyChangeEvent, PropertyChangeEvent.detected_at),
         _latest_timestamp(session, portal_id, ListChangeEvent, ListChangeEvent.detected_at),
+        _latest_timestamp(
+            session,
+            portal_id,
+            EmailTemplateChangeEvent,
+            EmailTemplateChangeEvent.detected_at,
+        ),
     )
 
     return {
@@ -403,6 +419,16 @@ def _list_picker_payload(row: ListSnapshot) -> dict:
     return {
         "id": list_id,
         "name": str(row.list_name or "").strip() or list_id,
+        "isArchived": bool(row.is_archived),
+    }
+
+
+def _template_picker_payload(row: EmailTemplateSnapshot) -> dict:
+    template_id = str(row.template_id or "").strip()
+    return {
+        "id": template_id,
+        "name": str(row.template_name or "").strip() or template_id,
+        "subject": str(row.subject or "").strip(),
         "isArchived": bool(row.is_archived),
     }
 
@@ -631,6 +657,32 @@ def dashboard_lists(request: Request):
         session.close()
 
 
+@router.get("/templates")
+def dashboard_templates(request: Request):
+    portal_id = str(request.query_params.get("portalId", "")).strip()
+    if not portal_id:
+        raise HTTPException(status_code=400, detail="portalId is required.")
+
+    db_ready = init_db()
+    session = get_session()
+    if not db_ready or session is None:
+        return []
+
+    try:
+        stmt = (
+            select(EmailTemplateSnapshot)
+            .where(EmailTemplateSnapshot.portal_id == portal_id)
+            .order_by(
+                func.lower(EmailTemplateSnapshot.template_name),
+                EmailTemplateSnapshot.template_id,
+            )
+            .limit(200)
+        )
+        return [_template_picker_payload(row) for row in session.execute(stmt).scalars().all()]
+    finally:
+        session.close()
+
+
 @router.get("/properties")
 def dashboard_properties(request: Request):
     portal_id = str(request.query_params.get("portalId", "")).strip()
@@ -778,7 +830,7 @@ def create_monitoring_exclusion(payload: dict, request: Request):
         )
     if exclusion_type == EXCLUSION_TYPE_WORKFLOW:
         object_type_id = None
-    if exclusion_type == EXCLUSION_TYPE_LIST:
+    if exclusion_type in (EXCLUSION_TYPE_LIST, EXCLUSION_TYPE_TEMPLATE):
         object_type_id = None
 
     db_ready = init_db()

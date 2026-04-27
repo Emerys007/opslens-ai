@@ -21,6 +21,8 @@ from app.models.alert import (
     SEVERITY_MEDIUM,
     SOURCE_EVENT_LIST_ARCHIVED,
     SOURCE_EVENT_LIST_CRITERIA_CHANGED,
+    SOURCE_EVENT_TEMPLATE_ARCHIVED,
+    SOURCE_EVENT_TEMPLATE_EDITED,
     SOURCE_EVENT_PROPERTY_ARCHIVED,
     SOURCE_EVENT_PROPERTY_DELETED,
     SOURCE_EVENT_PROPERTY_RENAMED,
@@ -32,6 +34,13 @@ from app.models.alert import (
     STATUS_RESOLVED,
     Alert,
 )
+from app.models.email_template_change_event import (
+    TEMPLATE_EVENT_ARCHIVED,
+    TEMPLATE_EVENT_EDITED,
+    TEMPLATE_EVENT_UNARCHIVED,
+    EmailTemplateChangeEvent,
+)
+from app.models.email_template_snapshot import EmailTemplateSnapshot
 from app.models.list_change_event import (
     LIST_EVENT_ARCHIVED,
     LIST_EVENT_CRITERIA_CHANGED,
@@ -42,6 +51,7 @@ from app.models.list_snapshot import ListSnapshot
 from app.models.monitoring_exclusion import (
     EXCLUSION_TYPE_LIST,
     EXCLUSION_TYPE_PROPERTY,
+    EXCLUSION_TYPE_TEMPLATE,
     EXCLUSION_TYPE_WORKFLOW,
     MonitoringExclusion,
 )
@@ -67,6 +77,7 @@ from app.models.workflow_change_event import (
 from app.models.workflow_dependency import WorkflowDependency
 from app.models.workflow_snapshot import WorkflowSnapshot
 from app.services.alert_correlation import (
+    correlate_email_template_change_event,
     correlate_list_change_event,
     correlate_property_change_event,
     correlate_unprocessed_events,
@@ -74,6 +85,7 @@ from app.services.alert_correlation import (
 )
 from app.services.monitoring_config import (
     MONITORING_CATEGORY_LIST_ARCHIVED,
+    MONITORING_CATEGORY_TEMPLATE_ARCHIVED,
     MONITORING_CATEGORY_PROPERTY_ARCHIVED,
     MONITORING_CATEGORY_PROPERTY_TYPE_CHANGED,
 )
@@ -176,6 +188,27 @@ class _BaseDbCase(unittest.TestCase):
             )
         )
 
+    def _seed_template_snapshot(
+        self,
+        session,
+        *,
+        template_id: str,
+        template_name: str = "Welcome email",
+        is_archived: bool = False,
+    ) -> None:
+        session.add(
+            EmailTemplateSnapshot(
+                portal_id=self.PORTAL_ID,
+                template_id=template_id,
+                template_name=template_name,
+                template_type="AUTOMATED_EMAIL",
+                subject="Welcome",
+                is_archived=is_archived,
+                definition_json="{}",
+                definition_hash="hash",
+            )
+        )
+
     def _seed_dependency(
         self,
         session,
@@ -212,6 +245,25 @@ class _BaseDbCase(unittest.TestCase):
                 dependency_type="list",
                 dependency_id=list_id,
                 location=location or "enrollmentCriteria.listFilterBranches[0]",
+                revision_id="1",
+            )
+        )
+
+    def _seed_template_dependency(
+        self,
+        session,
+        *,
+        workflow_id: str,
+        template_id: str,
+        location: str = "",
+    ) -> None:
+        session.add(
+            WorkflowDependency(
+                portal_id=self.PORTAL_ID,
+                workflow_id=workflow_id,
+                dependency_type="email_template",
+                dependency_id=template_id,
+                location=location or "actions[0].fields.email_id",
                 revision_id="1",
             )
         )
@@ -283,6 +335,24 @@ class _BaseDbCase(unittest.TestCase):
             list_id=list_id,
             event_type=event_type,
             payload_json=json.dumps(payload or {"list_id": list_id}),
+        )
+        session.add(event)
+        session.flush()
+        return event
+
+    def _seed_template_event(
+        self,
+        session,
+        *,
+        template_id: str,
+        event_type: str,
+        payload: dict | None = None,
+    ) -> EmailTemplateChangeEvent:
+        event = EmailTemplateChangeEvent(
+            portal_id=self.PORTAL_ID,
+            template_id=template_id,
+            event_type=event_type,
+            payload_json=json.dumps(payload or {"template_id": template_id}),
         )
         session.add(event)
         session.flush()
@@ -861,6 +931,202 @@ class ListCorrelationTests(_BaseDbCase):
             session.commit()
 
             self.assertEqual(0, len(alerts))
+        finally:
+            session.close()
+
+
+# ===========================================================================
+# Email template correlation
+# ===========================================================================
+
+
+class EmailTemplateCorrelationTests(_BaseDbCase):
+    def test_template_archived_emits_alert_per_impacted_workflow(self) -> None:
+        session = self._session()
+        try:
+            self._seed_template_snapshot(
+                session,
+                template_id="9001",
+                template_name="Welcome automation",
+                is_archived=True,
+            )
+            self._seed_workflow_snapshot(session, workflow_id="100", name="Lead Nurture")
+            self._seed_workflow_snapshot(session, workflow_id="200", name="Onboarding")
+            self._seed_template_dependency(
+                session,
+                workflow_id="100",
+                template_id="9001",
+                location="actions[1].fields.email_id",
+            )
+            self._seed_template_dependency(
+                session,
+                workflow_id="200",
+                template_id="9001",
+                location="actions[3].fields.email_content_id",
+            )
+            event = self._seed_template_event(
+                session,
+                template_id="9001",
+                event_type=TEMPLATE_EVENT_ARCHIVED,
+                payload={"template_id": "9001", "template_name": "Welcome automation"},
+            )
+            session.commit()
+
+            alerts = correlate_email_template_change_event(session, event)
+            session.commit()
+
+            self.assertEqual(2, len(alerts))
+            for alert in alerts:
+                self.assertEqual(SEVERITY_HIGH, alert.severity)
+                self.assertEqual(SOURCE_EVENT_TEMPLATE_ARCHIVED, alert.source_event_type)
+                self.assertEqual("email_template", alert.source_dependency_type)
+                self.assertEqual("9001", alert.source_dependency_id)
+                self.assertEqual(STATUS_OPEN, alert.status)
+                self.assertIn("archived", alert.title)
+
+            self.assertEqual(
+                ["100", "200"],
+                sorted(alert.impacted_workflow_id for alert in alerts),
+            )
+            summary_obj = json.loads(alerts[0].summary)
+            self.assertEqual("template_archived", summary_obj["kind"])
+            self.assertIn("dependency_locations", summary_obj["impact"])
+        finally:
+            session.close()
+
+    def test_template_archived_with_no_impacted_workflows_emits_no_alert(self) -> None:
+        session = self._session()
+        try:
+            self._seed_template_snapshot(session, template_id="9001", is_archived=True)
+            event = self._seed_template_event(
+                session,
+                template_id="9001",
+                event_type=TEMPLATE_EVENT_ARCHIVED,
+            )
+            session.commit()
+
+            alerts = correlate_email_template_change_event(session, event)
+            session.commit()
+
+            self.assertEqual(0, len(alerts))
+            self.assertEqual(0, len(self._all_alerts(session)))
+        finally:
+            session.close()
+
+    def test_template_archived_with_category_disabled_marks_processed_no_alert(
+        self,
+    ) -> None:
+        session = self._session()
+        try:
+            self._seed_monitoring_coverage(
+                session,
+                {
+                    MONITORING_CATEGORY_TEMPLATE_ARCHIVED: {
+                        "enabled": False,
+                        "severityOverride": None,
+                    }
+                },
+            )
+            self._seed_template_snapshot(session, template_id="9001", is_archived=True)
+            self._seed_workflow_snapshot(session, workflow_id="100", name="Lead Nurture")
+            self._seed_template_dependency(session, workflow_id="100", template_id="9001")
+            event = self._seed_template_event(
+                session,
+                template_id="9001",
+                event_type=TEMPLATE_EVENT_ARCHIVED,
+            )
+            event_id = event.id
+            session.commit()
+
+            alerts = correlate_email_template_change_event(session, event)
+            session.commit()
+
+            self.assertEqual(0, len(alerts))
+            self.assertEqual(0, len(self._all_alerts(session)))
+            refreshed = session.get(EmailTemplateChangeEvent, event_id)
+            self.assertIsNotNone(refreshed.processed_at)
+        finally:
+            session.close()
+
+    def test_template_archived_for_excluded_template_marks_processed_no_alert(
+        self,
+    ) -> None:
+        session = self._session()
+        try:
+            self._seed_monitoring_exclusion(
+                session,
+                exclusion_type=EXCLUSION_TYPE_TEMPLATE,
+                exclusion_id="9001",
+            )
+            self._seed_template_snapshot(session, template_id="9001", is_archived=True)
+            self._seed_workflow_snapshot(session, workflow_id="100", name="Lead Nurture")
+            self._seed_template_dependency(session, workflow_id="100", template_id="9001")
+            event = self._seed_template_event(
+                session,
+                template_id="9001",
+                event_type=TEMPLATE_EVENT_ARCHIVED,
+            )
+            event_id = event.id
+            session.commit()
+
+            alerts = correlate_email_template_change_event(session, event)
+            session.commit()
+
+            self.assertEqual(0, len(alerts))
+            self.assertEqual(0, len(self._all_alerts(session)))
+            refreshed = session.get(EmailTemplateChangeEvent, event_id)
+            self.assertIsNotNone(refreshed.processed_at)
+        finally:
+            session.close()
+
+    def test_template_edited_emits_medium_severity_alert(self) -> None:
+        session = self._session()
+        try:
+            self._seed_template_snapshot(
+                session,
+                template_id="9001",
+                template_name="Renewal notice",
+            )
+            self._seed_workflow_snapshot(session, workflow_id="100", name="Renewal")
+            self._seed_template_dependency(session, workflow_id="100", template_id="9001")
+            event = self._seed_template_event(
+                session,
+                template_id="9001",
+                event_type=TEMPLATE_EVENT_EDITED,
+            )
+            session.commit()
+
+            alerts = correlate_email_template_change_event(session, event)
+            session.commit()
+
+            self.assertEqual(1, len(alerts))
+            self.assertEqual(SEVERITY_MEDIUM, alerts[0].severity)
+            self.assertEqual(SOURCE_EVENT_TEMPLATE_EDITED, alerts[0].source_event_type)
+            self.assertIn("edited", alerts[0].title)
+        finally:
+            session.close()
+
+    def test_template_unarchived_emits_no_alert(self) -> None:
+        session = self._session()
+        try:
+            self._seed_template_snapshot(session, template_id="9001", is_archived=False)
+            self._seed_workflow_snapshot(session, workflow_id="100", name="Lead Nurture")
+            self._seed_template_dependency(session, workflow_id="100", template_id="9001")
+            event = self._seed_template_event(
+                session,
+                template_id="9001",
+                event_type=TEMPLATE_EVENT_UNARCHIVED,
+            )
+            session.commit()
+
+            summary = correlate_unprocessed_events(session)
+            session.commit()
+
+            self.assertEqual(1, summary["events_processed"])
+            self.assertEqual(0, summary["alerts_created"])
+            self.assertEqual(0, len(self._all_alerts(session)))
+            refreshed = session.get(EmailTemplateChangeEvent, event.id)
+            self.assertIsNotNone(refreshed.processed_at)
         finally:
             session.close()
 
