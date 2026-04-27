@@ -110,6 +110,8 @@ const CATEGORY_LABELS: Record<string, string> = {
   template_archived: "Archived email templates",
   template_deleted: "Deleted email templates",
   template_edited: "Edited email templates",
+  owner_deactivated: "Deactivated owners",
+  owner_deleted: "Deleted owners",
 };
 
 const COVERAGE_CATEGORY_GROUPS: Array<{ label: string; names: string[] }> = [
@@ -133,6 +135,10 @@ const COVERAGE_CATEGORY_GROUPS: Array<{ label: string; names: string[] }> = [
   {
     label: "Email template changes",
     names: ["template_archived", "template_deleted", "template_edited"],
+  },
+  {
+    label: "Owner changes",
+    names: ["owner_deactivated", "owner_deleted"],
   },
 ];
 

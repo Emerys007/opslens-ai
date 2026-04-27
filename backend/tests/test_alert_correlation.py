@@ -21,6 +21,8 @@ from app.models.alert import (
     SEVERITY_MEDIUM,
     SOURCE_EVENT_LIST_ARCHIVED,
     SOURCE_EVENT_LIST_CRITERIA_CHANGED,
+    SOURCE_EVENT_OWNER_DEACTIVATED,
+    SOURCE_EVENT_OWNER_DELETED,
     SOURCE_EVENT_TEMPLATE_ARCHIVED,
     SOURCE_EVENT_TEMPLATE_EDITED,
     SOURCE_EVENT_PROPERTY_ARCHIVED,
@@ -48,6 +50,13 @@ from app.models.list_change_event import (
     ListChangeEvent,
 )
 from app.models.list_snapshot import ListSnapshot
+from app.models.owner_change_event import (
+    OWNER_EVENT_DEACTIVATED,
+    OWNER_EVENT_DELETED,
+    OWNER_EVENT_REACTIVATED,
+    OwnerChangeEvent,
+)
+from app.models.owner_snapshot import OwnerSnapshot
 from app.models.monitoring_exclusion import (
     EXCLUSION_TYPE_LIST,
     EXCLUSION_TYPE_PROPERTY,
@@ -79,12 +88,14 @@ from app.models.workflow_snapshot import WorkflowSnapshot
 from app.services.alert_correlation import (
     correlate_email_template_change_event,
     correlate_list_change_event,
+    correlate_owner_change_event,
     correlate_property_change_event,
     correlate_unprocessed_events,
     correlate_workflow_change_event,
 )
 from app.services.monitoring_config import (
     MONITORING_CATEGORY_LIST_ARCHIVED,
+    MONITORING_CATEGORY_OWNER_DEACTIVATED,
     MONITORING_CATEGORY_TEMPLATE_ARCHIVED,
     MONITORING_CATEGORY_PROPERTY_ARCHIVED,
     MONITORING_CATEGORY_PROPERTY_TYPE_CHANGED,
@@ -209,6 +220,23 @@ class _BaseDbCase(unittest.TestCase):
             )
         )
 
+    def _seed_owner_snapshot(
+        self,
+        session,
+        *,
+        owner_id: str,
+        email: str = "owner@example.com",
+        is_active: bool = True,
+    ) -> None:
+        session.add(
+            OwnerSnapshot(
+                portal_id=self.PORTAL_ID,
+                owner_id=owner_id,
+                email=email,
+                is_active=is_active,
+            )
+        )
+
     def _seed_dependency(
         self,
         session,
@@ -264,6 +292,25 @@ class _BaseDbCase(unittest.TestCase):
                 dependency_type="email_template",
                 dependency_id=template_id,
                 location=location or "actions[0].fields.email_id",
+                revision_id="1",
+            )
+        )
+
+    def _seed_owner_dependency(
+        self,
+        session,
+        *,
+        workflow_id: str,
+        owner_id: str,
+        location: str = "",
+    ) -> None:
+        session.add(
+            WorkflowDependency(
+                portal_id=self.PORTAL_ID,
+                workflow_id=workflow_id,
+                dependency_type="owner",
+                dependency_id=owner_id,
+                location=location or "actions[0].fields.owner_id",
                 revision_id="1",
             )
         )
@@ -353,6 +400,24 @@ class _BaseDbCase(unittest.TestCase):
             template_id=template_id,
             event_type=event_type,
             payload_json=json.dumps(payload or {"template_id": template_id}),
+        )
+        session.add(event)
+        session.flush()
+        return event
+
+    def _seed_owner_event(
+        self,
+        session,
+        *,
+        owner_id: str,
+        event_type: str,
+        payload: dict | None = None,
+    ) -> OwnerChangeEvent:
+        event = OwnerChangeEvent(
+            portal_id=self.PORTAL_ID,
+            owner_id=owner_id,
+            event_type=event_type,
+            payload_json=json.dumps(payload or {"owner_id": owner_id}),
         )
         session.add(event)
         session.flush()
@@ -1126,6 +1191,178 @@ class EmailTemplateCorrelationTests(_BaseDbCase):
             self.assertEqual(0, summary["alerts_created"])
             self.assertEqual(0, len(self._all_alerts(session)))
             refreshed = session.get(EmailTemplateChangeEvent, event.id)
+            self.assertIsNotNone(refreshed.processed_at)
+        finally:
+            session.close()
+
+
+# ===========================================================================
+# Owner correlation
+# ===========================================================================
+
+
+class OwnerCorrelationTests(_BaseDbCase):
+    def test_owner_deactivated_emits_high_alert_per_impacted_workflow(self) -> None:
+        session = self._session()
+        try:
+            self._seed_owner_snapshot(
+                session,
+                owner_id="501",
+                email="inactive.owner@example.com",
+                is_active=False,
+            )
+            self._seed_workflow_snapshot(session, workflow_id="100", name="Lead Nurture")
+            self._seed_workflow_snapshot(session, workflow_id="200", name="Onboarding")
+            self._seed_owner_dependency(
+                session,
+                workflow_id="100",
+                owner_id="501",
+                location="actions[0].fields.owner_id",
+            )
+            self._seed_owner_dependency(
+                session,
+                workflow_id="200",
+                owner_id="501",
+                location="actions[2].fields.assignedOwnerId",
+            )
+            event = self._seed_owner_event(
+                session,
+                owner_id="501",
+                event_type=OWNER_EVENT_DEACTIVATED,
+                payload={"owner_id": "501", "email": "inactive.owner@example.com"},
+            )
+            session.commit()
+
+            alerts = correlate_owner_change_event(session, event)
+            session.commit()
+
+            self.assertEqual(2, len(alerts))
+            for alert in alerts:
+                self.assertEqual(SEVERITY_HIGH, alert.severity)
+                self.assertEqual(SOURCE_EVENT_OWNER_DEACTIVATED, alert.source_event_type)
+                self.assertEqual("owner", alert.source_dependency_type)
+                self.assertEqual("501", alert.source_dependency_id)
+                self.assertEqual(STATUS_OPEN, alert.status)
+                self.assertIn("deactivated", alert.title)
+
+            self.assertEqual(
+                ["100", "200"],
+                sorted(alert.impacted_workflow_id for alert in alerts),
+            )
+            summary_obj = json.loads(alerts[0].summary)
+            self.assertEqual("owner_deactivated", summary_obj["kind"])
+            self.assertIn("dependency_locations", summary_obj["impact"])
+        finally:
+            session.close()
+
+    def test_owner_deactivated_without_impacted_workflows_emits_medium_alert(
+        self,
+    ) -> None:
+        session = self._session()
+        try:
+            self._seed_owner_snapshot(
+                session,
+                owner_id="501",
+                email="inactive.owner@example.com",
+                is_active=False,
+            )
+            event = self._seed_owner_event(
+                session,
+                owner_id="501",
+                event_type=OWNER_EVENT_DEACTIVATED,
+            )
+            session.commit()
+
+            alerts = correlate_owner_change_event(session, event)
+            session.commit()
+
+            self.assertEqual(1, len(alerts))
+            self.assertEqual(SEVERITY_MEDIUM, alerts[0].severity)
+            self.assertIsNone(alerts[0].impacted_workflow_id)
+        finally:
+            session.close()
+
+    def test_owner_deleted_emits_high_alert_even_without_impacted_workflows(self) -> None:
+        session = self._session()
+        try:
+            self._seed_owner_snapshot(
+                session,
+                owner_id="501",
+                email="deleted.owner@example.com",
+                is_active=False,
+            )
+            event = self._seed_owner_event(
+                session,
+                owner_id="501",
+                event_type=OWNER_EVENT_DELETED,
+            )
+            session.commit()
+
+            alerts = correlate_owner_change_event(session, event)
+            session.commit()
+
+            self.assertEqual(1, len(alerts))
+            self.assertEqual(SEVERITY_HIGH, alerts[0].severity)
+            self.assertEqual(SOURCE_EVENT_OWNER_DELETED, alerts[0].source_event_type)
+            self.assertIsNone(alerts[0].impacted_workflow_id)
+        finally:
+            session.close()
+
+    def test_owner_deactivated_with_category_disabled_marks_processed_no_alert(
+        self,
+    ) -> None:
+        session = self._session()
+        try:
+            self._seed_monitoring_coverage(
+                session,
+                {
+                    MONITORING_CATEGORY_OWNER_DEACTIVATED: {
+                        "enabled": False,
+                        "severityOverride": None,
+                    }
+                },
+            )
+            self._seed_owner_snapshot(session, owner_id="501", is_active=False)
+            self._seed_workflow_snapshot(session, workflow_id="100", name="Lead Nurture")
+            self._seed_owner_dependency(session, workflow_id="100", owner_id="501")
+            event = self._seed_owner_event(
+                session,
+                owner_id="501",
+                event_type=OWNER_EVENT_DEACTIVATED,
+            )
+            event_id = event.id
+            session.commit()
+
+            alerts = correlate_owner_change_event(session, event)
+            session.commit()
+
+            self.assertEqual(0, len(alerts))
+            self.assertEqual(0, len(self._all_alerts(session)))
+            refreshed = session.get(OwnerChangeEvent, event_id)
+            self.assertIsNotNone(refreshed.processed_at)
+        finally:
+            session.close()
+
+    def test_owner_reactivated_emits_no_alert(self) -> None:
+        session = self._session()
+        try:
+            self._seed_owner_snapshot(session, owner_id="501", is_active=True)
+            self._seed_workflow_snapshot(session, workflow_id="100", name="Lead Nurture")
+            self._seed_owner_dependency(session, workflow_id="100", owner_id="501")
+            event = self._seed_owner_event(
+                session,
+                owner_id="501",
+                event_type=OWNER_EVENT_REACTIVATED,
+            )
+            session.commit()
+
+            summary = correlate_unprocessed_events(session)
+            session.commit()
+
+            self.assertEqual(1, summary["events_processed"])
+            self.assertEqual(0, summary["alerts_created"])
+            self.assertEqual(0, len(self._all_alerts(session)))
+            refreshed = session.get(OwnerChangeEvent, event.id)
             self.assertIsNotNone(refreshed.processed_at)
         finally:
             session.close()

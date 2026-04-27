@@ -65,7 +65,9 @@ _ACTION_FIELD_RULES: tuple[tuple[str, str], ...] = (
     ("list_id", DEPENDENCY_TYPE_LIST),
     ("static_list_id", DEPENDENCY_TYPE_LIST),
     ("owner_id", DEPENDENCY_TYPE_OWNER),
+    ("ownerId", DEPENDENCY_TYPE_OWNER),
     ("assigned_user_id", DEPENDENCY_TYPE_OWNER),
+    ("assignedOwnerId", DEPENDENCY_TYPE_OWNER),
 )
 
 # Same keys as a set, for O(1) "is this a recognised key?" checks

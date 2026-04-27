@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 from app.models.workflow_dependency import (
     DEPENDENCY_TYPE_EMAIL_TEMPLATE,
     DEPENDENCY_TYPE_LIST,
+    DEPENDENCY_TYPE_OWNER,
     DEPENDENCY_TYPE_PROPERTY,
     WorkflowDependency,
 )
@@ -305,6 +306,28 @@ def find_workflows_affected_by_email_template(
             WorkflowDependency.portal_id == portal_key,
             WorkflowDependency.dependency_type == DEPENDENCY_TYPE_EMAIL_TEMPLATE,
             WorkflowDependency.dependency_id == tid,
+        )
+        .all()
+    )
+    return _group_matches(session, portal_key, rows)
+
+
+def find_workflows_affected_by_owner(
+    session: Session,
+    portal_id: str,
+    owner_id: str,
+) -> list[dict[str, Any]]:
+    """Reverse query for owner/user dependencies."""
+    portal_key = str(portal_id or "").strip()
+    oid = str(owner_id or "").strip()
+    if not portal_key or not oid:
+        return []
+    rows = (
+        session.query(WorkflowDependency)
+        .filter(
+            WorkflowDependency.portal_id == portal_key,
+            WorkflowDependency.dependency_type == DEPENDENCY_TYPE_OWNER,
+            WorkflowDependency.dependency_id == oid,
         )
         .all()
     )

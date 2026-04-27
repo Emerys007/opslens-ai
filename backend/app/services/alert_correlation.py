@@ -44,6 +44,8 @@ from app.models.alert import (
     SOURCE_EVENT_LIST_ARCHIVED,
     SOURCE_EVENT_LIST_CRITERIA_CHANGED,
     SOURCE_EVENT_LIST_DELETED,
+    SOURCE_EVENT_OWNER_DEACTIVATED,
+    SOURCE_EVENT_OWNER_DELETED,
     SOURCE_EVENT_PROPERTY_ARCHIVED,
     SOURCE_EVENT_PROPERTY_DELETED,
     SOURCE_EVENT_PROPERTY_RENAMED,
@@ -56,6 +58,7 @@ from app.models.alert import (
     SOURCE_EVENT_WORKFLOW_EDITED,
     SOURCE_KIND_EMAIL_TEMPLATE,
     SOURCE_KIND_LIST,
+    SOURCE_KIND_OWNER,
     SOURCE_KIND_PROPERTY,
     SOURCE_KIND_WORKFLOW,
     STATUS_OPEN,
@@ -75,6 +78,12 @@ from app.models.list_change_event import (
     ListChangeEvent,
 )
 from app.models.list_snapshot import ListSnapshot
+from app.models.owner_change_event import (
+    OWNER_EVENT_DEACTIVATED,
+    OWNER_EVENT_DELETED,
+    OwnerChangeEvent,
+)
+from app.models.owner_snapshot import OwnerSnapshot
 from app.models.property_change_event import (
     PROPERTY_EVENT_ARCHIVED,
     PROPERTY_EVENT_DELETED,
@@ -94,6 +103,7 @@ from app.models.workflow_snapshot import WorkflowSnapshot
 from app.services.dependency_mapping import (
     find_workflows_affected_by_email_template,
     find_workflows_affected_by_list,
+    find_workflows_affected_by_owner,
     find_workflows_affected_by_property,
 )
 from app.services.monitoring_config import (
@@ -163,6 +173,16 @@ _TEMPLATE_EVENT_TO_SEVERITY: dict[str, str] = {
     TEMPLATE_EVENT_ARCHIVED: SEVERITY_HIGH,
     TEMPLATE_EVENT_DELETED: SEVERITY_HIGH,
     TEMPLATE_EVENT_EDITED: SEVERITY_MEDIUM,
+}
+
+_OWNER_EVENT_TO_SOURCE: dict[str, str | None] = {
+    OWNER_EVENT_DEACTIVATED: SOURCE_EVENT_OWNER_DEACTIVATED,
+    OWNER_EVENT_DELETED: SOURCE_EVENT_OWNER_DELETED,
+}
+
+_OWNER_EVENT_TO_SEVERITY: dict[str, str] = {
+    OWNER_EVENT_DEACTIVATED: SEVERITY_HIGH,
+    OWNER_EVENT_DELETED: SEVERITY_HIGH,
 }
 
 
@@ -307,6 +327,24 @@ def _lookup_template_name(
     if snap is None:
         return ""
     return (snap.template_name or "").strip()
+
+
+def _lookup_owner_email(
+    session: Session,
+    portal_id: str,
+    owner_id: str,
+) -> str:
+    snap = (
+        session.query(OwnerSnapshot)
+        .filter(
+            OwnerSnapshot.portal_id == portal_id,
+            OwnerSnapshot.owner_id == owner_id,
+        )
+        .one_or_none()
+    )
+    if snap is None:
+        return ""
+    return (snap.email or "").strip()
 
 
 def _lookup_dependency_locations(
@@ -851,6 +889,148 @@ def correlate_email_template_change_event(
 
 
 # ---------------------------------------------------------------------------
+# Owner correlator
+# ---------------------------------------------------------------------------
+
+
+def _build_owner_change_block(
+    event: OwnerChangeEvent,
+    *,
+    owner_email: str,
+) -> dict[str, Any]:
+    try:
+        payload = json.loads(event.payload_json or "{}")
+    except Exception:  # noqa: BLE001
+        payload = {}
+    block: dict[str, Any] = {
+        "owner_id": event.owner_id,
+        "email": owner_email or payload.get("email"),
+    }
+    if isinstance(payload, dict):
+        block.update({k: v for k, v in payload.items() if v is not None})
+    return {k: v for k, v in block.items() if v is not None}
+
+
+def correlate_owner_change_event(
+    session: Session,
+    event: OwnerChangeEvent,
+    *,
+    counters: dict[str, int] | None = None,
+) -> list[Alert]:
+    """Process one owner lifecycle event."""
+    counters = counters if counters is not None else {}
+    source_event_type = _OWNER_EVENT_TO_SOURCE.get(event.event_type)
+    if source_event_type is None:
+        return []
+
+    portal_id = event.portal_id
+    owner_id = event.owner_id
+    coverage = load_monitoring_coverage(session, portal_id)
+
+    if not is_category_enabled(coverage, source_event_type):
+        _mark_processed(event)
+        return []
+
+    owner_email = _lookup_owner_email(session, portal_id, owner_id)
+    display_name = owner_email or owner_id
+    impacted = find_workflows_affected_by_owner(session, portal_id, owner_id)
+    has_workflow_impact = bool(impacted)
+    default_severity = _OWNER_EVENT_TO_SEVERITY[event.event_type]
+    if (
+        source_event_type == SOURCE_EVENT_OWNER_DEACTIVATED
+        and not has_workflow_impact
+    ):
+        default_severity = SEVERITY_MEDIUM
+    severity = get_category_severity(coverage, source_event_type, default_severity)
+
+    change_block = _build_owner_change_block(event, owner_email=owner_email)
+    title_for_event_type = {
+        SOURCE_EVENT_OWNER_DEACTIVATED: f"Owner '{display_name}' deactivated",
+        SOURCE_EVENT_OWNER_DELETED: f"Owner '{display_name}' deleted",
+    }
+    base_title = title_for_event_type.get(
+        source_event_type,
+        f"Owner '{display_name}' changed",
+    )
+
+    alerts: list[Alert] = []
+    if not impacted:
+        summary_payload = {
+            "kind": source_event_type,
+            "portal_id": portal_id,
+            "change": change_block,
+            "impact": None,
+        }
+        alert = _upsert_alert(
+            session,
+            portal_id=portal_id,
+            severity=severity,
+            source_event_type=source_event_type,
+            source_event_id=event.id,
+            source_event_kind=SOURCE_KIND_OWNER,
+            source_dependency_type="owner",
+            source_dependency_id=owner_id,
+            source_object_type_id=None,
+            impacted_workflow_id=None,
+            impacted_workflow_name=None,
+            title=base_title,
+            summary_payload=summary_payload,
+            counters=counters,
+        )
+        return [alert]
+
+    n_workflows = len(impacted)
+    title = f"{base_title} — {n_workflows} workflow(s) affected"
+    for impact in impacted:
+        impacted_workflow_id = str(impact.get("workflow_id") or "")
+        impacted_workflow_name = str(impact.get("workflow_name") or "")
+        locations = _lookup_dependency_locations(
+            session,
+            portal_id=portal_id,
+            workflow_id=impacted_workflow_id,
+            dependency_type="owner",
+            dependency_id=owner_id,
+            object_type_id=None,
+        )
+        if not locations:
+            locations = [
+                str(loc.get("location") or "")
+                for loc in (impact.get("locations") or [])
+                if loc.get("location")
+            ]
+
+        summary_payload = {
+            "kind": source_event_type,
+            "portal_id": portal_id,
+            "change": change_block,
+            "impact": {
+                "workflow_id": impacted_workflow_id,
+                "workflow_name": impacted_workflow_name,
+                "dependency_locations": locations,
+            },
+        }
+
+        alert = _upsert_alert(
+            session,
+            portal_id=portal_id,
+            severity=severity,
+            source_event_type=source_event_type,
+            source_event_id=event.id,
+            source_event_kind=SOURCE_KIND_OWNER,
+            source_dependency_type="owner",
+            source_dependency_id=owner_id,
+            source_object_type_id=None,
+            impacted_workflow_id=impacted_workflow_id or None,
+            impacted_workflow_name=impacted_workflow_name or None,
+            title=title,
+            summary_payload=summary_payload,
+            counters=counters,
+        )
+        alerts.append(alert)
+    return alerts
+
+
+# ---------------------------------------------------------------------------
 # Workflow correlator
 # ---------------------------------------------------------------------------
 
@@ -1009,6 +1189,26 @@ def correlate_unprocessed_events(
         except Exception:  # noqa: BLE001
             logger.exception(
                 "alert_correlation.email_template_event_failed",
+                extra={"event_id": event.id, "portal_id": event.portal_id},
+            )
+            continue
+        event.processed_at = now
+        counters["events_processed"] += 1
+
+    # ------- Owner events
+    owner_events: list[OwnerChangeEvent] = (
+        session.query(OwnerChangeEvent)
+        .filter(OwnerChangeEvent.processed_at.is_(None))
+        .order_by(OwnerChangeEvent.id.asc())
+        .limit(batch_size)
+        .all()
+    )
+    for event in owner_events:
+        try:
+            correlate_owner_change_event(session, event, counters=counters)
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "alert_correlation.owner_event_failed",
                 extra={"event_id": event.id, "portal_id": event.portal_id},
             )
             continue

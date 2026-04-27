@@ -21,7 +21,8 @@
         "crm.schemas.companies.read",
         "crm.schemas.deals.read",
         "crm.lists.read",
-        "content"
+        "content",
+        "crm.objects.owners.read"
       ],
       "optionalScopes": [],
       "conditionallyRequiredScopes": []

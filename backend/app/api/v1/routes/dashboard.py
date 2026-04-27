@@ -20,6 +20,8 @@ from app.models.monitoring_exclusion import (
     EXCLUSION_TYPE_WORKFLOW,
     MonitoringExclusion,
 )
+from app.models.owner_change_event import OwnerChangeEvent
+from app.models.owner_snapshot import OwnerSnapshot
 from app.models.portal_setting import PortalSetting
 from app.models.property_change_event import PropertyChangeEvent
 from app.models.property_snapshot import PropertySnapshot
@@ -34,6 +36,9 @@ from app.services.monitoring_config import (
     merge_monitoring_coverage_update,
 )
 from app.services.alert_correlation import correlate_unprocessed_events
+from app.services.email_template_polling import poll_portal_email_templates
+from app.services.list_polling import poll_portal_lists
+from app.services.owner_polling import poll_portal_owners
 from app.services.property_polling import poll_portal_properties
 from app.services.portal_entitlements import get_portal_entitlement, portal_is_entitled
 from app.services.portal_settings import (
@@ -201,6 +206,8 @@ def _event_count_from_poll_summary(summary: dict) -> int:
             "typeChangedEvents",
             "renamedEvents",
             "criteriaChangedEvents",
+            "deactivatedEvents",
+            "reactivatedEvents",
         )
     )
 
@@ -275,6 +282,7 @@ def _action_summary(
             EmailTemplateSnapshot,
             EmailTemplateSnapshot.last_seen_at,
         ),
+        _latest_timestamp(session, portal_id, OwnerSnapshot, OwnerSnapshot.last_seen_at),
         _latest_timestamp(session, portal_id, WorkflowChangeEvent, WorkflowChangeEvent.detected_at),
         _latest_timestamp(session, portal_id, PropertyChangeEvent, PropertyChangeEvent.detected_at),
         _latest_timestamp(session, portal_id, ListChangeEvent, ListChangeEvent.detected_at),
@@ -284,6 +292,7 @@ def _action_summary(
             EmailTemplateChangeEvent,
             EmailTemplateChangeEvent.detected_at,
         ),
+        _latest_timestamp(session, portal_id, OwnerChangeEvent, OwnerChangeEvent.detected_at),
     )
 
     return {
@@ -593,11 +602,17 @@ def dashboard_poll_now(request: Request):
     try:
         workflow_summary = poll_portal_workflows(session, portal_id)
         property_summary = poll_portal_properties(session, portal_id)
+        list_summary = poll_portal_lists(session, portal_id)
+        template_summary = poll_portal_email_templates(session, portal_id)
+        owner_summary = poll_portal_owners(session, portal_id)
         correlation_summary = correlate_unprocessed_events(session)
         return {
             "status": "ok",
             "eventsDetected": _event_count_from_poll_summary(workflow_summary)
-            + _event_count_from_poll_summary(property_summary),
+            + _event_count_from_poll_summary(property_summary)
+            + _event_count_from_poll_summary(list_summary)
+            + _event_count_from_poll_summary(template_summary)
+            + _event_count_from_poll_summary(owner_summary),
             "alertsCreated": int(correlation_summary.get("alerts_created") or 0),
         }
     except Exception:

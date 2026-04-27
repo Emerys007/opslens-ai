@@ -54,6 +54,8 @@ SOURCE_EVENT_LIST_CRITERIA_CHANGED = "list_criteria_changed"
 SOURCE_EVENT_TEMPLATE_ARCHIVED = "template_archived"
 SOURCE_EVENT_TEMPLATE_DELETED = "template_deleted"
 SOURCE_EVENT_TEMPLATE_EDITED = "template_edited"
+SOURCE_EVENT_OWNER_DEACTIVATED = "owner_deactivated"
+SOURCE_EVENT_OWNER_DELETED = "owner_deleted"
 
 
 # ---------------------------------------------------------------------------
@@ -64,6 +66,7 @@ SOURCE_KIND_WORKFLOW = "workflow_change_event"
 SOURCE_KIND_PROPERTY = "property_change_event"
 SOURCE_KIND_LIST = "list_change_event"
 SOURCE_KIND_EMAIL_TEMPLATE = "email_template_change_event"
+SOURCE_KIND_OWNER = "owner_change_event"
 
 
 class Alert(Base):

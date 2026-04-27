@@ -188,6 +188,13 @@ function isTemplateAlert(sourceEventType?: string | null) {
   );
 }
 
+function isOwnerAlert(sourceEventType?: string | null) {
+  return (
+    sourceEventType === "owner_deactivated" ||
+    sourceEventType === "owner_deleted"
+  );
+}
+
 function propertySettingsUrl(portalId: string, sourceObjectTypeId?: string | null) {
   const type = encodeURIComponent(String(sourceObjectTypeId || "0-1"));
   return `https://app.hubspot.com/property-settings/${portalId}/properties?type=${type}`;
@@ -203,6 +210,10 @@ function listUrl(portalId: string, listId?: string | null) {
 
 function templateUrl(portalId: string, templateId?: string | null) {
   return `https://app.hubspot.com/email/${portalId}/edit/${templateId}/content`;
+}
+
+function usersSettingsUrl(portalId: string) {
+  return `https://app.hubspot.com/settings/${portalId}/users`;
 }
 
 function StatusMetric({
@@ -285,6 +296,17 @@ function HubSpotLinks({
         url: templateUrl(portalId, alert.sourceDependencyId),
       });
     }
+    if (alert.impactedWorkflowId) {
+      links.push({
+        label: "Open workflow",
+        url: workflowUrl(portalId, alert.impactedWorkflowId),
+      });
+    }
+  } else if (isOwnerAlert(alert.sourceEventType)) {
+    links.push({
+      label: "Open user settings",
+      url: usersSettingsUrl(portalId),
+    });
     if (alert.impactedWorkflowId) {
       links.push({
         label: "Open workflow",

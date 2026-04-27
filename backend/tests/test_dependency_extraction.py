@@ -148,13 +148,21 @@ class ExtractDependenciesTests(unittest.TestCase):
                     "actionTypeId": "0-77",
                     "fields": {"owner_id": "owner-99"},
                 },
+                {
+                    "actionId": "2",
+                    "actionTypeId": "0-77",
+                    "fields": {"assignedOwnerId": "owner-100"},
+                },
             ],
         }
 
         deps = extract_dependencies(definition)
         owners = _by_type(deps, "owner")
-        self.assertEqual(1, len(owners))
-        self.assertEqual("owner-99", owners[0]["dependency_id"])
+        self.assertEqual(2, len(owners))
+        self.assertEqual(
+            {"owner-99", "owner-100"},
+            {owner["dependency_id"] for owner in owners},
+        )
 
     def test_personalization_token_in_action_text(self) -> None:
         definition = {

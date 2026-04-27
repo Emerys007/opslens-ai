@@ -32,6 +32,7 @@ REQUIRED_HUBSPOT_SCOPES = (
     "crm.schemas.deals.read",
     "crm.lists.read",
     "content",
+    "crm.objects.owners.read",
 )
 
 

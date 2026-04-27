@@ -777,8 +777,24 @@ class DashboardEndpointTests(unittest.TestCase):
                 },
             ) as property_mock,
             patch(
+                "app.api.v1.routes.dashboard.poll_portal_lists",
+                return_value={
+                    "status": "ok",
+                    "archivedEvents": 1,
+                    "criteriaChangedEvents": 1,
+                },
+            ) as list_mock,
+            patch(
+                "app.api.v1.routes.dashboard.poll_portal_email_templates",
+                return_value={"status": "ok", "editedEvents": 1},
+            ) as template_mock,
+            patch(
+                "app.api.v1.routes.dashboard.poll_portal_owners",
+                return_value={"status": "ok", "deactivatedEvents": 1},
+            ) as owner_mock,
+            patch(
                 "app.api.v1.routes.dashboard.correlate_unprocessed_events",
-                return_value={"alerts_created": 3},
+                return_value={"alerts_created": 6},
             ) as correlation_mock,
         ):
             response = self.client.post(
@@ -787,14 +803,20 @@ class DashboardEndpointTests(unittest.TestCase):
 
         self.assertEqual(200, response.status_code)
         self.assertEqual(
-            {"status": "ok", "eventsDetected": 5, "alertsCreated": 3},
+            {"status": "ok", "eventsDetected": 9, "alertsCreated": 6},
             response.json(),
         )
         workflow_mock.assert_called_once()
         property_mock.assert_called_once()
+        list_mock.assert_called_once()
+        template_mock.assert_called_once()
+        owner_mock.assert_called_once()
         correlation_mock.assert_called_once()
         self.assertEqual(self.PORTAL_ID, workflow_mock.call_args.args[1])
         self.assertEqual(self.PORTAL_ID, property_mock.call_args.args[1])
+        self.assertEqual(self.PORTAL_ID, list_mock.call_args.args[1])
+        self.assertEqual(self.PORTAL_ID, template_mock.call_args.args[1])
+        self.assertEqual(self.PORTAL_ID, owner_mock.call_args.args[1])
 
     def test_poll_now_endpoint_returns_429_when_called_twice_within_30s(self) -> None:
         with (
@@ -804,6 +826,18 @@ class DashboardEndpointTests(unittest.TestCase):
             ),
             patch(
                 "app.api.v1.routes.dashboard.poll_portal_properties",
+                return_value={"status": "ok"},
+            ),
+            patch(
+                "app.api.v1.routes.dashboard.poll_portal_lists",
+                return_value={"status": "ok"},
+            ),
+            patch(
+                "app.api.v1.routes.dashboard.poll_portal_email_templates",
+                return_value={"status": "ok"},
+            ),
+            patch(
+                "app.api.v1.routes.dashboard.poll_portal_owners",
                 return_value={"status": "ok"},
             ),
             patch(
@@ -833,6 +867,18 @@ class DashboardEndpointTests(unittest.TestCase):
             ) as workflow_mock,
             patch(
                 "app.api.v1.routes.dashboard.poll_portal_properties",
+                return_value={"status": "ok"},
+            ),
+            patch(
+                "app.api.v1.routes.dashboard.poll_portal_lists",
+                return_value={"status": "ok"},
+            ),
+            patch(
+                "app.api.v1.routes.dashboard.poll_portal_email_templates",
+                return_value={"status": "ok"},
+            ),
+            patch(
+                "app.api.v1.routes.dashboard.poll_portal_owners",
                 return_value={"status": "ok"},
             ),
             patch(
