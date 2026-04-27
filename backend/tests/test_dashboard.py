@@ -4,6 +4,7 @@ import os
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -19,6 +20,7 @@ from app.models.alert import (
     Alert,
 )
 from app.models.portal_setting import PortalSetting
+from app.models.workflow_snapshot import WorkflowSnapshot
 
 
 SEVERITY_CRITICAL = "critical"
@@ -123,6 +125,26 @@ class DashboardEndpointTests(unittest.TestCase):
 
     def _action_titles(self, summary: dict) -> list[str]:
         return [row["title"] for row in summary["actionRequired"]]
+
+    def _seed_workflow(
+        self,
+        session,
+        *,
+        portal_id: str | None = None,
+        workflow_id: str = "workflow-1",
+        name: str = "Workflow",
+        is_enabled: bool = True,
+    ) -> WorkflowSnapshot:
+        row = WorkflowSnapshot(
+            portal_id=portal_id or self.PORTAL_ID,
+            workflow_id=workflow_id,
+            name=name,
+            is_enabled=is_enabled,
+        )
+        session.add(row)
+        session.commit()
+        session.refresh(row)
+        return row
 
     def test_overview_default_action_page_returns_10_rows_and_total_count(
         self,
@@ -496,6 +518,116 @@ class DashboardEndpointTests(unittest.TestCase):
             first.json()["resolvedAtUtc"],
             second.json()["resolvedAtUtc"],
         )
+
+    def test_workflows_endpoint_returns_sorted_rows_capped_at_200(self) -> None:
+        session = self._session()
+        try:
+            for index in range(205):
+                self._seed_workflow(
+                    session,
+                    workflow_id=f"workflow-{index:03d}",
+                    name=f"Workflow {205 - index:03d}",
+                    is_enabled=index % 2 == 0,
+                )
+            self._seed_workflow(
+                session,
+                portal_id=self.OTHER_PORTAL_ID,
+                workflow_id="other-workflow",
+                name="A different portal",
+            )
+        finally:
+            session.close()
+
+        response = self.client.get(
+            f"/api/v1/dashboard/workflows?portalId={self.PORTAL_ID}"
+        )
+
+        self.assertEqual(200, response.status_code)
+        payload = response.json()
+        self.assertEqual(200, len(payload))
+        self.assertEqual("Workflow 001", payload[0]["name"])
+        self.assertEqual("Workflow 200", payload[-1]["name"])
+        self.assertEqual({"id", "name", "isEnabled"}, set(payload[0].keys()))
+        self.assertNotIn("other-workflow", {row["id"] for row in payload})
+
+    def test_workflows_endpoint_returns_empty_array_without_rows(self) -> None:
+        response = self.client.get(
+            f"/api/v1/dashboard/workflows?portalId={self.PORTAL_ID}"
+        )
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual([], response.json())
+
+    def test_properties_endpoint_returns_shape_when_hubspot_api_succeeds(self) -> None:
+        hubspot_payload = {
+            "results": [
+                {"name": "z_internal", "label": "Zeta", "type": "string"},
+                {"name": "lead_source", "label": "Lead Source", "type": "enumeration"},
+            ]
+        }
+
+        with (
+            patch(
+                "app.api.v1.routes.dashboard.get_portal_access_token",
+                return_value="access-token",
+            ) as token_mock,
+            patch(
+                "app.api.v1.routes.dashboard._hubspot_get_json",
+                return_value=hubspot_payload,
+            ) as get_json_mock,
+        ):
+            response = self.client.get(
+                f"/api/v1/dashboard/properties?portalId={self.PORTAL_ID}&objectTypeId=0-1"
+            )
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(
+            [
+                {
+                    "name": "lead_source",
+                    "label": "Lead Source",
+                    "type": "enumeration",
+                },
+                {"name": "z_internal", "label": "Zeta", "type": "string"},
+            ],
+            response.json(),
+        )
+        token_mock.assert_called_once()
+        called_url, called_token = get_json_mock.call_args.args
+        self.assertIn("/crm/v3/properties/contacts", called_url)
+        self.assertEqual("access-token", called_token)
+
+    def test_properties_endpoint_returns_empty_array_when_portal_has_no_token(self) -> None:
+        with patch("app.api.v1.routes.dashboard._hubspot_get_json") as get_json_mock:
+            response = self.client.get(
+                f"/api/v1/dashboard/properties?portalId={self.PORTAL_ID}&objectTypeId=0-1"
+            )
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual([], response.json())
+        get_json_mock.assert_not_called()
+
+    def test_properties_endpoint_passes_invalid_object_type_id_without_crashing(
+        self,
+    ) -> None:
+        with (
+            patch(
+                "app.api.v1.routes.dashboard.get_portal_access_token",
+                return_value="access-token",
+            ),
+            patch(
+                "app.api.v1.routes.dashboard._hubspot_get_json",
+                return_value={"results": []},
+            ) as get_json_mock,
+        ):
+            response = self.client.get(
+                f"/api/v1/dashboard/properties?portalId={self.PORTAL_ID}&objectTypeId=custom-object"
+            )
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual([], response.json())
+        called_url, _called_token = get_json_mock.call_args.args
+        self.assertIn("/crm/v3/properties/custom-object", called_url)
 
 
 if __name__ == "__main__":
