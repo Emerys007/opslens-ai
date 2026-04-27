@@ -473,11 +473,13 @@ function SettingsPage({ context }: { context: any }) {
       (total, group) => total + group.names.length,
       0
     );
-  const monitoringCoverageTitle = `Monitoring coverage (${enabledCategoryCount} enabled / ${coverageCategoryCount})`;
-  const excludedWorkflowsTitle = `Excluded workflows (${workflowExclusions.length})`;
-  const excludedListsTitle = `Excluded lists (${listExclusions.length})`;
-  const excludedTemplatesTitle = `Excluded templates (${templateExclusions.length})`;
-  const excludedPropertiesTitle = `Excluded properties (${propertyExclusions.length})`;
+  const coverageTitle = `Coverage (${enabledCategoryCount} enabled / ${coverageCategoryCount})`;
+  const exclusionTotalCount =
+    workflowExclusions.length +
+    propertyExclusions.length +
+    listExclusions.length +
+    templateExclusions.length;
+  const exclusionsTitle = `Exclusions (${exclusionTotalCount} total)`;
   const workflowSelectOptions = [
     {
       label: workflowPickerLoading
@@ -1362,7 +1364,7 @@ function SettingsPage({ context }: { context: any }) {
         </Form>
       </Accordion>
 
-      <Accordion title={monitoringCoverageTitle} size="md">
+      <Accordion title={coverageTitle} size="md">
         <Tile>
           <Flex direction="column" gap="medium">
             <SectionHeader
@@ -1500,477 +1502,473 @@ function SettingsPage({ context }: { context: any }) {
         </Tile>
       </Accordion>
 
-      <Accordion title={excludedWorkflowsTitle} size="md">
-        <Tile>
-          <Flex direction="column" gap="medium">
-            <SectionHeader
-              eyebrow="Exclusions"
-              title="Excluded workflows"
-              body="Workflows in this list will not generate alerts when disabled, edited, or deleted."
-            />
-            <Divider />
+      <Accordion title={exclusionsTitle} size="md">
+        <Flex direction="column" gap="medium">
+          <Tile>
+            <Flex direction="column" gap="medium">
+              <SectionHeader
+                eyebrow="Exclusions"
+                title="Excluded workflows"
+                body="Workflows in this list will not generate alerts when disabled, edited, or deleted."
+              />
+              <Divider />
 
-            {exclusionsLoading ? <Text>Loading exclusions...</Text> : null}
+              {exclusionsLoading ? <Text>Loading exclusions...</Text> : null}
 
-            <Flex direction="column" gap="small">
-              {workflowExclusions.length === 0 ? (
-                <Flex direction="column" gap="extra-small" align="center">
-                  <Text variant="microcopy">
-                    No excluded workflows yet.
-                  </Text>
-                  <Text variant="microcopy">
-                    Pick a monitored workflow below to suppress future workflow alerts.
-                  </Text>
-                </Flex>
-              ) : (
-                workflowExclusions.map((exclusion) => (
-                  <Flex
-                    key={exclusionKey(exclusion)}
-                    direction="row"
-                    justify="between"
-                    align="center"
-                    gap="small"
-                    wrap
-                  >
-                    <Box flex={1}>
-                      <Flex direction="column" gap="extra-small">
-                        <Text format={{ fontWeight: "bold" }}>
-                          {exclusion.exclusionId}
-                        </Text>
-                        {exclusion.reason ? (
-                          <Text>{exclusion.reason}</Text>
-                        ) : null}
-                      </Flex>
-                    </Box>
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      disabled={exclusionsSaving}
-                      onClick={() => removeExclusion(exclusion)}
-                    >
-                      Remove
-                    </Button>
+              <Flex direction="column" gap="small">
+                {workflowExclusions.length === 0 ? (
+                  <Flex direction="column" gap="extra-small" align="center">
+                    <Text variant="microcopy">
+                      No excluded workflows yet.
+                    </Text>
+                    <Text variant="microcopy">
+                      Pick a monitored workflow below to suppress future workflow alerts.
+                    </Text>
                   </Flex>
-                ))
-              )}
-            </Flex>
+                ) : (
+                  workflowExclusions.map((exclusion) => (
+                    <Flex
+                      key={exclusionKey(exclusion)}
+                      direction="row"
+                      justify="between"
+                      align="center"
+                      gap="small"
+                      wrap
+                    >
+                      <Box flex={1}>
+                        <Flex direction="column" gap="extra-small">
+                          <Text format={{ fontWeight: "bold" }}>
+                            {exclusion.exclusionId}
+                          </Text>
+                          {exclusion.reason ? (
+                            <Text>{exclusion.reason}</Text>
+                          ) : null}
+                        </Flex>
+                      </Box>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        disabled={exclusionsSaving}
+                        onClick={() => removeExclusion(exclusion)}
+                      >
+                        Remove
+                      </Button>
+                    </Flex>
+                  ))
+                )}
+              </Flex>
 
-            <Divider />
+              <Divider />
 
-            <Flex direction="column" gap="small">
-              <Flex direction="row" gap="small" align="start" wrap>
-                <Box flex={2}>
-                  <Select
-                    label="Workflow"
-                    name="workflowExclusionId"
-                    value={workflowExclusionId}
-                    onChange={(value) =>
-                      setWorkflowExclusionId(String(value ?? ""))
-                    }
-                    readOnly={
+              <Flex direction="column" gap="small">
+                <Flex direction="row" gap="small" align="start" wrap>
+                  <Box flex={2}>
+                    <Select
+                      label="Workflow"
+                      name="workflowExclusionId"
+                      value={workflowExclusionId}
+                      onChange={(value) =>
+                        setWorkflowExclusionId(String(value ?? ""))
+                      }
+                      readOnly={
+                        exclusionsSaving ||
+                        workflowPickerLoading ||
+                        workflowPickerOptions.length === 0 ||
+                        !portalId
+                      }
+                      description="Choose from workflows OpsLens has already observed; the workflow ID is shown in the option text."
+                      error={Boolean(workflowPickerError)}
+                      validationMessage={workflowPickerError || undefined}
+                      options={workflowSelectOptions}
+                    />
+                  </Box>
+                  <Box flex={1}>
+                    <Input
+                      label="Reason"
+                      name="workflowExclusionReason"
+                      value={workflowExclusionReason}
+                      type="text"
+                      onChange={(value) =>
+                        setWorkflowExclusionReason(String(value ?? ""))
+                      }
+                      readOnly={exclusionsSaving || !portalId}
+                      description="Optional note for future admins."
+                    />
+                  </Box>
+                </Flex>
+                <Flex direction="row" justify="end" gap="small">
+                  <Button
+                    type="button"
+                    variant="primary"
+                    disabled={
                       exclusionsSaving ||
                       workflowPickerLoading ||
-                      workflowPickerOptions.length === 0 ||
-                      !portalId
+                      !portalId ||
+                      !workflowExclusionId.trim()
                     }
-                    description="Choose from workflows OpsLens has already observed; the workflow ID is shown in the option text."
-                    error={Boolean(workflowPickerError)}
-                    validationMessage={workflowPickerError || undefined}
-                    options={workflowSelectOptions}
-                  />
-                </Box>
-                <Box flex={1}>
-                  <Input
-                    label="Reason"
-                    name="workflowExclusionReason"
-                    value={workflowExclusionReason}
-                    type="text"
-                    onChange={(value) =>
-                      setWorkflowExclusionReason(String(value ?? ""))
-                    }
-                    readOnly={exclusionsSaving || !portalId}
-                    description="Optional note for future admins."
-                  />
-                </Box>
-              </Flex>
-              <Flex direction="row" justify="end" gap="small">
-                <Button
-                  type="button"
-                  variant="primary"
-                  disabled={
-                    exclusionsSaving ||
-                    workflowPickerLoading ||
-                    !portalId ||
-                    !workflowExclusionId.trim()
-                  }
-                  onClick={addWorkflowExclusion}
-                >
-                  Add exclusion
-                </Button>
-              </Flex>
-            </Flex>
-          </Flex>
-        </Tile>
-      </Accordion>
-
-      <Accordion title={excludedListsTitle} size="md">
-        <Tile>
-          <Flex direction="column" gap="medium">
-            <SectionHeader
-              eyebrow="Exclusions"
-              title="Excluded lists"
-              body="Lists in this list will not generate alerts when archived, deleted, or criteria-changed."
-            />
-            <Divider />
-
-            {exclusionsLoading ? <Text>Loading exclusions...</Text> : null}
-
-            <Flex direction="column" gap="small">
-              {listExclusions.length === 0 ? (
-                <Flex direction="column" gap="extra-small" align="center">
-                  <Text variant="microcopy">
-                    No excluded lists yet.
-                  </Text>
-                  <Text variant="microcopy">
-                    Pick a monitored list below to suppress future list alerts.
-                  </Text>
-                </Flex>
-              ) : (
-                listExclusions.map((exclusion) => (
-                  <Flex
-                    key={exclusionKey(exclusion)}
-                    direction="row"
-                    justify="between"
-                    align="center"
-                    gap="small"
-                    wrap
+                    onClick={addWorkflowExclusion}
                   >
-                    <Box flex={1}>
-                      <Flex direction="column" gap="extra-small">
-                        <Text format={{ fontWeight: "bold" }}>
-                          {exclusion.exclusionId}
-                        </Text>
-                        {exclusion.reason ? (
-                          <Text>{exclusion.reason}</Text>
-                        ) : null}
-                      </Flex>
-                    </Box>
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      disabled={exclusionsSaving}
-                      onClick={() => removeExclusion(exclusion)}
-                    >
-                      Remove
-                    </Button>
-                  </Flex>
-                ))
-              )}
-            </Flex>
-
-            <Divider />
-
-            <Flex direction="column" gap="small">
-              <Flex direction="row" gap="small" align="start" wrap>
-                <Box flex={2}>
-                  <Select
-                    label="List"
-                    name="listExclusionId"
-                    value={listExclusionId}
-                    onChange={(value) =>
-                      setListExclusionId(String(value ?? ""))
-                    }
-                    readOnly={
-                      exclusionsSaving ||
-                      listPickerLoading ||
-                      listPickerOptions.length === 0 ||
-                      !portalId
-                    }
-                    description="Choose from lists OpsLens has already observed; the list ID is shown in the option text."
-                    error={Boolean(listPickerError)}
-                    validationMessage={listPickerError || undefined}
-                    options={listSelectOptions}
-                  />
-                </Box>
-                <Box flex={1}>
-                  <Input
-                    label="Reason"
-                    name="listExclusionReason"
-                    value={listExclusionReason}
-                    type="text"
-                    onChange={(value) =>
-                      setListExclusionReason(String(value ?? ""))
-                    }
-                    readOnly={exclusionsSaving || !portalId}
-                    description="Optional note for future admins."
-                  />
-                </Box>
-              </Flex>
-              <Flex direction="row" justify="end" gap="small">
-                <Button
-                  type="button"
-                  variant="primary"
-                  disabled={
-                    exclusionsSaving ||
-                    listPickerLoading ||
-                    !portalId ||
-                    !listExclusionId.trim()
-                  }
-                  onClick={addListExclusion}
-                >
-                  Add exclusion
-                </Button>
-              </Flex>
-            </Flex>
-          </Flex>
-        </Tile>
-      </Accordion>
-
-      <Accordion title={excludedTemplatesTitle} size="md">
-        <Tile>
-          <Flex direction="column" gap="medium">
-            <SectionHeader
-              eyebrow="Exclusions"
-              title="Excluded email templates"
-              body="Email templates in this list will not generate alerts when archived, deleted, or edited."
-            />
-            <Divider />
-
-            {exclusionsLoading ? <Text>Loading exclusions...</Text> : null}
-
-            <Flex direction="column" gap="small">
-              {templateExclusions.length === 0 ? (
-                <Flex direction="column" gap="extra-small" align="center">
-                  <Text variant="microcopy">
-                    No excluded email templates yet.
-                  </Text>
-                  <Text variant="microcopy">
-                    Pick a monitored template below to suppress future template alerts.
-                  </Text>
+                    Add exclusion
+                  </Button>
                 </Flex>
-              ) : (
-                templateExclusions.map((exclusion) => (
-                  <Flex
-                    key={exclusionKey(exclusion)}
-                    direction="row"
-                    justify="between"
-                    align="center"
-                    gap="small"
-                    wrap
-                  >
-                    <Box flex={1}>
-                      <Flex direction="column" gap="extra-small">
-                        <Text format={{ fontWeight: "bold" }}>
-                          {exclusion.exclusionId}
-                        </Text>
-                        {exclusion.reason ? (
-                          <Text>{exclusion.reason}</Text>
-                        ) : null}
-                      </Flex>
-                    </Box>
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      disabled={exclusionsSaving}
-                      onClick={() => removeExclusion(exclusion)}
-                    >
-                      Remove
-                    </Button>
+              </Flex>
+            </Flex>
+          </Tile>
+
+          <Tile>
+            <Flex direction="column" gap="medium">
+              <SectionHeader
+                eyebrow="Exclusions"
+                title="Excluded properties"
+                body="Properties in this list will not generate alerts when archived, deleted, renamed, or type-changed."
+              />
+              <Divider />
+
+              <Flex direction="column" gap="small">
+                {propertyExclusions.length === 0 ? (
+                  <Flex direction="column" gap="extra-small" align="center">
+                    <Text variant="microcopy">
+                      No excluded properties yet.
+                    </Text>
+                    <Text variant="microcopy">
+                      Choose an object type, then pick the HubSpot property to exclude.
+                    </Text>
                   </Flex>
-                ))
-              )}
-            </Flex>
-
-            <Divider />
-
-            <Flex direction="column" gap="small">
-              <Flex direction="row" gap="small" align="start" wrap>
-                <Box flex={2}>
-                  <Select
-                    label="Email template"
-                    name="templateExclusionId"
-                    value={templateExclusionId}
-                    onChange={(value) =>
-                      setTemplateExclusionId(String(value ?? ""))
-                    }
-                    readOnly={
-                      exclusionsSaving ||
-                      templatePickerLoading ||
-                      templatePickerOptions.length === 0 ||
-                      !portalId
-                    }
-                    description="Choose from automated marketing emails OpsLens has already observed."
-                    error={Boolean(templatePickerError)}
-                    validationMessage={templatePickerError || undefined}
-                    options={templateSelectOptions}
-                  />
-                </Box>
-                <Box flex={1}>
-                  <Input
-                    label="Reason"
-                    name="templateExclusionReason"
-                    value={templateExclusionReason}
-                    type="text"
-                    onChange={(value) =>
-                      setTemplateExclusionReason(String(value ?? ""))
-                    }
-                    readOnly={exclusionsSaving || !portalId}
-                    description="Optional note for future admins."
-                  />
-                </Box>
+                ) : (
+                  propertyExclusions.map((exclusion) => (
+                    <Flex
+                      key={exclusionKey(exclusion)}
+                      direction="row"
+                      justify="between"
+                      align="center"
+                      gap="small"
+                      wrap
+                    >
+                      <Box flex={1}>
+                        <Flex direction="column" gap="extra-small">
+                          <Text format={{ fontWeight: "bold" }}>
+                            {exclusion.exclusionId}
+                          </Text>
+                          <Text>{objectTypeLabel(exclusion.objectTypeId)}</Text>
+                          {exclusion.reason ? (
+                            <Text>{exclusion.reason}</Text>
+                          ) : null}
+                        </Flex>
+                      </Box>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        disabled={exclusionsSaving}
+                        onClick={() => removeExclusion(exclusion)}
+                      >
+                        Remove
+                      </Button>
+                    </Flex>
+                  ))
+                )}
               </Flex>
-              <Flex direction="row" justify="end" gap="small">
-                <Button
-                  type="button"
-                  variant="primary"
-                  disabled={
-                    exclusionsSaving ||
-                    templatePickerLoading ||
-                    !portalId ||
-                    !templateExclusionId.trim()
-                  }
-                  onClick={addTemplateExclusion}
-                >
-                  Add exclusion
-                </Button>
-              </Flex>
-            </Flex>
-          </Flex>
-        </Tile>
-      </Accordion>
 
-      <Accordion title={excludedPropertiesTitle} size="md">
-        <Tile>
-          <Flex direction="column" gap="medium">
-            <SectionHeader
-              eyebrow="Exclusions"
-              title="Excluded properties"
-              body="Properties in this list will not generate alerts when archived, deleted, renamed, or type-changed."
-            />
-            <Divider />
+              <Divider />
 
-            <Flex direction="column" gap="small">
-              {propertyExclusions.length === 0 ? (
-                <Flex direction="column" gap="extra-small" align="center">
-                  <Text variant="microcopy">
-                    No excluded properties yet.
-                  </Text>
-                  <Text variant="microcopy">
-                    Choose an object type, then pick the HubSpot property to exclude.
-                  </Text>
+              <Flex direction="column" gap="small">
+                <Flex direction="row" gap="small" align="start" wrap>
+                  <Box flex={1}>
+                    <Select
+                      label="Object type"
+                      name="propertyExclusionObjectTypeId"
+                      value={propertyExclusionObjectTypeId}
+                      onChange={(value) => {
+                        setPropertyExclusionObjectTypeId(String(value ?? "0-1"));
+                        setPropertyExclusionId("");
+                        setPropertyPickerOptions([]);
+                      }}
+                      readOnly={exclusionsSaving || propertyPickerLoading || !portalId}
+                      description="Pick the HubSpot object before choosing a property."
+                      options={OBJECT_TYPE_OPTIONS}
+                    />
+                  </Box>
+                  <Box flex={2}>
+                    <Select
+                      label="Property"
+                      name="propertyExclusionId"
+                      value={propertyExclusionId}
+                      onChange={(value) =>
+                        setPropertyExclusionId(String(value ?? ""))
+                      }
+                      readOnly={
+                        exclusionsSaving ||
+                        propertyPickerLoading ||
+                        propertyPickerOptions.length === 0 ||
+                        !portalId
+                      }
+                      description="Choose by HubSpot label; the internal name is shown in the option text."
+                      error={Boolean(propertyPickerError)}
+                      validationMessage={propertyPickerError || undefined}
+                      options={propertySelectOptions}
+                    />
+                  </Box>
+                  <Box flex={1}>
+                    <Input
+                      label="Reason"
+                      name="propertyExclusionReason"
+                      value={propertyExclusionReason}
+                      type="text"
+                      onChange={(value) =>
+                        setPropertyExclusionReason(String(value ?? ""))
+                      }
+                      readOnly={exclusionsSaving || !portalId}
+                      description="Optional note for future admins."
+                    />
+                  </Box>
                 </Flex>
-              ) : (
-                propertyExclusions.map((exclusion) => (
-                  <Flex
-                    key={exclusionKey(exclusion)}
-                    direction="row"
-                    justify="between"
-                    align="center"
-                    gap="small"
-                    wrap
-                  >
-                    <Box flex={1}>
-                      <Flex direction="column" gap="extra-small">
-                        <Text format={{ fontWeight: "bold" }}>
-                          {exclusion.exclusionId}
-                        </Text>
-                        <Text>{objectTypeLabel(exclusion.objectTypeId)}</Text>
-                        {exclusion.reason ? (
-                          <Text>{exclusion.reason}</Text>
-                        ) : null}
-                      </Flex>
-                    </Box>
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      disabled={exclusionsSaving}
-                      onClick={() => removeExclusion(exclusion)}
-                    >
-                      Remove
-                    </Button>
-                  </Flex>
-                ))
-              )}
-            </Flex>
-
-            <Divider />
-
-            <Flex direction="column" gap="small">
-              <Flex direction="row" gap="small" align="start" wrap>
-                <Box flex={1}>
-                  <Select
-                    label="Object type"
-                    name="propertyExclusionObjectTypeId"
-                    value={propertyExclusionObjectTypeId}
-                    onChange={(value) => {
-                      setPropertyExclusionObjectTypeId(String(value ?? "0-1"));
-                      setPropertyExclusionId("");
-                      setPropertyPickerOptions([]);
-                    }}
-                    readOnly={exclusionsSaving || propertyPickerLoading || !portalId}
-                    description="Pick the HubSpot object before choosing a property."
-                    options={OBJECT_TYPE_OPTIONS}
-                  />
-                </Box>
-                <Box flex={2}>
-                  <Select
-                    label="Property"
-                    name="propertyExclusionId"
-                    value={propertyExclusionId}
-                    onChange={(value) =>
-                      setPropertyExclusionId(String(value ?? ""))
-                    }
-                    readOnly={
+                <Flex direction="row" justify="end" gap="small">
+                  <Button
+                    type="button"
+                    variant="primary"
+                    disabled={
                       exclusionsSaving ||
                       propertyPickerLoading ||
-                      propertyPickerOptions.length === 0 ||
-                      !portalId
+                      !portalId ||
+                      !propertyExclusionId.trim()
                     }
-                    description="Choose by HubSpot label; the internal name is shown in the option text."
-                    error={Boolean(propertyPickerError)}
-                    validationMessage={propertyPickerError || undefined}
-                    options={propertySelectOptions}
-                  />
-                </Box>
-                <Box flex={1}>
-                  <Input
-                    label="Reason"
-                    name="propertyExclusionReason"
-                    value={propertyExclusionReason}
-                    type="text"
-                    onChange={(value) =>
-                      setPropertyExclusionReason(String(value ?? ""))
-                    }
-                    readOnly={exclusionsSaving || !portalId}
-                    description="Optional note for future admins."
-                  />
-                </Box>
+                    onClick={addPropertyExclusion}
+                  >
+                    Add exclusion
+                  </Button>
+                </Flex>
               </Flex>
-              <Flex direction="row" justify="end" gap="small">
-                <Button
-                  type="button"
-                  variant="primary"
-                  disabled={
-                    exclusionsSaving ||
-                    propertyPickerLoading ||
-                    !portalId ||
-                    !propertyExclusionId.trim()
-                  }
-                  onClick={addPropertyExclusion}
-                >
-                  Add exclusion
-                </Button>
+
+              {exclusionsError ? (
+                <Flex align="center" gap="small" wrap>
+                  <StatusTag variant="danger">Error</StatusTag>
+                  <Text>{exclusionsError}</Text>
+                </Flex>
+              ) : null}
+            </Flex>
+          </Tile>
+
+          <Tile>
+            <Flex direction="column" gap="medium">
+              <SectionHeader
+                eyebrow="Exclusions"
+                title="Excluded lists"
+                body="Lists in this list will not generate alerts when archived, deleted, or criteria-changed."
+              />
+              <Divider />
+
+              {exclusionsLoading ? <Text>Loading exclusions...</Text> : null}
+
+              <Flex direction="column" gap="small">
+                {listExclusions.length === 0 ? (
+                  <Flex direction="column" gap="extra-small" align="center">
+                    <Text variant="microcopy">
+                      No excluded lists yet.
+                    </Text>
+                    <Text variant="microcopy">
+                      Pick a monitored list below to suppress future list alerts.
+                    </Text>
+                  </Flex>
+                ) : (
+                  listExclusions.map((exclusion) => (
+                    <Flex
+                      key={exclusionKey(exclusion)}
+                      direction="row"
+                      justify="between"
+                      align="center"
+                      gap="small"
+                      wrap
+                    >
+                      <Box flex={1}>
+                        <Flex direction="column" gap="extra-small">
+                          <Text format={{ fontWeight: "bold" }}>
+                            {exclusion.exclusionId}
+                          </Text>
+                          {exclusion.reason ? (
+                            <Text>{exclusion.reason}</Text>
+                          ) : null}
+                        </Flex>
+                      </Box>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        disabled={exclusionsSaving}
+                        onClick={() => removeExclusion(exclusion)}
+                      >
+                        Remove
+                      </Button>
+                    </Flex>
+                  ))
+                )}
+              </Flex>
+
+              <Divider />
+
+              <Flex direction="column" gap="small">
+                <Flex direction="row" gap="small" align="start" wrap>
+                  <Box flex={2}>
+                    <Select
+                      label="List"
+                      name="listExclusionId"
+                      value={listExclusionId}
+                      onChange={(value) =>
+                        setListExclusionId(String(value ?? ""))
+                      }
+                      readOnly={
+                        exclusionsSaving ||
+                        listPickerLoading ||
+                        listPickerOptions.length === 0 ||
+                        !portalId
+                      }
+                      description="Choose from lists OpsLens has already observed; the list ID is shown in the option text."
+                      error={Boolean(listPickerError)}
+                      validationMessage={listPickerError || undefined}
+                      options={listSelectOptions}
+                    />
+                  </Box>
+                  <Box flex={1}>
+                    <Input
+                      label="Reason"
+                      name="listExclusionReason"
+                      value={listExclusionReason}
+                      type="text"
+                      onChange={(value) =>
+                        setListExclusionReason(String(value ?? ""))
+                      }
+                      readOnly={exclusionsSaving || !portalId}
+                      description="Optional note for future admins."
+                    />
+                  </Box>
+                </Flex>
+                <Flex direction="row" justify="end" gap="small">
+                  <Button
+                    type="button"
+                    variant="primary"
+                    disabled={
+                      exclusionsSaving ||
+                      listPickerLoading ||
+                      !portalId ||
+                      !listExclusionId.trim()
+                    }
+                    onClick={addListExclusion}
+                  >
+                    Add exclusion
+                  </Button>
+                </Flex>
               </Flex>
             </Flex>
+          </Tile>
 
-            {exclusionsError ? (
-              <Flex align="center" gap="small" wrap>
-                <StatusTag variant="danger">Error</StatusTag>
-                <Text>{exclusionsError}</Text>
+          <Tile>
+            <Flex direction="column" gap="medium">
+              <SectionHeader
+                eyebrow="Exclusions"
+                title="Excluded email templates"
+                body="Email templates in this list will not generate alerts when archived, deleted, or edited."
+              />
+              <Divider />
+
+              {exclusionsLoading ? <Text>Loading exclusions...</Text> : null}
+
+              <Flex direction="column" gap="small">
+                {templateExclusions.length === 0 ? (
+                  <Flex direction="column" gap="extra-small" align="center">
+                    <Text variant="microcopy">
+                      No excluded email templates yet.
+                    </Text>
+                    <Text variant="microcopy">
+                      Pick a monitored template below to suppress future template alerts.
+                    </Text>
+                  </Flex>
+                ) : (
+                  templateExclusions.map((exclusion) => (
+                    <Flex
+                      key={exclusionKey(exclusion)}
+                      direction="row"
+                      justify="between"
+                      align="center"
+                      gap="small"
+                      wrap
+                    >
+                      <Box flex={1}>
+                        <Flex direction="column" gap="extra-small">
+                          <Text format={{ fontWeight: "bold" }}>
+                            {exclusion.exclusionId}
+                          </Text>
+                          {exclusion.reason ? (
+                            <Text>{exclusion.reason}</Text>
+                          ) : null}
+                        </Flex>
+                      </Box>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        disabled={exclusionsSaving}
+                        onClick={() => removeExclusion(exclusion)}
+                      >
+                        Remove
+                      </Button>
+                    </Flex>
+                  ))
+                )}
               </Flex>
-            ) : null}
-          </Flex>
-        </Tile>
+
+              <Divider />
+
+              <Flex direction="column" gap="small">
+                <Flex direction="row" gap="small" align="start" wrap>
+                  <Box flex={2}>
+                    <Select
+                      label="Email template"
+                      name="templateExclusionId"
+                      value={templateExclusionId}
+                      onChange={(value) =>
+                        setTemplateExclusionId(String(value ?? ""))
+                      }
+                      readOnly={
+                        exclusionsSaving ||
+                        templatePickerLoading ||
+                        templatePickerOptions.length === 0 ||
+                        !portalId
+                      }
+                      description="Choose from automated marketing emails OpsLens has already observed."
+                      error={Boolean(templatePickerError)}
+                      validationMessage={templatePickerError || undefined}
+                      options={templateSelectOptions}
+                    />
+                  </Box>
+                  <Box flex={1}>
+                    <Input
+                      label="Reason"
+                      name="templateExclusionReason"
+                      value={templateExclusionReason}
+                      type="text"
+                      onChange={(value) =>
+                        setTemplateExclusionReason(String(value ?? ""))
+                      }
+                      readOnly={exclusionsSaving || !portalId}
+                      description="Optional note for future admins."
+                    />
+                  </Box>
+                </Flex>
+                <Flex direction="row" justify="end" gap="small">
+                  <Button
+                    type="button"
+                    variant="primary"
+                    disabled={
+                      exclusionsSaving ||
+                      templatePickerLoading ||
+                      !portalId ||
+                      !templateExclusionId.trim()
+                    }
+                    onClick={addTemplateExclusion}
+                  >
+                    Add exclusion
+                  </Button>
+                </Flex>
+              </Flex>
+            </Flex>
+          </Tile>
+        </Flex>
       </Accordion>
     </Flex>
   );
