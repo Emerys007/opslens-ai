@@ -123,16 +123,6 @@ function thresholdLabel(threshold: string) {
   return "Medium, high, and critical alerts";
 }
 
-function previewExplanation(threshold: string) {
-  if (threshold === "critical") {
-    return "OpsLens will only interrupt your team when a workflow is very likely to break lead routing, attribution, or customer follow-up.";
-  }
-  if (threshold === "high") {
-    return "OpsLens will alert when a HubSpot change creates a clear workflow risk, while keeping lower-signal schema edits out of Slack.";
-  }
-  return "OpsLens will surface workflow-breaking changes and medium-risk schema edits so consultants can fix issues before a client notices.";
-}
-
 function SectionHeader({
   eyebrow,
   title,
@@ -206,7 +196,6 @@ function MonitorItem({
   title,
   severity,
   variant,
-  description,
 }: {
   title: string;
   severity: string;
@@ -219,7 +208,6 @@ function MonitorItem({
         <Text format={{ fontWeight: "bold" }}>{title}</Text>
         <Tag variant={variant}>{severity}</Tag>
       </Flex>
-      <Text>{description}</Text>
     </Flex>
   );
 }
@@ -526,9 +514,9 @@ function SettingsPage({ context }: { context: any }) {
             <Flex direction="column" gap="small">
               <Tile>
                 <Flex direction="column" gap="small">
-                  <Text format={{ fontWeight: "bold" }}>Slack preview</Text>
-                  <Heading>{thresholdLabel(alertThreshold)}</Heading>
-                  <Text>{previewExplanation(alertThreshold)}</Text>
+                  <Text format={{ fontWeight: "bold" }}>
+                    Slack preview — {thresholdLabel(alertThreshold)}
+                  </Text>
                   <Divider />
                   <Box>
                     <Flex direction="column" gap="small">
@@ -567,12 +555,9 @@ function SettingsPage({ context }: { context: any }) {
 
               <Tile>
                 <Flex direction="column" gap="small">
-                  <SectionHeader
-                    eyebrow="Monitoring coverage"
-                    title="What OpsLens monitors"
-                    body="What OpsLens watches across the HubSpot portal."
-                  />
-                  <Divider />
+                  <Text format={{ fontWeight: "bold" }}>
+                    Monitoring coverage
+                  </Text>
                   <AutoGrid gap="small" columnWidth={220} flexible>
                     <MonitorItem
                       title="Archived properties"
