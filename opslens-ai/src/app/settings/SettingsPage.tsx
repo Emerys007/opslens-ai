@@ -382,224 +382,240 @@ function SettingsPage({ context }: { context: any }) {
         </Flex>
       </Tile>
 
-      <AutoGrid gap="small" columnWidth={220}>
-        <StatusMetric
-          label="Monitoring"
-          value="Active"
-          detail={relativeTime(monitoringTimestamp)}
-          status={statusVariant}
-        />
-        <StatusMetric
-          label="Last settings sync"
-          value={formatTimestamp(monitoringTimestamp)}
-          detail={
-            settingsStorage
-              ? `Stored in ${settingsStorage}`
-              : "Loaded from the OpsLens settings store"
-          }
-        />
-        <StatusMetric
-          label="Portal"
-          value={portalLabel}
-          detail={`Settings session: ${userEmail || userId}`}
-        />
-      </AutoGrid>
+      <Flex direction="row" gap="small">
+        <Box flex={1}>
+          <StatusMetric
+            label="Monitoring"
+            value="Active"
+            detail={relativeTime(monitoringTimestamp)}
+            status={statusVariant}
+          />
+        </Box>
+        <Box flex={1}>
+          <StatusMetric
+            label="Last settings sync"
+            value={formatTimestamp(monitoringTimestamp)}
+            detail={
+              settingsStorage
+                ? `Stored in ${settingsStorage}`
+                : "Loaded from the OpsLens settings store"
+            }
+          />
+        </Box>
+        <Box flex={1}>
+          <StatusMetric
+            label="Portal"
+            value={portalLabel}
+            detail={`Settings session: ${userEmail || userId}`}
+          />
+        </Box>
+      </Flex>
 
       <Form onSubmit={saveSettings}>
         <Flex direction="column" gap="small">
-          <AutoGrid gap="small" columnWidth={360}>
-            <Tile>
-              <Flex direction="column" gap="small">
-                <SectionHeader
-                  eyebrow="Alert routing"
-                  title="Send the right alerts to the right place"
-                  body="Choose where OpsLens should deliver workflow risk signals and how sensitive Slack should be for this portal."
-                />
-
-                <Input
-                  label="Slack webhook URL"
-                  name="slackWebhookUrl"
-                  value={slackWebhookUrl}
-                  type="text"
-                  onChange={(value) => setSlackWebhookUrl(String(value ?? ""))}
-                  readOnly={formLocked}
-                  description="OpsLens posts Slack alerts to this incoming webhook when a monitored change meets the selected threshold."
-                />
-
-                <Select
-                  label="Slack alert threshold"
-                  name="alertThreshold"
-                  value={alertThreshold}
-                  onChange={(value) =>
-                    setAlertThreshold(String(value ?? "medium"))
-                  }
-                  readOnly={formLocked}
-                  description="Use a higher threshold for quiet client channels, or medium when consultants want earlier warning on schema edits."
-                  options={[
-                    { label: "Critical only", value: "critical" },
-                    { label: "High and critical", value: "high" },
-                    { label: "Medium, high, and critical", value: "medium" },
-                  ]}
-                />
-
-                <TextArea
-                  label="Critical workflows"
-                  name="criticalWorkflows"
-                  value={criticalWorkflows}
-                  onChange={(value) =>
-                    setCriticalWorkflows(String(value ?? ""))
-                  }
-                  readOnly={formLocked}
-                  rows={5}
-                  description="Add one workflow identifier per line so OpsLens can escalate changes that touch revenue-critical automation."
-                />
-
-                <AutoGrid gap="small" columnWidth={220}>
-                  <DeliveryToggle
-                    label="Send Slack alerts"
-                    checked={slackDeliveryEnabled}
-                    disabled={formLocked}
-                    onChange={setSlackDeliveryEnabled}
-                    description="Slack delivery is best for fast triage by the consultant or operations team watching the portal."
-                  />
-                  <DeliveryToggle
-                    label="Create HubSpot tickets"
-                    checked={ticketDeliveryEnabled}
-                    disabled={formLocked}
-                    onChange={setTicketDeliveryEnabled}
-                    description="Ticket delivery keeps a durable HubSpot record for issues that need owner assignment and follow-up."
-                  />
-                </AutoGrid>
-
-                <Flex justify="between" align="center" gap="small" wrap>
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    disabled={formLocked}
-                    onClick={handleTestAlert}
-                  >
-                    Test alert
-                  </Button>
-                  <Button type="submit" variant="primary" disabled={formLocked}>
-                    {saving ? "Saving..." : "Save settings"}
-                  </Button>
-                </Flex>
-
-                {saveMessage ? (
-                  <Flex align="center" gap="small" wrap>
-                    <StatusTag variant="success">Saved</StatusTag>
-                    <Text>{saveMessage}</Text>
-                  </Flex>
-                ) : null}
-                {testMessage ? (
-                  <Flex align="center" gap="small" wrap>
-                    <StatusTag variant="warning">Test unavailable</StatusTag>
-                    <Text>{testMessage}</Text>
-                  </Flex>
-                ) : null}
-                {errorMessage ? (
-                  <Flex align="center" gap="small" wrap>
-                    <StatusTag variant="danger">Error</StatusTag>
-                    <Text>{errorMessage}</Text>
-                  </Flex>
-                ) : null}
-                {!portalId ? (
-                  <StatusTag variant="warning">
-                    Portal context is still loading from HubSpot.
-                  </StatusTag>
-                ) : null}
-              </Flex>
-            </Tile>
-
-            <Flex direction="column" gap="small">
+          <Flex direction="row" gap="small" align="start">
+            <Box flex={1}>
               <Tile>
                 <Flex direction="column" gap="small">
-                  <Text format={{ fontWeight: "bold" }}>
-                    Slack preview — {thresholdLabel(alertThreshold)}
-                  </Text>
-                  <Divider />
-                  <Box>
-                    <Flex direction="column" gap="small">
-                      <Flex align="center" gap="small" wrap>
-                        <Text>{thresholdEmoji(alertThreshold)}</Text>
-                        <Text format={{ fontWeight: "bold" }}>
-                          Property 'Lead Source' archived — 1 workflow(s)
-                          affected
-                        </Text>
-                      </Flex>
-                      <Text>
-                        Lead Source was archived in HubSpot, but the Lead
-                        Nurture workflow still references it in enrollment
-                        criteria. New contacts may skip the intended route until
-                        the property is restored or the workflow reference is
-                        replaced.
-                      </Text>
-                      <Flex direction="column" gap="small">
-                        <Text format={{ fontWeight: "bold" }}>
-                          Recommended action
-                        </Text>
-                        <Text>
-                          Open the workflow, replace the archived property
-                          reference, then rerun enrollment tests for recent
-                          leads.
-                        </Text>
-                      </Flex>
-                      <Divider />
-                      <Text>
-                        OpsLens • Portal {portalLabel} • Detected just now
-                      </Text>
-                    </Flex>
-                  </Box>
-                </Flex>
-              </Tile>
+                  <SectionHeader
+                    eyebrow="Alert routing"
+                    title="Send the right alerts to the right place"
+                    body="Choose where OpsLens should deliver workflow risk signals and how sensitive Slack should be for this portal."
+                  />
 
-              <Tile>
-                <Flex direction="column" gap="small">
-                  <Text format={{ fontWeight: "bold" }}>
-                    Monitoring coverage
-                  </Text>
-                  <AutoGrid gap="small" columnWidth={220} flexible>
-                    <MonitorItem
-                      title="Archived properties"
-                      severity="High"
-                      variant="error"
-                      description="A property archive can break workflow filters, branches, and personalization that still depend on the field."
+                  <Input
+                    label="Slack webhook URL"
+                    name="slackWebhookUrl"
+                    value={slackWebhookUrl}
+                    type="text"
+                    onChange={(value) =>
+                      setSlackWebhookUrl(String(value ?? ""))
+                    }
+                    readOnly={formLocked}
+                    description="OpsLens posts Slack alerts to this incoming webhook when a monitored change meets the selected threshold."
+                  />
+
+                  <Select
+                    label="Slack alert threshold"
+                    name="alertThreshold"
+                    value={alertThreshold}
+                    onChange={(value) =>
+                      setAlertThreshold(String(value ?? "medium"))
+                    }
+                    readOnly={formLocked}
+                    description="Use a higher threshold for quiet client channels, or medium when consultants want earlier warning on schema edits."
+                    options={[
+                      { label: "Critical only", value: "critical" },
+                      { label: "High and critical", value: "high" },
+                      { label: "Medium, high, and critical", value: "medium" },
+                    ]}
+                  />
+
+                  <TextArea
+                    label="Critical workflows"
+                    name="criticalWorkflows"
+                    value={criticalWorkflows}
+                    onChange={(value) =>
+                      setCriticalWorkflows(String(value ?? ""))
+                    }
+                    readOnly={formLocked}
+                    rows={5}
+                    description="Add one workflow identifier per line so OpsLens can escalate changes that touch revenue-critical automation."
+                  />
+
+                  <AutoGrid gap="small" columnWidth={220}>
+                    <DeliveryToggle
+                      label="Send Slack alerts"
+                      checked={slackDeliveryEnabled}
+                      disabled={formLocked}
+                      onChange={setSlackDeliveryEnabled}
+                      description="Slack delivery is best for fast triage by the consultant or operations team watching the portal."
                     />
-                    <MonitorItem
-                      title="Deleted properties"
-                      severity="High"
-                      variant="error"
-                      description="Deleted fields remove the source data workflows expect, so OpsLens treats affected automation as urgent."
-                    />
-                    <MonitorItem
-                      title="Renamed properties"
-                      severity="Low"
-                      variant="default"
-                      description="Label changes usually preserve API names, but OpsLens still flags them so consultants can prevent confusion."
-                    />
-                    <MonitorItem
-                      title="Property type changes"
-                      severity="Medium"
-                      variant="warning"
-                      description="Changing field type can alter workflow comparisons, list membership, and downstream reporting logic."
-                    />
-                    <MonitorItem
-                      title="Disabled workflows"
-                      severity="High"
-                      variant="error"
-                      description="A disabled workflow can stop lead routing, lifecycle updates, or customer notifications without a visible failure."
-                    />
-                    <MonitorItem
-                      title="Edited workflows"
-                      severity="Medium"
-                      variant="warning"
-                      description="Workflow edits can change enrollment, branching, and actions, so OpsLens highlights them for review."
+                    <DeliveryToggle
+                      label="Create HubSpot tickets"
+                      checked={ticketDeliveryEnabled}
+                      disabled={formLocked}
+                      onChange={setTicketDeliveryEnabled}
+                      description="Ticket delivery keeps a durable HubSpot record for issues that need owner assignment and follow-up."
                     />
                   </AutoGrid>
+
+                  <Flex justify="between" align="center" gap="small" wrap>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      disabled={formLocked}
+                      onClick={handleTestAlert}
+                    >
+                      Test alert
+                    </Button>
+                    <Button
+                      type="submit"
+                      variant="primary"
+                      disabled={formLocked}
+                    >
+                      {saving ? "Saving..." : "Save settings"}
+                    </Button>
+                  </Flex>
+
+                  {saveMessage ? (
+                    <Flex align="center" gap="small" wrap>
+                      <StatusTag variant="success">Saved</StatusTag>
+                      <Text>{saveMessage}</Text>
+                    </Flex>
+                  ) : null}
+                  {testMessage ? (
+                    <Flex align="center" gap="small" wrap>
+                      <StatusTag variant="warning">Test unavailable</StatusTag>
+                      <Text>{testMessage}</Text>
+                    </Flex>
+                  ) : null}
+                  {errorMessage ? (
+                    <Flex align="center" gap="small" wrap>
+                      <StatusTag variant="danger">Error</StatusTag>
+                      <Text>{errorMessage}</Text>
+                    </Flex>
+                  ) : null}
+                  {!portalId ? (
+                    <StatusTag variant="warning">
+                      Portal context is still loading from HubSpot.
+                    </StatusTag>
+                  ) : null}
                 </Flex>
               </Tile>
-            </Flex>
-          </AutoGrid>
+            </Box>
+
+            <Box flex={1}>
+              <Flex direction="column" gap="small">
+                <Tile>
+                  <Flex direction="column" gap="small">
+                    <Text format={{ fontWeight: "bold" }}>
+                      Slack preview — {thresholdLabel(alertThreshold)}
+                    </Text>
+                    <Divider />
+                    <Box>
+                      <Flex direction="column" gap="small">
+                        <Flex align="center" gap="small" wrap>
+                          <Text>{thresholdEmoji(alertThreshold)}</Text>
+                          <Text format={{ fontWeight: "bold" }}>
+                            Property 'Lead Source' archived — 1 workflow(s)
+                            affected
+                          </Text>
+                        </Flex>
+                        <Text>
+                          Lead Source was archived in HubSpot, but the Lead
+                          Nurture workflow still references it in enrollment
+                          criteria. New contacts may skip the intended route
+                          until the property is restored or the workflow
+                          reference is replaced.
+                        </Text>
+                        <Flex direction="column" gap="small">
+                          <Text format={{ fontWeight: "bold" }}>
+                            Recommended action
+                          </Text>
+                          <Text>
+                            Open the workflow, replace the archived property
+                            reference, then rerun enrollment tests for recent
+                            leads.
+                          </Text>
+                        </Flex>
+                        <Divider />
+                        <Text>
+                          OpsLens • Portal {portalLabel} • Detected just now
+                        </Text>
+                      </Flex>
+                    </Box>
+                  </Flex>
+                </Tile>
+
+                <Tile>
+                  <Flex direction="column" gap="small">
+                    <Text format={{ fontWeight: "bold" }}>
+                      Monitoring coverage
+                    </Text>
+                    <Flex direction="column" gap="extra-small">
+                      <MonitorItem
+                        title="Archived properties"
+                        severity="High"
+                        variant="error"
+                        description="A property archive can break workflow filters, branches, and personalization that still depend on the field."
+                      />
+                      <MonitorItem
+                        title="Deleted properties"
+                        severity="High"
+                        variant="error"
+                        description="Deleted fields remove the source data workflows expect, so OpsLens treats affected automation as urgent."
+                      />
+                      <MonitorItem
+                        title="Renamed properties"
+                        severity="Low"
+                        variant="default"
+                        description="Label changes usually preserve API names, but OpsLens still flags them so consultants can prevent confusion."
+                      />
+                      <MonitorItem
+                        title="Property type changes"
+                        severity="Medium"
+                        variant="warning"
+                        description="Changing field type can alter workflow comparisons, list membership, and downstream reporting logic."
+                      />
+                      <MonitorItem
+                        title="Disabled workflows"
+                        severity="High"
+                        variant="error"
+                        description="A disabled workflow can stop lead routing, lifecycle updates, or customer notifications without a visible failure."
+                      />
+                      <MonitorItem
+                        title="Edited workflows"
+                        severity="Medium"
+                        variant="warning"
+                        description="Workflow edits can change enrollment, branching, and actions, so OpsLens highlights them for review."
+                      />
+                    </Flex>
+                  </Flex>
+                </Tile>
+              </Flex>
+            </Box>
+          </Flex>
         </Flex>
       </Form>
     </Flex>
