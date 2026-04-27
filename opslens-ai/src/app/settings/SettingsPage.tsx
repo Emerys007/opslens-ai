@@ -10,9 +10,7 @@ import {
   Input,
   Select,
   StatusTag,
-  Tag,
   Text,
-  TextArea,
   Tile,
   Toggle,
   hubspot,
@@ -23,7 +21,6 @@ hubspot.extend(({ context }) => <SettingsPage context={context} />);
 type PortalSettings = {
   slackWebhookUrl?: string;
   alertThreshold?: string;
-  criticalWorkflows?: string;
   slackDeliveryEnabled?: boolean;
   ticketDeliveryEnabled?: boolean;
   updatedAtUtc?: string | null;
@@ -44,6 +41,51 @@ type SettingsResponse = {
 type StatusVariant = "success" | "warning" | "danger";
 
 const SETTINGS_API_BASE = "https://api.app-sync.com/api/v1/settings-store";
+const DASHBOARD_API_BASE = "https://api.app-sync.com/api/v1/dashboard";
+const DEFAULT_SEVERITY_VALUE = "__default__";
+
+type MonitoringCategory = {
+  name: string;
+  defaultSeverity: string;
+  enabled: boolean;
+  severityOverride?: string | null;
+};
+
+type MonitoringCoverageResponse = {
+  status?: string;
+  portalId?: string;
+  coverage?: Record<string, { enabled?: boolean; severityOverride?: string | null }>;
+  categories?: MonitoringCategory[];
+};
+
+type ExclusionType = "workflow" | "property";
+
+type MonitoringExclusion = {
+  id: number;
+  portalId?: string;
+  type: ExclusionType;
+  exclusionId: string;
+  objectTypeId?: string | null;
+  reason?: string | null;
+  createdAtUtc?: string | null;
+  createdByUserId?: string | null;
+};
+
+const CATEGORY_LABELS: Record<string, string> = {
+  property_archived: "Archived properties",
+  property_deleted: "Deleted properties",
+  property_renamed: "Renamed properties",
+  property_type_changed: "Property type changes",
+  workflow_disabled: "Disabled workflows",
+  workflow_edited: "Edited workflows",
+};
+
+const OBJECT_TYPE_OPTIONS = [
+  { label: "Contact", value: "0-1" },
+  { label: "Company", value: "0-2" },
+  { label: "Deal", value: "0-3" },
+  { label: "Ticket", value: "0-5" },
+];
 
 function buildUrl(baseUrl: string, params: Record<string, string>) {
   const url = new URL(baseUrl);
@@ -122,6 +164,62 @@ function thresholdLabel(threshold: string) {
   return "Medium, high, and critical alerts";
 }
 
+function severityLabel(value?: string | null) {
+  const text = String(value ?? "").trim().toLowerCase();
+  if (!text) {
+    return "";
+  }
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+function categoryLabel(name: string) {
+  return CATEGORY_LABELS[name] || name;
+}
+
+function objectTypeLabel(objectTypeId?: string | null) {
+  const match = OBJECT_TYPE_OPTIONS.find((option) => option.value === objectTypeId);
+  return match?.label ?? String(objectTypeId || "Unknown object");
+}
+
+function normalizeCategories(categories?: MonitoringCategory[]) {
+  return (Array.isArray(categories) ? categories : []).map((category) => ({
+    name: String(category.name ?? ""),
+    defaultSeverity: String(category.defaultSeverity ?? "medium").toLowerCase(),
+    enabled: category.enabled !== false,
+    severityOverride: category.severityOverride
+      ? String(category.severityOverride).toLowerCase()
+      : null,
+  })).filter((category) => category.name);
+}
+
+function coverageFingerprint(categories: MonitoringCategory[]) {
+  const payload = categories
+    .map((category) => ({
+      name: category.name,
+      enabled: category.enabled !== false,
+      severityOverride: category.severityOverride || null,
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+  return JSON.stringify(payload);
+}
+
+function coveragePayload(categories: MonitoringCategory[]) {
+  return categories.reduce<Record<string, { enabled: boolean; severityOverride: string | null }>>(
+    (payload, category) => {
+      payload[category.name] = {
+        enabled: category.enabled !== false,
+        severityOverride: category.severityOverride || null,
+      };
+      return payload;
+    },
+    {}
+  );
+}
+
+function exclusionKey(exclusion: MonitoringExclusion) {
+  return `${exclusion.type}-${exclusion.id}`;
+}
+
 function SectionHeader({
   eyebrow,
   title,
@@ -189,24 +287,6 @@ function DeliveryToggle({
   );
 }
 
-function MonitorItem({
-  title,
-  severity,
-  variant,
-}: {
-  title: string;
-  severity: string;
-  variant: "error" | "warning" | "default";
-  description: string;
-}) {
-  return (
-    <Flex justify="between" align="center" gap="small" wrap>
-      <Text format={{ fontWeight: "bold" }}>{title}</Text>
-      <Tag variant={variant}>{severity}</Tag>
-    </Flex>
-  );
-}
-
 function SettingsPage({ context }: { context: any }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -216,11 +296,28 @@ function SettingsPage({ context }: { context: any }) {
   const [errorMessage, setErrorMessage] = useState("");
   const [slackWebhookUrl, setSlackWebhookUrl] = useState("");
   const [alertThreshold, setAlertThreshold] = useState("medium");
-  const [criticalWorkflows, setCriticalWorkflows] = useState("");
   const [slackDeliveryEnabled, setSlackDeliveryEnabled] = useState(true);
   const [ticketDeliveryEnabled, setTicketDeliveryEnabled] = useState(true);
   const [lastSavedAt, setLastSavedAt] = useState("");
   const [settingsStorage, setSettingsStorage] = useState("");
+  const [coverageLoading, setCoverageLoading] = useState(false);
+  const [coverageSaving, setCoverageSaving] = useState(false);
+  const [coverageError, setCoverageError] = useState("");
+  const [coverageMessage, setCoverageMessage] = useState("");
+  const [coverageCategories, setCoverageCategories] = useState<MonitoringCategory[]>([]);
+  const [loadedCoverageFingerprint, setLoadedCoverageFingerprint] = useState(
+    coverageFingerprint([])
+  );
+  const [exclusionsLoading, setExclusionsLoading] = useState(false);
+  const [exclusionsSaving, setExclusionsSaving] = useState(false);
+  const [exclusionsError, setExclusionsError] = useState("");
+  const [workflowExclusions, setWorkflowExclusions] = useState<MonitoringExclusion[]>([]);
+  const [propertyExclusions, setPropertyExclusions] = useState<MonitoringExclusion[]>([]);
+  const [workflowExclusionId, setWorkflowExclusionId] = useState("");
+  const [workflowExclusionReason, setWorkflowExclusionReason] = useState("");
+  const [propertyExclusionId, setPropertyExclusionId] = useState("");
+  const [propertyExclusionObjectTypeId, setPropertyExclusionObjectTypeId] = useState("0-1");
+  const [propertyExclusionReason, setPropertyExclusionReason] = useState("");
 
   const portalId = String(context?.portal?.id ?? "");
   const userId = String(context?.user?.id ?? "unknown");
@@ -231,8 +328,16 @@ function SettingsPage({ context }: { context: any }) {
     () => buildUrl(SETTINGS_API_BASE, { portalId }),
     [portalId]
   );
+  const coverageUrl = useMemo(
+    () => buildUrl(`${DASHBOARD_API_BASE}/monitoring-coverage`, { portalId }),
+    [portalId]
+  );
 
   const formLocked = loading || saving || !hasLoadedSettings || !portalId;
+  const coverageDirty =
+    coverageCategories.length > 0 &&
+    coverageFingerprint(coverageCategories) !== loadedCoverageFingerprint;
+  const coverageLocked = coverageLoading || coverageSaving || !portalId;
   const monitoringTimestamp = lastSavedAt || "";
   const statusVariant: StatusVariant = errorMessage ? "warning" : "success";
 
@@ -259,7 +364,6 @@ function SettingsPage({ context }: { context: any }) {
         const settings = data?.settings ?? {};
         setSlackWebhookUrl(String(settings.slackWebhookUrl ?? ""));
         setAlertThreshold(String(settings.alertThreshold ?? "medium"));
-        setCriticalWorkflows(String(settings.criticalWorkflows ?? ""));
         setSlackDeliveryEnabled(settings.slackDeliveryEnabled !== false);
         setTicketDeliveryEnabled(settings.ticketDeliveryEnabled !== false);
         setLastSavedAt(
@@ -286,6 +390,263 @@ function SettingsPage({ context }: { context: any }) {
     loadSettings();
   }, [settingsUrl]);
 
+  useEffect(() => {
+    if (!portalId) {
+      return;
+    }
+
+    loadMonitoringCoverage();
+    loadExclusions();
+  }, [coverageUrl, portalId]);
+
+  async function loadMonitoringCoverage() {
+    if (!portalId) {
+      return;
+    }
+
+    setCoverageLoading(true);
+    setCoverageError("");
+    setCoverageMessage("");
+
+    try {
+      const response = await hubspot.fetch(coverageUrl, {
+        method: "GET",
+        timeout: 15000,
+      });
+      if (!response.ok) {
+        throw new Error(`Backend returned status ${response.status}`);
+      }
+
+      const data = (await response.json()) as MonitoringCoverageResponse;
+      const categories = normalizeCategories(data.categories);
+      setCoverageCategories(categories);
+      setLoadedCoverageFingerprint(coverageFingerprint(categories));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setCoverageError(message);
+    } finally {
+      setCoverageLoading(false);
+    }
+  }
+
+  async function saveMonitoringCoverage() {
+    setCoverageSaving(true);
+    setCoverageError("");
+    setCoverageMessage("");
+
+    try {
+      const response = await hubspot.fetch(coverageUrl, {
+        method: "PUT",
+        body: coveragePayload(coverageCategories),
+        timeout: 15000,
+      });
+      if (!response.ok) {
+        throw new Error(`Backend returned status ${response.status}`);
+      }
+
+      const data = (await response.json()) as MonitoringCoverageResponse;
+      const categories = normalizeCategories(data.categories);
+      setCoverageCategories(categories);
+      setLoadedCoverageFingerprint(coverageFingerprint(categories));
+      setCoverageMessage("Saved.");
+      setTimeout(() => setCoverageMessage(""), 3000);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setCoverageError(message);
+    } finally {
+      setCoverageSaving(false);
+    }
+  }
+
+  function setCategoryEnabled(categoryName: string, enabled: boolean) {
+    setCoverageCategories((categories) =>
+      categories.map((category) =>
+        category.name === categoryName ? { ...category, enabled } : category
+      )
+    );
+  }
+
+  function setCategorySeverity(categoryName: string, value: string) {
+    const severityOverride =
+      value === DEFAULT_SEVERITY_VALUE ? null : value.toLowerCase();
+
+    setCoverageCategories((categories) =>
+      categories.map((category) =>
+        category.name === categoryName
+          ? { ...category, severityOverride }
+          : category
+      )
+    );
+  }
+
+  function exclusionsUrl(type?: ExclusionType) {
+    return buildUrl(`${DASHBOARD_API_BASE}/exclusions`, {
+      portalId,
+      type: type ?? "",
+    });
+  }
+
+  async function loadExclusions() {
+    if (!portalId) {
+      return;
+    }
+
+    setExclusionsLoading(true);
+    setExclusionsError("");
+
+    try {
+      const [workflowResponse, propertyResponse] = await Promise.all([
+        hubspot.fetch(exclusionsUrl("workflow"), {
+          method: "GET",
+          timeout: 15000,
+        }),
+        hubspot.fetch(exclusionsUrl("property"), {
+          method: "GET",
+          timeout: 15000,
+        }),
+      ]);
+
+      if (!workflowResponse.ok) {
+        throw new Error(
+          `Workflow exclusions returned status ${workflowResponse.status}`
+        );
+      }
+      if (!propertyResponse.ok) {
+        throw new Error(
+          `Property exclusions returned status ${propertyResponse.status}`
+        );
+      }
+
+      setWorkflowExclusions(
+        ((await workflowResponse.json()) as MonitoringExclusion[]) ?? []
+      );
+      setPropertyExclusions(
+        ((await propertyResponse.json()) as MonitoringExclusion[]) ?? []
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setExclusionsError(message);
+    } finally {
+      setExclusionsLoading(false);
+    }
+  }
+
+  async function addWorkflowExclusion() {
+    const id = workflowExclusionId.trim();
+    if (!id) {
+      return;
+    }
+
+    setExclusionsSaving(true);
+    setExclusionsError("");
+
+    try {
+      const response = await hubspot.fetch(exclusionsUrl(), {
+        method: "POST",
+        body: {
+          type: "workflow",
+          id,
+          reason: workflowExclusionReason.trim() || undefined,
+        },
+        timeout: 15000,
+      });
+      if (response.status === 409) {
+        throw new Error("This workflow is already excluded.");
+      }
+      if (!response.ok) {
+        throw new Error(`Backend returned status ${response.status}`);
+      }
+
+      setWorkflowExclusionId("");
+      setWorkflowExclusionReason("");
+      await loadExclusions();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setExclusionsError(message);
+    } finally {
+      setExclusionsSaving(false);
+    }
+  }
+
+  async function addPropertyExclusion() {
+    const id = propertyExclusionId.trim();
+    if (!id) {
+      return;
+    }
+
+    setExclusionsSaving(true);
+    setExclusionsError("");
+
+    try {
+      const response = await hubspot.fetch(exclusionsUrl(), {
+        method: "POST",
+        body: {
+          type: "property",
+          id,
+          objectTypeId: propertyExclusionObjectTypeId,
+          reason: propertyExclusionReason.trim() || undefined,
+        },
+        timeout: 15000,
+      });
+      if (response.status === 409) {
+        throw new Error("This property is already excluded.");
+      }
+      if (!response.ok) {
+        throw new Error(`Backend returned status ${response.status}`);
+      }
+
+      setPropertyExclusionId("");
+      setPropertyExclusionReason("");
+      await loadExclusions();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setExclusionsError(message);
+    } finally {
+      setExclusionsSaving(false);
+    }
+  }
+
+  async function removeExclusion(exclusion: MonitoringExclusion) {
+    const previousWorkflows = workflowExclusions;
+    const previousProperties = propertyExclusions;
+    const url = buildUrl(
+      `${DASHBOARD_API_BASE}/exclusions/${exclusion.id}`,
+      { portalId }
+    );
+
+    if (exclusion.type === "workflow") {
+      setWorkflowExclusions((rows) =>
+        rows.filter((row) => row.id !== exclusion.id)
+      );
+    } else {
+      setPropertyExclusions((rows) =>
+        rows.filter((row) => row.id !== exclusion.id)
+      );
+    }
+
+    setExclusionsSaving(true);
+    setExclusionsError("");
+
+    try {
+      const response = await hubspot.fetch(url, {
+        method: "DELETE",
+        timeout: 15000,
+      });
+      if (!response.ok) {
+        throw new Error(`Backend returned status ${response.status}`);
+      }
+
+      await loadExclusions();
+    } catch (error) {
+      setWorkflowExclusions(previousWorkflows);
+      setPropertyExclusions(previousProperties);
+      const message = error instanceof Error ? error.message : String(error);
+      setExclusionsError(message);
+    } finally {
+      setExclusionsSaving(false);
+    }
+  }
+
   async function saveSettings() {
     setSaving(true);
     setSaveMessage("");
@@ -296,7 +657,6 @@ function SettingsPage({ context }: { context: any }) {
       const payload = {
         slackWebhookUrl,
         alertThreshold,
-        criticalWorkflows,
         slackDeliveryEnabled,
         ticketDeliveryEnabled,
       };
@@ -316,9 +676,6 @@ function SettingsPage({ context }: { context: any }) {
       const settings = data?.settings ?? {};
       setSlackWebhookUrl(String(settings.slackWebhookUrl ?? slackWebhookUrl));
       setAlertThreshold(String(settings.alertThreshold ?? alertThreshold));
-      setCriticalWorkflows(
-        String(settings.criticalWorkflows ?? criticalWorkflows)
-      );
       setSlackDeliveryEnabled(
         settings.slackDeliveryEnabled ?? slackDeliveryEnabled
       );
@@ -440,18 +797,6 @@ function SettingsPage({ context }: { context: any }) {
                     ]}
                   />
 
-                  <TextArea
-                    label="Critical workflows"
-                    name="criticalWorkflows"
-                    value={criticalWorkflows}
-                    onChange={(value) =>
-                      setCriticalWorkflows(String(value ?? ""))
-                    }
-                    readOnly={formLocked}
-                    rows={3}
-                    description="Add one workflow identifier per line so OpsLens can escalate changes that touch revenue-critical automation."
-                  />
-
                   <Flex direction="row" gap="medium">
                     <Box flex={1}>
                       <DeliveryToggle
@@ -561,57 +906,315 @@ function SettingsPage({ context }: { context: any }) {
                   </Flex>
                 </Tile>
 
-                <Tile>
-                  <Flex direction="column" gap="medium">
-                    <Text format={{ fontWeight: "bold" }}>
-                      Monitoring coverage
-                    </Text>
-                    <Divider />
-                    <Flex direction="column" gap="extra-small">
-                      <MonitorItem
-                        title="Archived properties"
-                        severity="High"
-                        variant="error"
-                        description="A property archive can break workflow filters, branches, and personalization that still depend on the field."
-                      />
-                      <MonitorItem
-                        title="Deleted properties"
-                        severity="High"
-                        variant="error"
-                        description="Deleted fields remove the source data workflows expect, so OpsLens treats affected automation as urgent."
-                      />
-                      <MonitorItem
-                        title="Renamed properties"
-                        severity="Low"
-                        variant="default"
-                        description="Label changes usually preserve API names, but OpsLens still flags them so consultants can prevent confusion."
-                      />
-                      <MonitorItem
-                        title="Property type changes"
-                        severity="Medium"
-                        variant="warning"
-                        description="Changing field type can alter workflow comparisons, list membership, and downstream reporting logic."
-                      />
-                      <MonitorItem
-                        title="Disabled workflows"
-                        severity="High"
-                        variant="error"
-                        description="A disabled workflow can stop lead routing, lifecycle updates, or customer notifications without a visible failure."
-                      />
-                      <MonitorItem
-                        title="Edited workflows"
-                        severity="Medium"
-                        variant="warning"
-                        description="Workflow edits can change enrollment, branching, and actions, so OpsLens highlights them for review."
-                      />
-                    </Flex>
-                  </Flex>
-                </Tile>
               </Flex>
             </Box>
           </Flex>
         </Flex>
       </Form>
+
+      <Tile>
+        <Flex direction="column" gap="medium">
+          <SectionHeader
+            eyebrow="Monitoring coverage"
+            title="Choose what OpsLens watches"
+            body="Turn alert categories on or off for this portal, and override severity only where this client's operating model needs it."
+          />
+          <Divider />
+
+          {coverageLoading ? <Text>Loading monitoring coverage...</Text> : null}
+          {coverageError ? (
+            <Flex align="center" gap="small" wrap>
+              <StatusTag variant="danger">Error</StatusTag>
+              <Text>{coverageError}</Text>
+            </Flex>
+          ) : null}
+
+          <Flex direction="column" gap="small">
+            {coverageCategories.map((category) => (
+              <Flex
+                key={category.name}
+                direction="row"
+                justify="between"
+                align="center"
+                gap="small"
+                wrap
+              >
+                <Box flex={1}>
+                  <Flex direction="column" gap="extra-small">
+                    <Text format={{ fontWeight: "bold" }}>
+                      {categoryLabel(category.name)}
+                    </Text>
+                    <Text>
+                      Default severity: {severityLabel(category.defaultSeverity)}
+                    </Text>
+                  </Flex>
+                </Box>
+                <Flex direction="row" align="center" gap="small" wrap>
+                  <Toggle
+                    label={category.enabled ? "On" : "Off"}
+                    checked={category.enabled}
+                    readonly={coverageLocked}
+                    onChange={(value) =>
+                      setCategoryEnabled(category.name, Boolean(value))
+                    }
+                  />
+                  <Select
+                    label="Severity override"
+                    name={`severity-${category.name}`}
+                    value={
+                      category.severityOverride || DEFAULT_SEVERITY_VALUE
+                    }
+                    onChange={(value) =>
+                      setCategorySeverity(
+                        category.name,
+                        String(value ?? DEFAULT_SEVERITY_VALUE)
+                      )
+                    }
+                    readOnly={coverageLocked || !category.enabled}
+                    options={[
+                      {
+                        label: `Default (${severityLabel(
+                          category.defaultSeverity
+                        )})`,
+                        value: DEFAULT_SEVERITY_VALUE,
+                      },
+                      { label: "Low", value: "low" },
+                      { label: "Medium", value: "medium" },
+                      { label: "High", value: "high" },
+                      { label: "Critical", value: "critical" },
+                    ]}
+                  />
+                </Flex>
+              </Flex>
+            ))}
+          </Flex>
+
+          {!coverageLoading && coverageCategories.length === 0 ? (
+            <Text>
+              Monitoring coverage could not be loaded yet. The rest of this
+              settings page remains available.
+            </Text>
+          ) : null}
+
+          <Flex direction="row" justify="end" gap="small">
+            <Button
+              type="button"
+              variant="primary"
+              disabled={coverageLocked || !coverageDirty}
+              onClick={saveMonitoringCoverage}
+            >
+              {coverageSaving ? "Saving..." : "Save monitoring coverage"}
+            </Button>
+          </Flex>
+
+          {coverageMessage ? (
+            <Flex align="center" gap="small" wrap>
+              <StatusTag variant="success">Saved</StatusTag>
+              <Text>{coverageMessage}</Text>
+            </Flex>
+          ) : null}
+        </Flex>
+      </Tile>
+
+      <Flex direction="column" gap="medium">
+        <Tile>
+          <Flex direction="column" gap="medium">
+            <SectionHeader
+              eyebrow="Exclusions"
+              title="Excluded workflows"
+              body="Workflows in this list will not generate alerts when disabled, edited, or deleted."
+            />
+            <Divider />
+
+            {exclusionsLoading ? <Text>Loading exclusions...</Text> : null}
+
+            <Flex direction="column" gap="small">
+              {workflowExclusions.length === 0 ? (
+                <Text>No excluded workflows yet.</Text>
+              ) : (
+                workflowExclusions.map((exclusion) => (
+                  <Flex
+                    key={exclusionKey(exclusion)}
+                    direction="row"
+                    justify="between"
+                    align="center"
+                    gap="small"
+                    wrap
+                  >
+                    <Box flex={1}>
+                      <Flex direction="column" gap="extra-small">
+                        <Text format={{ fontWeight: "bold" }}>
+                          {exclusion.exclusionId}
+                        </Text>
+                        {exclusion.reason ? (
+                          <Text>{exclusion.reason}</Text>
+                        ) : null}
+                      </Flex>
+                    </Box>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      disabled={exclusionsSaving}
+                      onClick={() => removeExclusion(exclusion)}
+                    >
+                      Remove
+                    </Button>
+                  </Flex>
+                ))
+              )}
+            </Flex>
+
+            <Divider />
+
+            <Flex direction="row" gap="small" align="center" wrap>
+              <Box flex={1}>
+                <Input
+                  label="Workflow ID"
+                  name="workflowExclusionId"
+                  value={workflowExclusionId}
+                  type="text"
+                  onChange={(value) =>
+                    setWorkflowExclusionId(String(value ?? ""))
+                  }
+                  readOnly={exclusionsSaving || !portalId}
+                  description="Paste the HubSpot workflow ID to exclude from monitoring."
+                />
+              </Box>
+              <Box flex={1}>
+                <Input
+                  label="Reason"
+                  name="workflowExclusionReason"
+                  value={workflowExclusionReason}
+                  type="text"
+                  onChange={(value) =>
+                    setWorkflowExclusionReason(String(value ?? ""))
+                  }
+                  readOnly={exclusionsSaving || !portalId}
+                  description="Optional note for future admins."
+                />
+              </Box>
+              <Button
+                type="button"
+                variant="primary"
+                disabled={
+                  exclusionsSaving || !portalId || !workflowExclusionId.trim()
+                }
+                onClick={addWorkflowExclusion}
+              >
+                Add exclusion
+              </Button>
+            </Flex>
+          </Flex>
+        </Tile>
+
+        <Tile>
+          <Flex direction="column" gap="medium">
+            <SectionHeader
+              eyebrow="Exclusions"
+              title="Excluded properties"
+              body="Properties in this list will not generate alerts when archived, deleted, renamed, or type-changed."
+            />
+            <Divider />
+
+            <Flex direction="column" gap="small">
+              {propertyExclusions.length === 0 ? (
+                <Text>No excluded properties yet.</Text>
+              ) : (
+                propertyExclusions.map((exclusion) => (
+                  <Flex
+                    key={exclusionKey(exclusion)}
+                    direction="row"
+                    justify="between"
+                    align="center"
+                    gap="small"
+                    wrap
+                  >
+                    <Box flex={1}>
+                      <Flex direction="column" gap="extra-small">
+                        <Text format={{ fontWeight: "bold" }}>
+                          {exclusion.exclusionId}
+                        </Text>
+                        <Text>{objectTypeLabel(exclusion.objectTypeId)}</Text>
+                        {exclusion.reason ? (
+                          <Text>{exclusion.reason}</Text>
+                        ) : null}
+                      </Flex>
+                    </Box>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      disabled={exclusionsSaving}
+                      onClick={() => removeExclusion(exclusion)}
+                    >
+                      Remove
+                    </Button>
+                  </Flex>
+                ))
+              )}
+            </Flex>
+
+            <Divider />
+
+            <Flex direction="row" gap="small" align="center" wrap>
+              <Box flex={1}>
+                <Input
+                  label="Property name"
+                  name="propertyExclusionId"
+                  value={propertyExclusionId}
+                  type="text"
+                  onChange={(value) =>
+                    setPropertyExclusionId(String(value ?? ""))
+                  }
+                  readOnly={exclusionsSaving || !portalId}
+                  description="Use the internal HubSpot property name, not the display label."
+                />
+              </Box>
+              <Box flex={1}>
+                <Select
+                  label="Object type"
+                  name="propertyExclusionObjectTypeId"
+                  value={propertyExclusionObjectTypeId}
+                  onChange={(value) =>
+                    setPropertyExclusionObjectTypeId(String(value ?? "0-1"))
+                  }
+                  readOnly={exclusionsSaving || !portalId}
+                  options={OBJECT_TYPE_OPTIONS}
+                />
+              </Box>
+              <Box flex={1}>
+                <Input
+                  label="Reason"
+                  name="propertyExclusionReason"
+                  value={propertyExclusionReason}
+                  type="text"
+                  onChange={(value) =>
+                    setPropertyExclusionReason(String(value ?? ""))
+                  }
+                  readOnly={exclusionsSaving || !portalId}
+                  description="Optional note for future admins."
+                />
+              </Box>
+              <Button
+                type="button"
+                variant="primary"
+                disabled={
+                  exclusionsSaving || !portalId || !propertyExclusionId.trim()
+                }
+                onClick={addPropertyExclusion}
+              >
+                Add exclusion
+              </Button>
+            </Flex>
+
+            {exclusionsError ? (
+              <Flex align="center" gap="small" wrap>
+                <StatusTag variant="danger">Error</StatusTag>
+                <Text>{exclusionsError}</Text>
+              </Flex>
+            ) : null}
+          </Flex>
+        </Tile>
+      </Flex>
     </Flex>
   );
 }
