@@ -1090,7 +1090,7 @@ function SettingsPage({ context }: { context: any }) {
             <SectionHeader
               eyebrow="Monitoring coverage"
               title="Choose what OpsLens watches"
-              body="OpsLens alerts you when these changes affect a workflow, list, email template, or other automation in this portal. Changes to unused assets are tracked but not alerted."
+              body="OpsLens alerts you when something changes in your portal that can break an active automation."
             />
 
             {coverageLoading ? <Text>Loading monitoring coverage...</Text> : null}

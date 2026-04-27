@@ -9,6 +9,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from app import db as db_module
+from app.api.v1.routes import dashboard as dashboard_module
 from app.main import app
 from app.models.alert import (
     SEVERITY_HIGH,
@@ -38,6 +39,7 @@ class DashboardEndpointTests(unittest.TestCase):
         os.environ["DATABASE_URL"] = self._database_url
         db_module._engine = None
         db_module._SessionLocal = None
+        dashboard_module._LAST_POLL_AT.clear()
         db_module.init_db()
         self.client = TestClient(app)
 
@@ -47,6 +49,7 @@ class DashboardEndpointTests(unittest.TestCase):
             db_module._engine.dispose()
         db_module._engine = None
         db_module._SessionLocal = None
+        dashboard_module._LAST_POLL_AT.clear()
         os.environ.pop("DATABASE_URL", None)
         self._tempdir.cleanup()
 
@@ -628,6 +631,96 @@ class DashboardEndpointTests(unittest.TestCase):
         self.assertEqual([], response.json())
         called_url, _called_token = get_json_mock.call_args.args
         self.assertIn("/crm/v3/properties/custom-object", called_url)
+
+    def test_poll_now_endpoint_runs_polling_for_portal(self) -> None:
+        with (
+            patch(
+                "app.api.v1.routes.dashboard.poll_portal_workflows",
+                return_value={
+                    "status": "ok",
+                    "createdEvents": 1,
+                    "editedEvents": 2,
+                },
+            ) as workflow_mock,
+            patch(
+                "app.api.v1.routes.dashboard.poll_portal_properties",
+                return_value={
+                    "status": "ok",
+                    "archivedEvents": 1,
+                    "typeChangedEvents": 1,
+                },
+            ) as property_mock,
+            patch(
+                "app.api.v1.routes.dashboard.correlate_unprocessed_events",
+                return_value={"alerts_created": 3},
+            ) as correlation_mock,
+        ):
+            response = self.client.post(
+                f"/api/v1/dashboard/poll-now?portalId={self.PORTAL_ID}"
+            )
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(
+            {"status": "ok", "eventsDetected": 5, "alertsCreated": 3},
+            response.json(),
+        )
+        workflow_mock.assert_called_once()
+        property_mock.assert_called_once()
+        correlation_mock.assert_called_once()
+        self.assertEqual(self.PORTAL_ID, workflow_mock.call_args.args[1])
+        self.assertEqual(self.PORTAL_ID, property_mock.call_args.args[1])
+
+    def test_poll_now_endpoint_returns_429_when_called_twice_within_30s(self) -> None:
+        with (
+            patch(
+                "app.api.v1.routes.dashboard.poll_portal_workflows",
+                return_value={"status": "ok"},
+            ),
+            patch(
+                "app.api.v1.routes.dashboard.poll_portal_properties",
+                return_value={"status": "ok"},
+            ),
+            patch(
+                "app.api.v1.routes.dashboard.correlate_unprocessed_events",
+                return_value={"alerts_created": 0},
+            ),
+        ):
+            first = self.client.post(
+                f"/api/v1/dashboard/poll-now?portalId={self.PORTAL_ID}"
+            )
+            second = self.client.post(
+                f"/api/v1/dashboard/poll-now?portalId={self.PORTAL_ID}"
+            )
+
+        self.assertEqual(200, first.status_code)
+        self.assertEqual(429, second.status_code)
+
+    def test_poll_now_endpoint_resets_rate_limit_after_window(self) -> None:
+        dashboard_module._LAST_POLL_AT[self.PORTAL_ID] = datetime.now(
+            timezone.utc
+        ) - timedelta(seconds=31)
+
+        with (
+            patch(
+                "app.api.v1.routes.dashboard.poll_portal_workflows",
+                return_value={"status": "ok", "createdEvents": 1},
+            ) as workflow_mock,
+            patch(
+                "app.api.v1.routes.dashboard.poll_portal_properties",
+                return_value={"status": "ok"},
+            ),
+            patch(
+                "app.api.v1.routes.dashboard.correlate_unprocessed_events",
+                return_value={"alerts_created": 1},
+            ),
+        ):
+            response = self.client.post(
+                f"/api/v1/dashboard/poll-now?portalId={self.PORTAL_ID}"
+            )
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(1, response.json()["eventsDetected"])
+        workflow_mock.assert_called_once()
 
 
 if __name__ == "__main__":

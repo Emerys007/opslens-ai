@@ -27,6 +27,8 @@ from app.services.monitoring_config import (
     load_monitoring_coverage,
     merge_monitoring_coverage_update,
 )
+from app.services.alert_correlation import correlate_unprocessed_events
+from app.services.property_polling import poll_portal_properties
 from app.services.portal_entitlements import get_portal_entitlement, portal_is_entitled
 from app.services.portal_settings import (
     SEVERITY_ORDER,
@@ -34,6 +36,7 @@ from app.services.portal_settings import (
     normalize_severity,
 )
 from app.services.hubspot_oauth import get_portal_access_token
+from app.services.workflow_polling import poll_portal_workflows
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -42,6 +45,8 @@ WATCHING_SEVERITY = "medium"
 VALID_EXCLUSION_TYPES = (EXCLUSION_TYPE_WORKFLOW, EXCLUSION_TYPE_PROPERTY)
 VALID_ACTION_PAGE_SIZES = (3, 5, 10, 25, 50)
 HUBSPOT_PROPERTIES_URL = "https://api.hubapi.com/crm/v3/properties/{object_type}"
+POLL_NOW_RATE_LIMIT_SECONDS = 30
+_LAST_POLL_AT: dict[str, datetime] = {}
 OBJECT_TYPE_ID_TO_PROPERTIES_PATH = {
     "0-1": "contacts",
     "0-2": "companies",
@@ -169,6 +174,23 @@ def _action_page_size(value) -> int:
 def _action_page(value) -> int:
     parsed = _parse_int_param(value, 1)
     return parsed if parsed >= 1 else 1
+
+
+def _event_count_from_poll_summary(summary: dict) -> int:
+    return sum(
+        int(summary.get(key) or 0)
+        for key in (
+            "createdEvents",
+            "deletedEvents",
+            "editedEvents",
+            "enabledEvents",
+            "disabledEvents",
+            "archivedEvents",
+            "unarchivedEvents",
+            "typeChangedEvents",
+            "renamedEvents",
+        )
+    )
 
 
 def _hubspot_get_json(url: str, access_token: str) -> dict:
@@ -495,6 +517,51 @@ def dashboard_overview(request: Request):
                 "settingsStorage": settings.get("storage", "unknown"),
             },
         }
+    finally:
+        session.close()
+
+
+@router.post("/poll-now")
+def dashboard_poll_now(request: Request):
+    portal_id = str(request.query_params.get("portalId", "")).strip()
+    if not portal_id:
+        raise HTTPException(status_code=400, detail="portalId is required.")
+
+    now = _utc_now()
+    previous = _LAST_POLL_AT.get(portal_id)
+    if previous is not None:
+        if getattr(previous, "tzinfo", None) is None:
+            previous = previous.replace(tzinfo=timezone.utc)
+        elapsed = (now - previous.astimezone(timezone.utc)).total_seconds()
+        if elapsed < POLL_NOW_RATE_LIMIT_SECONDS:
+            raise HTTPException(
+                status_code=429,
+                detail="Poll already requested recently.",
+            )
+
+    db_ready = init_db()
+    session = get_session()
+    if not db_ready or session is None:
+        raise HTTPException(status_code=503, detail="Database is not configured.")
+
+    _LAST_POLL_AT[portal_id] = now
+    try:
+        workflow_summary = poll_portal_workflows(session, portal_id)
+        property_summary = poll_portal_properties(session, portal_id)
+        correlation_summary = correlate_unprocessed_events(session)
+        return {
+            "status": "ok",
+            "eventsDetected": _event_count_from_poll_summary(workflow_summary)
+            + _event_count_from_poll_summary(property_summary),
+            "alertsCreated": int(correlation_summary.get("alerts_created") or 0),
+        }
+    except Exception:
+        _LAST_POLL_AT.pop(portal_id, None)
+        try:
+            session.rollback()
+        except Exception:
+            pass
+        raise
     finally:
         session.close()
 

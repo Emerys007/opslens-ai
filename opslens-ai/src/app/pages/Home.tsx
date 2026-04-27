@@ -62,6 +62,12 @@ type OverviewResponse = {
   };
 };
 
+type PollNowResponse = {
+  status?: string;
+  eventsDetected?: number;
+  alertsCreated?: number;
+};
+
 type StatusVariant = "danger" | "warning" | "info" | "success" | "default";
 
 function buildUrl(path: string, params: Record<string, string>) {
@@ -309,6 +315,11 @@ function HomePage({ context }: HomePageProps) {
   const [resolvingAlertId, setResolvingAlertId] = useState("");
   const [actionPageSize, setActionPageSize] = useState(10);
   const [actionPage, setActionPage] = useState(1);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState("");
+  const [timeTick, setTimeTick] = useState(0);
+  const [checkingNow, setCheckingNow] = useState(false);
+  const [checkNowMessage, setCheckNowMessage] = useState("");
+  const [checkNowLockedUntil, setCheckNowLockedUntil] = useState(0);
 
   const portalId = String(context?.portal?.id ?? "");
   const userId = String(context?.user?.id ?? "");
@@ -356,6 +367,9 @@ function HomePage({ context }: HomePageProps) {
     actionRequiredCount === 0 ? 0 : (actionPage - 1) * actionPageSize + 1;
   const showingEnd = Math.min(actionPage * actionPageSize, actionRequiredCount);
   const showActionPagination = actionRequiredCount > actionPageSize;
+  const checkNowLocked = checkNowLockedUntil > Date.now();
+  const lastUpdatedLabel =
+    timeTick >= 0 && lastUpdatedAt ? formatTimeAgo(lastUpdatedAt) : "Not updated yet";
 
   const greeting = greetingForHour(new Date().getHours());
   const greetingLine = userName ? `${greeting}, ${userName}` : greeting;
@@ -388,6 +402,7 @@ function HomePage({ context }: HomePageProps) {
 
     const data = (await response.json()) as OverviewResponse;
     setOverviewData(data);
+    setLastUpdatedAt(new Date().toISOString());
     return data;
   };
 
@@ -469,12 +484,78 @@ function HomePage({ context }: HomePageProps) {
     }
   };
 
+  const clearCheckNowMessageSoon = () => {
+    setTimeout(() => {
+      setCheckNowMessage("");
+    }, 5000);
+  };
+
+  const checkNow = async () => {
+    if (!portalId || checkingNow || checkNowLocked) {
+      return;
+    }
+
+    setCheckingNow(true);
+    setOverviewError("");
+    setCheckNowMessage("Checking your portal...");
+
+    try {
+      const response = await hubspot.fetch(
+        buildUrl("/api/v1/dashboard/poll-now", { portalId }),
+        {
+          method: "POST",
+          timeout: 30000,
+        }
+      );
+      if (response.status === 429) {
+        setCheckNowMessage("Just checked — wait 30s.");
+        clearCheckNowMessageSoon();
+        return;
+      }
+      if (!response.ok) {
+        throw new Error(`Check-now request failed with status ${response.status}`);
+      }
+
+      const payload = (await response.json()) as PollNowResponse;
+      await loadOverview();
+      setCheckNowLockedUntil(Date.now() + 30000);
+      const eventsDetected = Number(payload.eventsDetected ?? 0);
+      setCheckNowMessage(
+        eventsDetected > 0 ? `Found ${eventsDetected} event(s)` : "No new changes"
+      );
+      clearCheckNowMessageSoon();
+    } catch (error) {
+      setCheckNowMessage(
+        error instanceof Error ? error.message : "Check-now request failed."
+      );
+      clearCheckNowMessageSoon();
+    } finally {
+      setCheckingNow(false);
+    }
+  };
+
   useEffect(() => {
     refresh().catch((error) => {
       setOverviewError(error instanceof Error ? error.message : "Unknown error");
       setLoading(false);
     });
   }, [portalId, userId, userEmail, appId, actionPageSize, actionPage]);
+
+  useEffect(() => {
+    const intervalId = setInterval(() => {
+      loadOverview().catch((error) => {
+        setOverviewError(error instanceof Error ? error.message : "Unknown error");
+      });
+    }, 60000);
+    return () => clearInterval(intervalId);
+  }, [portalId, userId, userEmail, appId, actionPageSize, actionPage]);
+
+  useEffect(() => {
+    const intervalId = setInterval(() => {
+      setTimeTick((value) => value + 1);
+    }, 5000);
+    return () => clearInterval(intervalId);
+  }, []);
 
   return (
     <Flex direction="column" gap="medium">
@@ -487,14 +568,30 @@ function HomePage({ context }: HomePageProps) {
               {overviewError ? <Text>Overview issue: {overviewError}</Text> : null}
             </Flex>
           </Box>
-          <Button
-            type="button"
-            variant="secondary"
-            disabled={loading}
-            onClick={() => refresh()}
-          >
-            {loading ? "Refreshing..." : "Refresh"}
-          </Button>
+          <Flex direction="column" align="end" gap="extra-small">
+            <Flex direction="row" align="center" gap="small" wrap>
+              <Button
+                type="button"
+                variant="primary"
+                disabled={checkingNow || checkNowLocked || !portalId}
+                onClick={checkNow}
+              >
+                {checkingNow ? "Checking..." : "Check now"}
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={loading}
+                onClick={() => refresh()}
+              >
+                {loading ? "Refreshing..." : "Refresh"}
+              </Button>
+            </Flex>
+            <Text variant="microcopy">Last updated {lastUpdatedLabel}</Text>
+            {checkNowMessage ? (
+              <Text variant="microcopy">{checkNowMessage}</Text>
+            ) : null}
+          </Flex>
         </Flex>
       </Tile>
 
