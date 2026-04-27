@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Request
-from sqlalchemy import desc, func, select
+from sqlalchemy import case, desc, func, select
 
 from app.db import get_session, init_db
 from app.models.alert import STATUS_OPEN, STATUS_RESOLVED, Alert
@@ -36,6 +36,7 @@ router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 ACTION_REQUIRED_SEVERITIES = ("critical", "high")
 WATCHING_SEVERITY = "medium"
 VALID_EXCLUSION_TYPES = (EXCLUSION_TYPE_WORKFLOW, EXCLUSION_TYPE_PROPERTY)
+VALID_ACTION_PAGE_SIZES = (10, 25, 50)
 
 
 def _resolved_level(row: AlertEvent, threshold: str) -> str:
@@ -98,12 +99,23 @@ def _count_alerts(session, portal_id: str, *filters) -> int:
     return int(session.scalar(stmt) or 0)
 
 
-def _alert_rows(session, portal_id: str, *filters, limit: int = 5) -> list[Alert]:
+def _alert_rows(
+    session,
+    portal_id: str,
+    *filters,
+    limit: int = 5,
+    offset: int = 0,
+    order_by=None,
+) -> list[Alert]:
     stmt = select(Alert)
     stmt = _portal_filtered(stmt, Alert, portal_id)
     for clause in filters:
         stmt = stmt.where(clause)
-    stmt = stmt.order_by(desc(Alert.created_at)).limit(limit)
+    for ordering in (order_by or (desc(Alert.created_at),)):
+        stmt = stmt.order_by(ordering)
+    if offset:
+        stmt = stmt.offset(offset)
+    stmt = stmt.limit(limit)
     return list(session.execute(stmt).scalars().all())
 
 
@@ -131,23 +143,59 @@ def _max_timestamp(*values):
     return max(cleaned)
 
 
-def _action_summary(session, portal_id: str, settings: dict) -> dict:
+def _parse_int_param(value, default: int) -> int:
+    try:
+        return int(str(value).strip())
+    except Exception:
+        return default
+
+
+def _action_page_size(value) -> int:
+    parsed = _parse_int_param(value, 10)
+    return parsed if parsed in VALID_ACTION_PAGE_SIZES else 10
+
+
+def _action_page(value) -> int:
+    parsed = _parse_int_param(value, 1)
+    return parsed if parsed >= 1 else 1
+
+
+def _action_required_ordering():
+    severity_rank = case(
+        (func.lower(Alert.severity) == "critical", 0),
+        (func.lower(Alert.severity) == "high", 1),
+        else_=2,
+    )
+    return (severity_rank, desc(Alert.created_at))
+
+
+def _action_summary(
+    session,
+    portal_id: str,
+    settings: dict,
+    *,
+    action_page_size: int = 10,
+    action_page: int = 1,
+) -> dict:
     action_filter = func.lower(Alert.severity).in_(ACTION_REQUIRED_SEVERITIES)
     watching_filter = func.lower(Alert.severity) == WATCHING_SEVERITY
+    action_offset = (action_page - 1) * action_page_size
 
     action_rows = _alert_rows(
         session,
         portal_id,
         Alert.status == STATUS_OPEN,
         action_filter,
-        limit=5,
+        limit=action_page_size,
+        offset=action_offset,
+        order_by=_action_required_ordering(),
     )
     watching_rows = _alert_rows(
         session,
         portal_id,
         Alert.status == STATUS_OPEN,
         watching_filter,
-        limit=5,
+        limit=10,
     )
 
     resolved_cutoff = _utc_now() - timedelta(days=7)
@@ -292,6 +340,8 @@ def dashboard_overview(request: Request):
     user_id = str(query.get("userId", "")).strip()
     user_email = str(query.get("userEmail", "")).strip()
     app_id = str(query.get("appId", "")).strip()
+    action_page_size = _action_page_size(query.get("actionPageSize", "10"))
+    action_page = _action_page(query.get("actionPage", "1"))
 
     db_ready = init_db()
     session = get_session()
@@ -376,7 +426,13 @@ def dashboard_overview(request: Request):
                 "monitoredWorkflows": monitored_workflows,
                 "lastCheckedUtc": last_checked,
                 "activeIncidents": active_incidents,
-                **_action_summary(session, portal_id, settings),
+                **_action_summary(
+                    session,
+                    portal_id,
+                    settings,
+                    action_page_size=action_page_size,
+                    action_page=action_page,
+                ),
             },
             "debug": {
                 "portalId": portal_id or "not-provided",
