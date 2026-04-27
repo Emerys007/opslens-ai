@@ -88,60 +88,237 @@ class DashboardEndpointTests(unittest.TestCase):
         session.refresh(alert)
         return alert
 
-    def test_overview_returns_action_required_open_critical_and_high_newest_first_capped(
+    def _seed_action_alerts(
+        self,
+        session,
+        *,
+        count: int,
+        severity: str = SEVERITY_HIGH,
+        title_prefix: str = "Action",
+        base: datetime | None = None,
+    ) -> list[Alert]:
+        base_time = base or datetime(2026, 4, 27, 12, 0, tzinfo=timezone.utc)
+        alerts = []
+        for index in range(count):
+            alerts.append(
+                self._seed_alert(
+                    session,
+                    severity=severity,
+                    title=f"{title_prefix} {index + 1:02d}",
+                    plain_english_explanation=(
+                        "Plain-English first action" if index == 0 else None
+                    ),
+                    created_at=base_time - timedelta(minutes=index),
+                )
+            )
+        return alerts
+
+    def _overview_summary(self, query: str = "") -> dict:
+        separator = "&" if query else ""
+        response = self.client.get(
+            f"/api/v1/dashboard/overview?portalId={self.PORTAL_ID}{separator}{query}"
+        )
+        self.assertEqual(200, response.status_code)
+        return response.json()["summary"]
+
+    def _action_titles(self, summary: dict) -> list[str]:
+        return [row["title"] for row in summary["actionRequired"]]
+
+    def test_overview_default_action_page_returns_10_rows_and_total_count(
         self,
     ) -> None:
-        base = datetime(2026, 4, 27, 12, 0, tzinfo=timezone.utc)
         session = self._session()
         try:
-            seeded_ids = []
-            for index in range(6):
-                alert = self._seed_alert(
-                    session,
-                    severity=SEVERITY_CRITICAL if index % 2 else SEVERITY_HIGH,
-                    title=f"Action {index}",
-                    plain_english_explanation=(
-                        "Newest plain-English explanation" if index == 5 else None
-                    ),
-                    created_at=base + timedelta(minutes=index),
-                )
-                seeded_ids.append(str(alert.id))
+            self._seed_action_alerts(session, count=12)
             self._seed_alert(
                 session,
                 severity=SEVERITY_MEDIUM,
                 title="Watching only",
-                created_at=base + timedelta(minutes=10),
             )
             self._seed_alert(
                 session,
                 severity=SEVERITY_HIGH,
                 status=STATUS_RESOLVED,
                 title="Resolved high",
-                created_at=base + timedelta(minutes=11),
-                resolved_at=base + timedelta(minutes=12),
+                resolved_at=datetime(2026, 4, 27, 13, 0, tzinfo=timezone.utc),
             )
         finally:
             session.close()
 
-        response = self.client.get(
-            f"/api/v1/dashboard/overview?portalId={self.PORTAL_ID}"
-        )
-        self.assertEqual(200, response.status_code)
-        summary = response.json()["summary"]
+        summary = self._overview_summary()
 
-        self.assertEqual(6, summary["actionRequiredCount"])
-        self.assertEqual(5, len(summary["actionRequired"]))
+        self.assertEqual(12, summary["actionRequiredCount"])
+        self.assertEqual(10, len(summary["actionRequired"]))
         self.assertEqual(
-            list(reversed(seeded_ids[1:])),
-            [row["id"] for row in summary["actionRequired"]],
-        )
-        self.assertEqual(
-            "Newest plain-English explanation",
+            "Plain-English first action",
             summary["actionRequired"][0]["title"],
         )
         self.assertEqual(
-            {SEVERITY_CRITICAL, SEVERITY_HIGH},
+            [f"Action {index:02d}" for index in range(2, 11)],
+            self._action_titles(summary)[1:],
+        )
+        self.assertEqual(
+            {SEVERITY_HIGH},
             {row["severity"] for row in summary["actionRequired"]},
+        )
+
+    def test_overview_action_page_size_25_returns_up_to_25(self) -> None:
+        session = self._session()
+        try:
+            self._seed_action_alerts(session, count=30)
+        finally:
+            session.close()
+
+        summary = self._overview_summary("actionPageSize=25")
+
+        self.assertEqual(30, summary["actionRequiredCount"])
+        self.assertEqual(25, len(summary["actionRequired"]))
+        self.assertEqual("Plain-English first action", summary["actionRequired"][0]["title"])
+        self.assertEqual("Action 25", summary["actionRequired"][-1]["title"])
+
+    def test_overview_action_page_size_3_returns_up_to_3(self) -> None:
+        session = self._session()
+        try:
+            self._seed_action_alerts(session, count=12)
+        finally:
+            session.close()
+
+        summary = self._overview_summary("actionPageSize=3")
+
+        self.assertEqual(12, summary["actionRequiredCount"])
+        self.assertEqual(3, len(summary["actionRequired"]))
+        self.assertEqual(
+            ["Plain-English first action", "Action 02", "Action 03"],
+            self._action_titles(summary),
+        )
+
+    def test_overview_action_page_size_50_returns_up_to_50(self) -> None:
+        session = self._session()
+        try:
+            self._seed_action_alerts(session, count=55)
+        finally:
+            session.close()
+
+        summary = self._overview_summary("actionPageSize=50")
+
+        self.assertEqual(55, summary["actionRequiredCount"])
+        self.assertEqual(50, len(summary["actionRequired"]))
+        self.assertEqual("Action 50", summary["actionRequired"][-1]["title"])
+
+    def test_overview_invalid_action_page_size_clamps_to_10(self) -> None:
+        session = self._session()
+        try:
+            self._seed_action_alerts(session, count=12)
+        finally:
+            session.close()
+
+        summary = self._overview_summary("actionPageSize=999")
+
+        self.assertEqual(12, summary["actionRequiredCount"])
+        self.assertEqual(10, len(summary["actionRequired"]))
+
+    def test_overview_action_page_2_returns_rows_11_to_20(self) -> None:
+        session = self._session()
+        try:
+            self._seed_action_alerts(session, count=25)
+        finally:
+            session.close()
+
+        summary = self._overview_summary("actionPage=2&actionPageSize=10")
+
+        self.assertEqual(25, summary["actionRequiredCount"])
+        self.assertEqual(
+            [f"Action {index:02d}" for index in range(11, 21)],
+            self._action_titles(summary),
+        )
+
+    def test_overview_action_page_3_returns_remaining_rows(self) -> None:
+        session = self._session()
+        try:
+            self._seed_action_alerts(session, count=25)
+        finally:
+            session.close()
+
+        summary = self._overview_summary("actionPage=3&actionPageSize=10")
+
+        self.assertEqual(25, summary["actionRequiredCount"])
+        self.assertEqual(5, len(summary["actionRequired"]))
+        self.assertEqual(
+            [f"Action {index:02d}" for index in range(21, 26)],
+            self._action_titles(summary),
+        )
+
+    def test_overview_action_required_count_is_unaffected_by_pagination(self) -> None:
+        session = self._session()
+        try:
+            self._seed_action_alerts(session, count=25)
+        finally:
+            session.close()
+
+        summary = self._overview_summary("actionPage=2&actionPageSize=10")
+
+        self.assertEqual(25, summary["actionRequiredCount"])
+        self.assertEqual(10, len(summary["actionRequired"]))
+
+    def test_overview_action_page_zero_clamps_to_first_page(self) -> None:
+        session = self._session()
+        try:
+            self._seed_action_alerts(session, count=12)
+        finally:
+            session.close()
+
+        first_page = self._overview_summary("actionPage=1&actionPageSize=10")
+        zero_page = self._overview_summary("actionPage=0&actionPageSize=10")
+
+        self.assertEqual(self._action_titles(first_page), self._action_titles(zero_page))
+
+    def test_overview_action_page_negative_clamps_to_first_page(self) -> None:
+        session = self._session()
+        try:
+            self._seed_action_alerts(session, count=12)
+        finally:
+            session.close()
+
+        first_page = self._overview_summary("actionPage=1&actionPageSize=10")
+        negative_page = self._overview_summary("actionPage=-5&actionPageSize=10")
+
+        self.assertEqual(
+            self._action_titles(first_page),
+            self._action_titles(negative_page),
+        )
+
+    def test_overview_action_required_sorts_critical_before_high_then_recent(
+        self,
+    ) -> None:
+        base = datetime(2026, 4, 27, 12, 0, tzinfo=timezone.utc)
+        session = self._session()
+        try:
+            self._seed_alert(
+                session,
+                severity=SEVERITY_HIGH,
+                title="High newest",
+                created_at=base + timedelta(minutes=5),
+            )
+            self._seed_alert(
+                session,
+                severity=SEVERITY_CRITICAL,
+                title="Critical older",
+                created_at=base + timedelta(minutes=1),
+            )
+            self._seed_alert(
+                session,
+                severity=SEVERITY_CRITICAL,
+                title="Critical newest",
+                created_at=base + timedelta(minutes=3),
+            )
+        finally:
+            session.close()
+
+        summary = self._overview_summary()
+
+        self.assertEqual(
+            ["Critical newest", "Critical older", "High newest"],
+            self._action_titles(summary),
         )
 
     def test_overview_returns_watching_medium_open_alerts_newest_first_capped(
@@ -151,7 +328,7 @@ class DashboardEndpointTests(unittest.TestCase):
         session = self._session()
         try:
             seeded_ids = []
-            for index in range(6):
+            for index in range(12):
                 alert = self._seed_alert(
                     session,
                     severity=SEVERITY_MEDIUM,
@@ -174,10 +351,10 @@ class DashboardEndpointTests(unittest.TestCase):
         self.assertEqual(200, response.status_code)
         summary = response.json()["summary"]
 
-        self.assertEqual(6, summary["watchingCount"])
-        self.assertEqual(5, len(summary["watching"]))
+        self.assertEqual(12, summary["watchingCount"])
+        self.assertEqual(10, len(summary["watching"]))
         self.assertEqual(
-            list(reversed(seeded_ids[1:])),
+            list(reversed(seeded_ids[2:])),
             [row["id"] for row in summary["watching"]],
         )
         self.assertEqual(

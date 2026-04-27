@@ -19,8 +19,9 @@ def _utc_now() -> datetime:
 SEVERITY_HIGH = "high"
 SEVERITY_MEDIUM = "medium"
 SEVERITY_LOW = "low"
+SEVERITY_CRITICAL = "critical"
 
-ALL_SEVERITIES = (SEVERITY_HIGH, SEVERITY_MEDIUM, SEVERITY_LOW)
+ALL_SEVERITIES = (SEVERITY_CRITICAL, SEVERITY_HIGH, SEVERITY_MEDIUM, SEVERITY_LOW)
 
 
 # ---------------------------------------------------------------------------

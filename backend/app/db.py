@@ -19,6 +19,7 @@ _BACKFILL_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("marketplace_install_sessions", "trial_expires_at", "TIMESTAMP WITH TIME ZONE"),
     ("portal_settings", "slack_delivery_enabled", "BOOLEAN DEFAULT TRUE"),
     ("portal_settings", "ticket_delivery_enabled", "BOOLEAN DEFAULT TRUE"),
+    ("portal_settings", "monitoring_coverage", "JSON"),
 )
 
 
@@ -103,6 +104,7 @@ def init_db() -> bool:
     from app.models.alert_event import AlertEvent  # noqa: F401
     from app.models.hubspot_installation import HubSpotInstallation  # noqa: F401
     from app.models.marketplace_install_session import MarketplaceInstallSession  # noqa: F401
+    from app.models.monitoring_exclusion import MonitoringExclusion  # noqa: F401
     from app.models.portal_setting import PortalSetting  # noqa: F401
     from app.models.portal_entitlement import PortalEntitlement  # noqa: F401
     from app.models.property_change_event import PropertyChangeEvent  # noqa: F401

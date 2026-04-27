@@ -70,6 +70,14 @@ from app.models.workflow_change_event import (
 from app.models.workflow_dependency import WorkflowDependency
 from app.models.workflow_snapshot import WorkflowSnapshot
 from app.services.dependency_mapping import find_workflows_affected_by_property
+from app.services.monitoring_config import (
+    MONITORING_CATEGORIES,
+    get_category_severity,
+    is_category_enabled,
+    is_property_excluded,
+    is_workflow_excluded,
+    load_monitoring_coverage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +130,11 @@ def _aware(value: datetime | None) -> datetime | None:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value
+
+
+def _mark_processed(event) -> None:
+    if getattr(event, "processed_at", None) is None:
+        event.processed_at = _utc_now()
 
 
 def _truncate_title(text: str, *, max_length: int = 120) -> str:
@@ -405,6 +418,17 @@ def correlate_property_change_event(
     portal_id = event.portal_id
     property_name = event.property_name
     object_type_id = event.object_type_id or ""
+    coverage = load_monitoring_coverage(session, portal_id)
+
+    if not is_category_enabled(coverage, source_event_type):
+        _mark_processed(event)
+        return []
+
+    if is_property_excluded(session, portal_id, property_name, object_type_id):
+        _mark_processed(event)
+        return []
+
+    severity = get_category_severity(coverage, source_event_type, severity)
 
     property_label = _lookup_property_label(
         session, portal_id, object_type_id, property_name,
@@ -518,6 +542,16 @@ def correlate_workflow_change_event(
     severity = _WORKFLOW_EVENT_TO_SEVERITY[event.event_type]
     portal_id = event.portal_id
     workflow_id = event.workflow_id
+    if source_event_type in MONITORING_CATEGORIES:
+        coverage = load_monitoring_coverage(session, portal_id)
+        if not is_category_enabled(coverage, source_event_type):
+            _mark_processed(event)
+            return []
+        if is_workflow_excluded(session, portal_id, workflow_id):
+            _mark_processed(event)
+            return []
+        severity = get_category_severity(coverage, source_event_type, severity)
+
     workflow_name = _lookup_workflow_name(session, portal_id, workflow_id) or ""
     display_name = workflow_name or workflow_id
 

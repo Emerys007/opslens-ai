@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, String, Text
+from sqlalchemy import Boolean, DateTime, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -20,6 +20,7 @@ class PortalSetting(Base):
     # starts receiving Slack notifications and tickets without configuration.
     slack_delivery_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     ticket_delivery_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    monitoring_coverage: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

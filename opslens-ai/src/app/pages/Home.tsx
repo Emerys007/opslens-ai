@@ -14,6 +14,7 @@ import {
 } from "@hubspot/ui-extensions";
 
 const BACKEND_BASE_URL = "https://api.app-sync.com";
+const ACTION_PAGE_SIZE_OPTIONS = [3, 5, 10, 25, 50];
 
 hubspot.extend(({ context }) => <HomePage context={context} />);
 
@@ -306,6 +307,8 @@ function HomePage({ context }: HomePageProps) {
   const [overviewError, setOverviewError] = useState("");
   const [overviewData, setOverviewData] = useState<OverviewResponse | null>(null);
   const [resolvingAlertId, setResolvingAlertId] = useState("");
+  const [actionPageSize, setActionPageSize] = useState(10);
+  const [actionPage, setActionPage] = useState(1);
 
   const portalId = String(context?.portal?.id ?? "");
   const userId = String(context?.user?.id ?? "");
@@ -345,6 +348,14 @@ function HomePage({ context }: HomePageProps) {
     typeof summary.resolvedThisWeekCount === "number"
       ? summary.resolvedThisWeekCount
       : 0;
+  const totalActionPages = Math.max(
+    1,
+    Math.ceil(actionRequiredCount / actionPageSize)
+  );
+  const showingStart =
+    actionRequiredCount === 0 ? 0 : (actionPage - 1) * actionPageSize + 1;
+  const showingEnd = Math.min(actionPage * actionPageSize, actionRequiredCount);
+  const showActionPagination = actionRequiredCount > actionPageSize;
 
   const greeting = greetingForHour(new Date().getHours());
   const greetingLine = userName ? `${greeting}, ${userName}` : greeting;
@@ -362,6 +373,8 @@ function HomePage({ context }: HomePageProps) {
         userId,
         userEmail,
         appId,
+        actionPageSize: String(actionPageSize),
+        actionPage: String(actionPage),
       }),
       {
         method: "GET",
@@ -375,6 +388,7 @@ function HomePage({ context }: HomePageProps) {
 
     const data = (await response.json()) as OverviewResponse;
     setOverviewData(data);
+    return data;
   };
 
   const refresh = async () => {
@@ -431,7 +445,22 @@ function HomePage({ context }: HomePageProps) {
       if (!response.ok) {
         throw new Error(`Resolve request failed with status ${response.status}`);
       }
-      await loadOverview();
+      const data = await loadOverview();
+      const nextSummary = data?.summary ?? {};
+      const nextActionRequired = Array.isArray(nextSummary.actionRequired)
+        ? nextSummary.actionRequired
+        : [];
+      const nextActionRequiredCount =
+        typeof nextSummary.actionRequiredCount === "number"
+          ? nextSummary.actionRequiredCount
+          : nextActionRequired.length;
+      if (
+        nextActionRequired.length === 0 &&
+        actionPage > 1 &&
+        nextActionRequiredCount > 0
+      ) {
+        setActionPage(Math.ceil(nextActionRequiredCount / actionPageSize));
+      }
     } catch (error) {
       setOverviewData(previous);
       setOverviewError(error instanceof Error ? error.message : "Unknown error");
@@ -445,7 +474,7 @@ function HomePage({ context }: HomePageProps) {
       setOverviewError(error instanceof Error ? error.message : "Unknown error");
       setLoading(false);
     });
-  }, [portalId, userId, userEmail, appId]);
+  }, [portalId, userId, userEmail, appId, actionPageSize, actionPage]);
 
   return (
     <Flex direction="column" gap="medium">
@@ -517,7 +546,7 @@ function HomePage({ context }: HomePageProps) {
             </EmptyState>
           ) : (
             <Flex direction="column" gap="small">
-              {sortedActionRequired.slice(0, 5).map((alert) => (
+              {sortedActionRequired.map((alert) => (
                 <ActionAlertCard
                   key={String(alert.id)}
                   alert={alert}
@@ -528,6 +557,54 @@ function HomePage({ context }: HomePageProps) {
               ))}
             </Flex>
           )}
+
+          {showActionPagination ? (
+            <Flex direction="row" justify="between" align="center" gap="small" wrap>
+              <Text>
+                Showing {showingStart}–{showingEnd} of {actionRequiredCount}
+              </Text>
+
+              <Flex direction="row" align="center" gap="small" wrap>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={actionPage === 1 || loading}
+                  onClick={() => setActionPage((page) => Math.max(1, page - 1))}
+                >
+                  Previous
+                </Button>
+                <Text>
+                  Page {actionPage} of {totalActionPages}
+                </Text>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={actionPage * actionPageSize >= actionRequiredCount || loading}
+                  onClick={() => setActionPage((page) => page + 1)}
+                >
+                  Next
+                </Button>
+              </Flex>
+
+              <Flex direction="row" align="center" gap="extra-small" wrap>
+                <Text>Rows</Text>
+                {ACTION_PAGE_SIZE_OPTIONS.map((size) => (
+                  <Button
+                    key={size}
+                    type="button"
+                    variant={actionPageSize === size ? "primary" : "secondary"}
+                    disabled={loading}
+                    onClick={() => {
+                      setActionPageSize(size);
+                      setActionPage(1);
+                    }}
+                  >
+                    {String(size)}
+                  </Button>
+                ))}
+              </Flex>
+            </Flex>
+          ) : null}
         </Flex>
       </Tile>
 
