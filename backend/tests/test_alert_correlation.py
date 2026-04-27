@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 
 from app import db as db_module
 from app.models.alert import (
+    SEVERITY_CRITICAL,
     SEVERITY_HIGH,
     SEVERITY_LOW,
     SEVERITY_MEDIUM,
@@ -29,6 +30,12 @@ from app.models.alert import (
     STATUS_RESOLVED,
     Alert,
 )
+from app.models.monitoring_exclusion import (
+    EXCLUSION_TYPE_PROPERTY,
+    EXCLUSION_TYPE_WORKFLOW,
+    MonitoringExclusion,
+)
+from app.models.portal_setting import PortalSetting
 from app.models.property_change_event import (
     PROPERTY_EVENT_ARCHIVED,
     PROPERTY_EVENT_CREATED,
@@ -53,6 +60,10 @@ from app.services.alert_correlation import (
     correlate_property_change_event,
     correlate_unprocessed_events,
     correlate_workflow_change_event,
+)
+from app.services.monitoring_config import (
+    MONITORING_CATEGORY_PROPERTY_ARCHIVED,
+    MONITORING_CATEGORY_PROPERTY_TYPE_CHANGED,
 )
 
 
@@ -207,6 +218,30 @@ class _BaseDbCase(unittest.TestCase):
         session.flush()
         return event
 
+    def _seed_monitoring_coverage(self, session, coverage: dict) -> None:
+        row = session.get(PortalSetting, self.PORTAL_ID)
+        if row is None:
+            row = PortalSetting(portal_id=self.PORTAL_ID)
+            session.add(row)
+        row.monitoring_coverage = coverage
+
+    def _seed_monitoring_exclusion(
+        self,
+        session,
+        *,
+        exclusion_type: str,
+        exclusion_id: str,
+        object_type_id: str | None = None,
+    ) -> None:
+        session.add(
+            MonitoringExclusion(
+                portal_id=self.PORTAL_ID,
+                exclusion_type=exclusion_type,
+                exclusion_id=exclusion_id,
+                object_type_id=object_type_id,
+            )
+        )
+
     def _all_alerts(self, session) -> list[Alert]:
         return session.query(Alert).order_by(Alert.id.asc()).all()
 
@@ -285,6 +320,122 @@ class PropertyCorrelationTests(_BaseDbCase):
         finally:
             session.close()
 
+    def test_property_archived_with_category_disabled_marks_processed_no_alert(
+        self,
+    ) -> None:
+        session = self._session()
+        try:
+            self._seed_monitoring_coverage(
+                session,
+                {
+                    MONITORING_CATEGORY_PROPERTY_ARCHIVED: {
+                        "enabled": False,
+                        "severityOverride": None,
+                    }
+                },
+            )
+            self._seed_property_snapshot(
+                session, property_name="lifecyclestage", archived=True,
+            )
+            self._seed_workflow_snapshot(session, workflow_id="100", name="Lead Nurture")
+            self._seed_dependency(
+                session, workflow_id="100", property_name="lifecyclestage",
+            )
+            event = self._seed_property_event(
+                session, property_name="lifecyclestage",
+                event_type=PROPERTY_EVENT_ARCHIVED,
+                previous_archived=False, new_archived=True,
+            )
+            event_id = event.id
+            session.commit()
+
+            alerts = correlate_property_change_event(session, event)
+            session.commit()
+
+            self.assertEqual(0, len(alerts))
+            self.assertEqual(0, len(self._all_alerts(session)))
+            refreshed = session.get(PropertyChangeEvent, event_id)
+            self.assertIsNotNone(refreshed.processed_at)
+        finally:
+            session.close()
+
+    def test_property_archived_for_excluded_property_marks_processed_no_alert(
+        self,
+    ) -> None:
+        session = self._session()
+        try:
+            self._seed_monitoring_exclusion(
+                session,
+                exclusion_type=EXCLUSION_TYPE_PROPERTY,
+                exclusion_id="lifecyclestage",
+                object_type_id="0-1",
+            )
+            self._seed_property_snapshot(
+                session, property_name="lifecyclestage", archived=True,
+            )
+            self._seed_workflow_snapshot(session, workflow_id="100", name="Lead Nurture")
+            self._seed_dependency(
+                session, workflow_id="100", property_name="lifecyclestage",
+            )
+            event = self._seed_property_event(
+                session, property_name="lifecyclestage",
+                event_type=PROPERTY_EVENT_ARCHIVED,
+                previous_archived=False, new_archived=True,
+            )
+            event_id = event.id
+            session.commit()
+
+            alerts = correlate_property_change_event(session, event)
+            session.commit()
+
+            self.assertEqual(0, len(alerts))
+            self.assertEqual(0, len(self._all_alerts(session)))
+            refreshed = session.get(PropertyChangeEvent, event_id)
+            self.assertIsNotNone(refreshed.processed_at)
+        finally:
+            session.close()
+
+    def test_property_archived_exclusion_requires_matching_object_type(self) -> None:
+        session = self._session()
+        try:
+            self._seed_monitoring_exclusion(
+                session,
+                exclusion_type=EXCLUSION_TYPE_PROPERTY,
+                exclusion_id="lifecyclestage",
+                object_type_id="0-1",
+            )
+            self._seed_property_snapshot(
+                session,
+                property_name="lifecyclestage",
+                object_type_id="0-2",
+                archived=True,
+            )
+            self._seed_workflow_snapshot(session, workflow_id="100", name="Deal Nurture")
+            self._seed_dependency(
+                session,
+                workflow_id="100",
+                property_name="lifecyclestage",
+                object_type_id="0-2",
+            )
+            event = self._seed_property_event(
+                session,
+                property_name="lifecyclestage",
+                object_type_id="0-2",
+                event_type=PROPERTY_EVENT_ARCHIVED,
+                previous_archived=False,
+                new_archived=True,
+            )
+            session.commit()
+
+            alerts = correlate_property_change_event(session, event)
+            session.commit()
+
+            self.assertEqual(1, len(alerts))
+            self.assertEqual(SEVERITY_HIGH, alerts[0].severity)
+            self.assertEqual("0-2", alerts[0].source_object_type_id)
+        finally:
+            session.close()
+
     def test_property_type_change_emits_medium_severity_alert(self) -> None:
         session = self._session()
         try:
@@ -311,6 +462,64 @@ class PropertyCorrelationTests(_BaseDbCase):
             summary_obj = json.loads(alerts[0].summary)
             self.assertEqual("number", summary_obj["change"]["previous_type"])
             self.assertEqual("string", summary_obj["change"]["new_type"])
+        finally:
+            session.close()
+
+    def test_property_type_changed_severity_override_can_promote_to_critical(
+        self,
+    ) -> None:
+        session = self._session()
+        try:
+            self._seed_monitoring_coverage(
+                session,
+                {
+                    MONITORING_CATEGORY_PROPERTY_TYPE_CHANGED: {
+                        "enabled": True,
+                        "severityOverride": SEVERITY_CRITICAL,
+                    }
+                },
+            )
+            self._seed_property_snapshot(
+                session, property_name="score", label="Lead Score", type_="number",
+            )
+            self._seed_workflow_snapshot(session, workflow_id="100", name="Score-driven")
+            self._seed_dependency(session, workflow_id="100", property_name="score")
+            event = self._seed_property_event(
+                session, property_name="score",
+                event_type=PROPERTY_EVENT_TYPE_CHANGED,
+                previous_type="number", new_type="string",
+            )
+            session.commit()
+
+            alerts = correlate_property_change_event(session, event)
+            session.commit()
+
+            self.assertEqual(1, len(alerts))
+            self.assertEqual(SEVERITY_CRITICAL, alerts[0].severity)
+        finally:
+            session.close()
+
+    def test_default_behavior_unchanged_when_no_monitoring_config_set(self) -> None:
+        session = self._session()
+        try:
+            self._seed_property_snapshot(
+                session, property_name="email", label="Email", archived=True,
+            )
+            self._seed_workflow_snapshot(session, workflow_id="100", name="Mailer")
+            self._seed_dependency(session, workflow_id="100", property_name="email")
+            event = self._seed_property_event(
+                session, property_name="email",
+                event_type=PROPERTY_EVENT_ARCHIVED,
+                previous_archived=False, new_archived=True,
+            )
+            session.commit()
+
+            alerts = correlate_property_change_event(session, event)
+            session.commit()
+
+            self.assertEqual(1, len(alerts))
+            self.assertEqual(SEVERITY_HIGH, alerts[0].severity)
+            self.assertEqual(SOURCE_EVENT_PROPERTY_ARCHIVED, alerts[0].source_event_type)
         finally:
             session.close()
 
@@ -425,6 +634,37 @@ class WorkflowCorrelationTests(_BaseDbCase):
             self.assertEqual("500", alert.impacted_workflow_id)
             self.assertEqual("Critical routing", alert.impacted_workflow_name)
             self.assertIn("disabled", alert.title)
+        finally:
+            session.close()
+
+    def test_workflow_disabled_for_excluded_workflow_marks_processed_no_alert(
+        self,
+    ) -> None:
+        session = self._session()
+        try:
+            self._seed_monitoring_exclusion(
+                session,
+                exclusion_type=EXCLUSION_TYPE_WORKFLOW,
+                exclusion_id="500",
+            )
+            self._seed_workflow_snapshot(
+                session, workflow_id="500", name="Critical routing",
+            )
+            event = self._seed_workflow_event(
+                session, workflow_id="500",
+                event_type=WORKFLOW_EVENT_DISABLED,
+                previous_is_enabled=True, new_is_enabled=False,
+            )
+            event_id = event.id
+            session.commit()
+
+            alerts = correlate_workflow_change_event(session, event)
+            session.commit()
+
+            self.assertEqual(0, len(alerts))
+            self.assertEqual(0, len(self._all_alerts(session)))
+            refreshed = session.get(WorkflowChangeEvent, event_id)
+            self.assertIsNotNone(refreshed.processed_at)
         finally:
             session.close()
 
