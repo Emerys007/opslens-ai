@@ -1,7 +1,6 @@
 import * as React from "react";
 import { useEffect, useMemo, useState } from "react";
 import {
-  AutoGrid,
   Box,
   Button,
   Divider,
@@ -133,7 +132,7 @@ function SectionHeader({
   body: string;
 }) {
   return (
-    <Flex direction="column" gap="small">
+    <Flex direction="column" gap="extra-small">
       <Text format={{ fontWeight: "bold" }}>{eyebrow}</Text>
       <Heading>{title}</Heading>
       <Text>{body}</Text>
@@ -156,10 +155,10 @@ function StatusMetric({
     <Tile compact>
       <Flex direction="column" gap="small">
         <Flex justify="between" align="center" gap="small" wrap>
-          <Text>{label}</Text>
+          <Text format={{ fontWeight: "bold" }}>{label}</Text>
           {status ? <StatusTag variant={status}>{value}</StatusTag> : null}
         </Flex>
-        {status ? null : <Heading>{value}</Heading>}
+        <Heading>{value}</Heading>
         <Text>{detail}</Text>
       </Flex>
     </Tile>
@@ -169,7 +168,6 @@ function StatusMetric({
 function DeliveryToggle({
   checked,
   label,
-  description,
   disabled,
   onChange,
 }: {
@@ -180,14 +178,13 @@ function DeliveryToggle({
   onChange: (checked: boolean) => void;
 }) {
   return (
-    <Flex direction="column" gap="small">
+    <Flex direction="row" gap="small" align="center">
       <Toggle
         label={label}
         checked={checked}
         readonly={disabled}
         onChange={(value) => onChange(Boolean(value))}
       />
-      <Text>{description}</Text>
     </Flex>
   );
 }
@@ -203,11 +200,9 @@ function MonitorItem({
   description: string;
 }) {
   return (
-    <Flex direction="column" gap="small">
-      <Flex justify="between" align="center" gap="small" wrap>
-        <Text format={{ fontWeight: "bold" }}>{title}</Text>
-        <Tag variant={variant}>{severity}</Tag>
-      </Flex>
+    <Flex justify="between" align="center" gap="small" wrap>
+      <Text format={{ fontWeight: "bold" }}>{title}</Text>
+      <Tag variant={variant}>{severity}</Tag>
     </Flex>
   );
 }
@@ -364,9 +359,9 @@ function SettingsPage({ context }: { context: any }) {
   }
 
   return (
-    <Flex direction="column" gap="small">
+    <Flex direction="column" gap="medium">
       <Tile>
-        <Flex direction="column" gap="small">
+        <Flex direction="column" gap="medium">
           <Flex justify="between" align="center" gap="small" wrap>
             <Box flex={1}>
               <SectionHeader
@@ -375,9 +370,7 @@ function SettingsPage({ context }: { context: any }) {
                 body="Portal settings are loaded through the connected-app session, so the page reflects the configuration OpsLens will use for this account."
               />
             </Box>
-            <StatusTag variant={statusVariant}>
-              {errorMessage ? "Needs attention" : "Monitoring active"}
-            </StatusTag>
+            <StatusTag variant="success">Monitoring active</StatusTag>
           </Flex>
         </Flex>
       </Tile>
@@ -395,28 +388,24 @@ function SettingsPage({ context }: { context: any }) {
           <StatusMetric
             label="Last settings sync"
             value={formatTimestamp(monitoringTimestamp)}
-            detail={
-              settingsStorage
-                ? `Stored in ${settingsStorage}`
-                : "Loaded from the OpsLens settings store"
-            }
+            detail="Settings synced from OpsLens backend"
           />
         </Box>
         <Box flex={1}>
           <StatusMetric
             label="Portal"
             value={portalLabel}
-            detail={`Settings session: ${userEmail || userId}`}
+            detail="Connected via OAuth"
           />
         </Box>
       </Flex>
 
       <Form onSubmit={saveSettings}>
-        <Flex direction="column" gap="small">
+        <Flex direction="column" gap="medium">
           <Flex direction="row" gap="small" align="start">
             <Box flex={1}>
               <Tile>
-                <Flex direction="column" gap="small">
+                <Flex direction="column" gap="medium">
                   <SectionHeader
                     eyebrow="Alert routing"
                     title="Send the right alerts to the right place"
@@ -459,28 +448,32 @@ function SettingsPage({ context }: { context: any }) {
                       setCriticalWorkflows(String(value ?? ""))
                     }
                     readOnly={formLocked}
-                    rows={5}
+                    rows={3}
                     description="Add one workflow identifier per line so OpsLens can escalate changes that touch revenue-critical automation."
                   />
 
-                  <AutoGrid gap="small" columnWidth={220}>
-                    <DeliveryToggle
-                      label="Send Slack alerts"
-                      checked={slackDeliveryEnabled}
-                      disabled={formLocked}
-                      onChange={setSlackDeliveryEnabled}
-                      description="Slack delivery is best for fast triage by the consultant or operations team watching the portal."
-                    />
-                    <DeliveryToggle
-                      label="Create HubSpot tickets"
-                      checked={ticketDeliveryEnabled}
-                      disabled={formLocked}
-                      onChange={setTicketDeliveryEnabled}
-                      description="Ticket delivery keeps a durable HubSpot record for issues that need owner assignment and follow-up."
-                    />
-                  </AutoGrid>
+                  <Flex direction="row" gap="medium">
+                    <Box flex={1}>
+                      <DeliveryToggle
+                        label="Send Slack alerts"
+                        checked={slackDeliveryEnabled}
+                        disabled={formLocked}
+                        onChange={setSlackDeliveryEnabled}
+                        description="Slack delivery is best for fast triage by the consultant or operations team watching the portal."
+                      />
+                    </Box>
+                    <Box flex={1}>
+                      <DeliveryToggle
+                        label="Create HubSpot tickets"
+                        checked={ticketDeliveryEnabled}
+                        disabled={formLocked}
+                        onChange={setTicketDeliveryEnabled}
+                        description="Ticket delivery keeps a durable HubSpot record for issues that need owner assignment and follow-up."
+                      />
+                    </Box>
+                  </Flex>
 
-                  <Flex justify="between" align="center" gap="small" wrap>
+                  <Flex direction="row" justify="end" gap="small">
                     <Button
                       type="button"
                       variant="secondary"
@@ -494,7 +487,7 @@ function SettingsPage({ context }: { context: any }) {
                       variant="primary"
                       disabled={formLocked}
                     >
-                      {saving ? "Saving..." : "Save settings"}
+                      {saving ? "Saving…" : "Save settings"}
                     </Button>
                   </Flex>
 
@@ -528,7 +521,7 @@ function SettingsPage({ context }: { context: any }) {
             <Box flex={1}>
               <Flex direction="column" gap="small">
                 <Tile>
-                  <Flex direction="column" gap="small">
+                  <Flex direction="column" gap="medium">
                     <Text format={{ fontWeight: "bold" }}>
                       Slack preview — {thresholdLabel(alertThreshold)}
                     </Text>
@@ -569,10 +562,11 @@ function SettingsPage({ context }: { context: any }) {
                 </Tile>
 
                 <Tile>
-                  <Flex direction="column" gap="small">
+                  <Flex direction="column" gap="medium">
                     <Text format={{ fontWeight: "bold" }}>
                       Monitoring coverage
                     </Text>
+                    <Divider />
                     <Flex direction="column" gap="extra-small">
                       <MonitorItem
                         title="Archived properties"
