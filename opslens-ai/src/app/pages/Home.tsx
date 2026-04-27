@@ -311,7 +311,7 @@ function HomePage({ context }: HomePageProps) {
   const userId = String(context?.user?.id ?? "");
   const userEmail = String(context?.user?.email ?? "");
   const appId = String(context?.app?.id ?? context?.appId ?? "");
-  const userName = String(context?.user?.firstName ?? "").trim() || "there";
+  const userName = String(context?.user?.firstName ?? "").trim();
 
   const summary = overviewData?.summary ?? {};
   const settings = overviewData?.settings ?? {};
@@ -347,11 +347,12 @@ function HomePage({ context }: HomePageProps) {
       : 0;
 
   const greeting = greetingForHour(new Date().getHours());
+  const greetingLine = userName ? `${greeting}, ${userName}` : greeting;
   const subtitle =
     actionRequiredCount > 0
       ? `${actionRequiredCount} ${
           actionRequiredCount === 1 ? "thing needs" : "things need"
-        } your attention this morning`
+        } your attention`
       : "Nothing needs action right now";
 
   const loadOverview = async () => {
@@ -452,12 +453,8 @@ function HomePage({ context }: HomePageProps) {
         <Flex direction="row" justify="between" align="center" gap="small" wrap>
           <Box flex={1}>
             <Flex direction="column" gap="extra-small">
-              <Heading>
-                {greeting}, {userName}
-              </Heading>
-              <Text>
-                Portal {portalId || "unknown"} - {subtitle}
-              </Text>
+              <Heading>{greetingLine}</Heading>
+              <Text>{subtitle}</Text>
               {overviewError ? <Text>Overview issue: {overviewError}</Text> : null}
             </Flex>
           </Box>
