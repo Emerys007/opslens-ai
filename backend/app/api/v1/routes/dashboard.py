@@ -1,3 +1,6 @@
+import json
+import urllib.parse
+import urllib.request
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Request
@@ -30,6 +33,7 @@ from app.services.portal_settings import (
     load_portal_settings,
     normalize_severity,
 )
+from app.services.hubspot_oauth import get_portal_access_token
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -37,6 +41,13 @@ ACTION_REQUIRED_SEVERITIES = ("critical", "high")
 WATCHING_SEVERITY = "medium"
 VALID_EXCLUSION_TYPES = (EXCLUSION_TYPE_WORKFLOW, EXCLUSION_TYPE_PROPERTY)
 VALID_ACTION_PAGE_SIZES = (3, 5, 10, 25, 50)
+HUBSPOT_PROPERTIES_URL = "https://api.hubapi.com/crm/v3/properties/{object_type}"
+OBJECT_TYPE_ID_TO_PROPERTIES_PATH = {
+    "0-1": "contacts",
+    "0-2": "companies",
+    "0-3": "deals",
+    "0-5": "tickets",
+}
 
 
 def _resolved_level(row: AlertEvent, threshold: str) -> str:
@@ -158,6 +169,20 @@ def _action_page_size(value) -> int:
 def _action_page(value) -> int:
     parsed = _parse_int_param(value, 1)
     return parsed if parsed >= 1 else 1
+
+
+def _hubspot_get_json(url: str, access_token: str) -> dict:
+    request = urllib.request.Request(
+        url,
+        method="GET",
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Accept": "application/json",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        body = response.read().decode("utf-8", errors="replace")
+        return json.loads(body) if body.strip() else {}
 
 
 def _action_required_ordering():
@@ -332,6 +357,31 @@ def _exclusion_exists(
     return session.execute(stmt).scalar_one_or_none() is not None
 
 
+def _workflow_picker_payload(row: WorkflowSnapshot) -> dict:
+    workflow_id = str(row.workflow_id or "").strip()
+    return {
+        "id": workflow_id,
+        "name": str(row.name or "").strip() or workflow_id,
+        "isEnabled": bool(row.is_enabled),
+    }
+
+
+def _property_picker_payload(row: dict) -> dict | None:
+    name = str(row.get("name") or "").strip()
+    if not name:
+        return None
+    return {
+        "name": name,
+        "label": str(row.get("label") or "").strip() or name,
+        "type": str(row.get("type") or "").strip(),
+    }
+
+
+def _properties_path_for_object_type(object_type_id: str) -> str:
+    cleaned = str(object_type_id or "").strip()
+    return OBJECT_TYPE_ID_TO_PROPERTIES_PATH.get(cleaned, cleaned)
+
+
 @router.get("/overview")
 def dashboard_overview(request: Request):
     query = request.query_params
@@ -445,6 +495,72 @@ def dashboard_overview(request: Request):
                 "settingsStorage": settings.get("storage", "unknown"),
             },
         }
+    finally:
+        session.close()
+
+
+@router.get("/workflows")
+def dashboard_workflows(request: Request):
+    portal_id = str(request.query_params.get("portalId", "")).strip()
+    if not portal_id:
+        raise HTTPException(status_code=400, detail="portalId is required.")
+
+    db_ready = init_db()
+    session = get_session()
+    if not db_ready or session is None:
+        return []
+
+    try:
+        stmt = (
+            select(WorkflowSnapshot)
+            .where(WorkflowSnapshot.portal_id == portal_id)
+            .order_by(func.lower(WorkflowSnapshot.name), WorkflowSnapshot.workflow_id)
+            .limit(200)
+        )
+        return [_workflow_picker_payload(row) for row in session.execute(stmt).scalars().all()]
+    finally:
+        session.close()
+
+
+@router.get("/properties")
+def dashboard_properties(request: Request):
+    portal_id = str(request.query_params.get("portalId", "")).strip()
+    object_type_id = str(request.query_params.get("objectTypeId", "")).strip()
+    if not portal_id:
+        raise HTTPException(status_code=400, detail="portalId is required.")
+    if not object_type_id:
+        raise HTTPException(status_code=400, detail="objectTypeId is required.")
+
+    db_ready = init_db()
+    session = get_session()
+    if not db_ready or session is None:
+        return []
+
+    try:
+        try:
+            access_token = get_portal_access_token(session, portal_id)
+        except Exception:
+            return []
+
+        object_type_path = _properties_path_for_object_type(object_type_id)
+        url = HUBSPOT_PROPERTIES_URL.format(
+            object_type=urllib.parse.quote(object_type_path, safe=""),
+        )
+        try:
+            payload = _hubspot_get_json(url, access_token)
+        except Exception:
+            return []
+        if not isinstance(payload, dict):
+            return []
+        rows = [
+            normalized
+            for item in payload.get("results", [])
+            if isinstance(item, dict)
+            for normalized in [_property_picker_payload(item)]
+            if normalized is not None
+        ]
+        rows.sort(key=lambda item: (item["label"].lower(), item["name"].lower()))
+        return rows[:500]
     finally:
         session.close()
 
