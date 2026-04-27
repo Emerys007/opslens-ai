@@ -1,11 +1,12 @@
-import React, { useEffect, useState } from "react";
+import * as React from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
-  Accordion,
-  AutoGrid,
   Box,
   Button,
+  EmptyState,
   Flex,
   Heading,
+  Link,
   StatusTag,
   Text,
   Tile,
@@ -14,20 +15,22 @@ import {
 
 const BACKEND_BASE_URL = "https://api.app-sync.com";
 
-const TICKET_STAGE_LABELS: Record<string, string> = {
-  "1341759033": "New Alert",
-  "1341759034": "Investigating",
-  "1341759035": "Waiting / Monitoring",
-  "1341759036": "Resolved",
-  "1341759037": "Closed as Duplicate",
-};
-
-hubspot.extend(({ context }) => {
-  return <HomePage context={context} />;
-});
+hubspot.extend(({ context }) => <HomePage context={context} />);
 
 type HomePageProps = {
   context: any;
+};
+
+type DashboardAlert = {
+  id?: string;
+  severity?: string;
+  title?: string;
+  sourceEventType?: string;
+  impactedWorkflowId?: string | null;
+  impactedWorkflowName?: string | null;
+  sourceDependencyId?: string | null;
+  sourceObjectTypeId?: string | null;
+  createdAtUtc?: string | null;
 };
 
 type OverviewResponse = {
@@ -46,211 +49,322 @@ type OverviewResponse = {
     openIncidents?: number;
     criticalIssues?: number;
     monitoredWorkflows?: number;
-    lastCheckedUtc?: string;
-    activeIncidents?: Array<{
-      id?: string;
-      severity?: string;
-      title?: string;
-      affectedRecords?: number;
-      recommendation?: string;
-    }>;
+    lastCheckedUtc?: string | null;
+    activeIncidents?: unknown[];
+    actionRequired?: DashboardAlert[];
+    watching?: DashboardAlert[];
+    resolvedThisWeekCount?: number;
+    actionRequiredCount?: number;
+    watchingCount?: number;
+    lastPollUtc?: string | null;
+    slackConnected?: boolean;
   };
-  debug?: {
-    portalId?: string;
-    userId?: string;
-    userEmail?: string;
-    appId?: string;
-    dbConfigured?: boolean;
-    savedAlertRows?: number;
-    visibleRowsAtThreshold?: number;
-    settingsStorage?: string;
-  };
-};
-
-type WebhookEvent = {
-  receivedAtUtc?: string;
-  portalId?: string;
-  appId?: string;
-  subscriptionType?: string;
-  objectTypeId?: string | null;
-  objectId?: string;
-  propertyName?: string | null;
-  propertyValue?: string | null;
-  changeSource?: string | null;
-  changeFlag?: string | null;
-  sourceId?: string | null;
-  eventId?: string | null;
-  subscriptionId?: string | null;
-  attemptNumber?: number | null;
-  occurredAtUtc?: string | null;
-};
-
-type RecentWebhooksResponse = {
-  status?: string;
-  dbConfigured?: boolean;
-  count?: number;
-  events?: WebhookEvent[];
-};
-
-type TicketProperties = {
-  subject?: string;
-  hs_pipeline_stage?: string;
-  hs_lastmodifieddate?: string;
-  opslens_ticket_callback_id?: string;
-  opslens_ticket_workflow_id?: string;
-  opslens_ticket_contact_id?: string;
-  opslens_ticket_severity?: string;
-  opslens_ticket_delivery_status?: string;
-  opslens_ticket_reason?: string;
-  opslens_ticket_first_alert_at?: string;
-  opslens_ticket_last_alert_at?: string;
-  opslens_ticket_repeat_count?: string;
-  opslens_ticket_resolved_at?: string;
-  opslens_ticket_resolution_reason?: string;
-};
-
-type TicketAutomationTicket = {
-  id?: string;
-  properties?: TicketProperties;
-  createdAt?: string;
-  updatedAt?: string;
-  archived?: boolean;
-  url?: string;
-};
-
-type TicketAutomationResponse = {
-  status?: string;
-  portalId?: string;
-  provisioned?: boolean;
-  pipelineId?: string;
-  total?: number;
-  results?: TicketAutomationTicket[];
-};
-
-type MetricTileProps = {
-  label: string;
-  value: string | number;
-  note?: string;
-};
-
-type DetailFieldProps = {
-  label: string;
-  value: string;
 };
 
 type StatusVariant = "danger" | "warning" | "info" | "success" | "default";
 
-const MetricTile = ({ label, value, note }: MetricTileProps) => {
+function buildUrl(path: string, params: Record<string, string>) {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value) {
+      query.set(key, value);
+    }
+  });
+  const queryString = query.toString();
+  return `${BACKEND_BASE_URL}${path}${queryString ? `?${queryString}` : ""}`;
+}
+
+function greetingForHour(hour: number) {
+  if (hour >= 5 && hour < 12) {
+    return "Good morning";
+  }
+  if (hour >= 12 && hour < 17) {
+    return "Good afternoon";
+  }
+  if (hour >= 17 && hour < 22) {
+    return "Good evening";
+  }
+  return "Hello";
+}
+
+function formatTimeAgo(value?: string | null) {
+  if (!value) {
+    return "Not available";
+  }
+
+  const timestamp = Date.parse(value);
+  if (Number.isNaN(timestamp)) {
+    return "Not available";
+  }
+
+  const seconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+  if (seconds < 60) {
+    return "just now";
+  }
+
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) {
+    return `${minutes} min ago`;
+  }
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return `${hours} hr ago`;
+  }
+
+  const days = Math.floor(hours / 24);
+  if (days < 7) {
+    return `${days} day${days === 1 ? "" : "s"} ago`;
+  }
+
+  return new Date(timestamp).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  });
+}
+
+function severityRank(severity?: string | null) {
+  const level = String(severity || "").toLowerCase();
+  if (level === "critical") {
+    return 2;
+  }
+  if (level === "high") {
+    return 1;
+  }
+  return 0;
+}
+
+function severityVariant(severity?: string | null): StatusVariant {
+  const level = String(severity || "").toLowerCase();
+  if (level === "critical") {
+    return "danger";
+  }
+  if (level === "high") {
+    return "warning";
+  }
+  if (level === "medium") {
+    return "info";
+  }
+  return "default";
+}
+
+function isPropertyAlert(sourceEventType?: string | null) {
+  return (
+    sourceEventType === "property_archived" ||
+    sourceEventType === "property_deleted" ||
+    sourceEventType === "property_renamed" ||
+    sourceEventType === "property_type_changed"
+  );
+}
+
+function isWorkflowAlert(sourceEventType?: string | null) {
+  return (
+    sourceEventType === "workflow_disabled" ||
+    sourceEventType === "workflow_edited" ||
+    sourceEventType === "workflow_deleted"
+  );
+}
+
+function propertySettingsUrl(portalId: string, sourceObjectTypeId?: string | null) {
+  const type = encodeURIComponent(String(sourceObjectTypeId || "0-1"));
+  return `https://app.hubspot.com/property-settings/${portalId}/properties?type=${type}`;
+}
+
+function workflowUrl(portalId: string, workflowId?: string | null) {
+  return `https://app.hubspot.com/workflows/${portalId}/platform/flow/${workflowId}/edit`;
+}
+
+function StatusMetric({
+  label,
+  value,
+  detail,
+}: {
+  label: string;
+  value: string | number;
+  detail: string;
+}) {
   return (
     <Tile compact>
-      <Flex direction="column" gap="flush">
+      <Flex direction="column" gap="small">
         <Text format={{ fontWeight: "bold" }}>{label}</Text>
         <Heading>{String(value)}</Heading>
-        {note ? <Text>{note}</Text> : null}
+        <Text>{detail}</Text>
       </Flex>
     </Tile>
   );
-};
+}
 
-const DetailField = ({ label, value }: DetailFieldProps) => {
+function HealthRow({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
   return (
-    <Box>
+    <Flex justify="between" align="center" gap="small" wrap>
       <Text format={{ fontWeight: "bold" }}>{label}</Text>
-      <Text>{value}</Text>
-    </Box>
+      <Box>{children}</Box>
+    </Flex>
   );
-};
+}
 
-const getErrorMessage = (error: unknown) => {
-  return error instanceof Error ? error.message : "Unknown error";
-};
+function HubSpotLinks({
+  alert,
+  portalId,
+}: {
+  alert: DashboardAlert;
+  portalId: string;
+}) {
+  const links = [];
 
-const getStatusVariant = (
-  variant: "loading" | "error" | "success" | "default"
-): StatusVariant => {
-  if (variant === "loading") return "info";
-  if (variant === "error") return "warning";
-  if (variant === "success") return "success";
-  return "default";
-};
+  if (isPropertyAlert(alert.sourceEventType)) {
+    links.push({
+      label: "Open property settings",
+      url: propertySettingsUrl(portalId, alert.sourceObjectTypeId),
+    });
+    if (alert.impactedWorkflowId) {
+      links.push({
+        label: "Open workflow",
+        url: workflowUrl(portalId, alert.impactedWorkflowId),
+      });
+    }
+  } else if (isWorkflowAlert(alert.sourceEventType) && alert.impactedWorkflowId) {
+    links.push({
+      label: "Open workflow",
+      url: workflowUrl(portalId, alert.impactedWorkflowId),
+    });
+  }
 
-const getSeverityVariant = (severity?: string | null): StatusVariant => {
-  const level = String(severity || "").toLowerCase();
+  if (links.length === 0) {
+    return null;
+  }
 
-  if (level === "critical") return "danger";
-  if (level === "high") return "warning";
-  if (level === "medium") return "info";
+  return (
+    <Flex direction="row" gap="small" wrap>
+      {links.map((link) => (
+        <Link
+          key={`${link.label}-${link.url}`}
+          href={{ url: link.url, external: true }}
+        >
+          {link.label}
+        </Link>
+      ))}
+    </Flex>
+  );
+}
 
-  return "default";
-};
+function ActionAlertCard({
+  alert,
+  portalId,
+  resolving,
+  onResolve,
+}: {
+  alert: DashboardAlert;
+  portalId: string;
+  resolving: boolean;
+  onResolve: (alertId: string) => void;
+}) {
+  const alertId = String(alert.id || "");
+  const severity = String(alert.severity || "unknown").toUpperCase();
 
-const getTicketStageLabel = (stageId?: string | null) => {
-  const value = String(stageId || "").trim();
-  return TICKET_STAGE_LABELS[value] || value || "Unknown";
-};
+  return (
+    <Tile>
+      <Flex direction="column" gap="small">
+        <Flex justify="between" align="start" gap="small" wrap>
+          <Box flex={1}>
+            <Flex direction="column" gap="extra-small">
+              <StatusTag variant={severityVariant(alert.severity)}>
+                {severity}
+              </StatusTag>
+              <Text format={{ fontWeight: "bold" }}>
+                {String(alert.title || "Untitled alert")}
+              </Text>
+              <Text>{formatTimeAgo(alert.createdAtUtc)}</Text>
+            </Flex>
+          </Box>
+        </Flex>
 
-const getTicketStageVariant = (stageId?: string | null): StatusVariant => {
-  const value = String(stageId || "").trim();
+        <Flex justify="between" align="center" gap="small" wrap>
+          <HubSpotLinks alert={alert} portalId={portalId} />
+          <Button
+            type="button"
+            variant="secondary"
+            disabled={!alertId || resolving}
+            onClick={() => onResolve(alertId)}
+          >
+            {resolving ? "Resolving..." : "Mark resolved"}
+          </Button>
+        </Flex>
+      </Flex>
+    </Tile>
+  );
+}
 
-  if (value === "1341759033") return "danger";
-  if (value === "1341759034") return "warning";
-  if (value === "1341759035") return "info";
-  if (value === "1341759036") return "success";
-
-  return "default";
-};
-
-const HomePage = ({ context }: HomePageProps) => {
+function HomePage({ context }: HomePageProps) {
   const [loading, setLoading] = useState(true);
   const [overviewError, setOverviewError] = useState("");
-  const [webhookError, setWebhookError] = useState("");
-  const [ticketError, setTicketError] = useState("");
   const [overviewData, setOverviewData] = useState<OverviewResponse | null>(null);
-  const [recentWebhookActivity, setRecentWebhookActivity] = useState<WebhookEvent[]>([]);
-  const [webhookDbConfigured, setWebhookDbConfigured] = useState<boolean | null>(null);
-  const [webhookEventCount, setWebhookEventCount] = useState(0);
-  const [ticketLoading, setTicketLoading] = useState(false);
-  const [ticketActivity, setTicketActivity] = useState<TicketAutomationTicket[]>([]);
-  const [ticketActivityTotal, setTicketActivityTotal] = useState(0);
-  const [ticketAutomationProvisioned, setTicketAutomationProvisioned] = useState<boolean | null>(null);
-  const [ticketPipelineId, setTicketPipelineId] = useState("");
+  const [resolvingAlertId, setResolvingAlertId] = useState("");
 
   const portalId = String(context?.portal?.id ?? "");
   const userId = String(context?.user?.id ?? "");
   const userEmail = String(context?.user?.email ?? "");
   const appId = String(context?.app?.id ?? context?.appId ?? "");
+  const userName = String(context?.user?.firstName ?? "").trim() || "there";
 
-  const formatDate = (value?: string | null) => {
-    if (!value) return "-";
+  const summary = overviewData?.summary ?? {};
+  const settings = overviewData?.settings ?? {};
+  const actionRequired = Array.isArray(summary.actionRequired)
+    ? summary.actionRequired
+    : [];
+  const watching = Array.isArray(summary.watching) ? summary.watching : [];
 
-    try {
-      return new Date(value).toLocaleString();
-    } catch {
-      return value;
-    }
-  };
-
-  const buildUrl = (path: string, params: Record<string, string>) => {
-    const query = new URLSearchParams();
-
-    Object.entries(params).forEach(([key, value]) => {
-      if (value) {
-        query.set(key, value);
+  const sortedActionRequired = useMemo(() => {
+    return [...actionRequired].sort((left, right) => {
+      const rankDelta = severityRank(right.severity) - severityRank(left.severity);
+      if (rankDelta !== 0) {
+        return rankDelta;
       }
+      return (
+        Date.parse(String(right.createdAtUtc || "")) -
+        Date.parse(String(left.createdAtUtc || ""))
+      );
     });
+  }, [actionRequired]);
 
-    const queryString = query.toString();
-    return `${BACKEND_BASE_URL}${path}${queryString ? `?${queryString}` : ""}`;
-  };
+  const watchingPreview = useMemo(() => watching.slice(0, 3), [watching]);
+
+  const actionRequiredCount =
+    typeof summary.actionRequiredCount === "number"
+      ? summary.actionRequiredCount
+      : actionRequired.length;
+  const watchingCount =
+    typeof summary.watchingCount === "number" ? summary.watchingCount : watching.length;
+  const resolvedThisWeekCount =
+    typeof summary.resolvedThisWeekCount === "number"
+      ? summary.resolvedThisWeekCount
+      : 0;
+
+  const greeting = greetingForHour(new Date().getHours());
+  const subtitle =
+    actionRequiredCount > 0
+      ? `${actionRequiredCount} ${
+          actionRequiredCount === 1 ? "thing needs" : "things need"
+        } your attention this morning`
+      : "Nothing needs action right now";
 
   const loadOverview = async () => {
     const response = await hubspot.fetch(
       buildUrl("/api/v1/dashboard/overview", {
         portalId,
+        userId,
+        userEmail,
+        appId,
       }),
       {
         method: "GET",
-        timeout: 5000,
+        timeout: 8000,
       }
     );
 
@@ -262,469 +376,219 @@ const HomePage = ({ context }: HomePageProps) => {
     setOverviewData(data);
   };
 
-  const loadRecentWebhookActivity = async () => {
-    const response = await hubspot.fetch(
-      buildUrl("/api/v1/webhooks/recent", {
-        portalId,
-      }),
-      {
-        method: "GET",
-        timeout: 5000,
-      }
-    );
-
-    if (!response.ok) {
-      throw new Error(`Recent webhooks request failed with status ${response.status}`);
+  const refresh = async () => {
+    setLoading(true);
+    setOverviewError("");
+    try {
+      await loadOverview();
+    } catch (error) {
+      setOverviewError(error instanceof Error ? error.message : "Unknown error");
+    } finally {
+      setLoading(false);
     }
-
-    const data = (await response.json()) as RecentWebhooksResponse;
-    const nextEvents = Array.isArray(data?.events) ? data.events : [];
-
-    setWebhookDbConfigured(
-      typeof data?.dbConfigured === "boolean" ? data.dbConfigured : null
-    );
-    setWebhookEventCount(
-      typeof data?.count === "number" ? data.count : nextEvents.length
-    );
-    setRecentWebhookActivity(nextEvents);
   };
 
-  const loadTicketAutomation = async () => {
-    setTicketLoading(true);
-    setTicketActivity([]);
-    setTicketActivityTotal(0);
-    setTicketAutomationProvisioned(null);
-    setTicketPipelineId("");
+  const markResolved = async (alertId: string) => {
+    if (!alertId || !portalId) {
+      return;
+    }
+
+    const previous = overviewData;
+    setResolvingAlertId(alertId);
+    setOverviewError("");
+    setOverviewData((current) => {
+      if (!current?.summary) {
+        return current;
+      }
+      const currentSummary = current.summary;
+      const nextActionRequired = Array.isArray(currentSummary.actionRequired)
+        ? currentSummary.actionRequired.filter((alert) => String(alert.id) !== alertId)
+        : [];
+      return {
+        ...current,
+        summary: {
+          ...currentSummary,
+          actionRequired: nextActionRequired,
+          actionRequiredCount: Math.max(
+            0,
+            Number(currentSummary.actionRequiredCount ?? nextActionRequired.length) - 1
+          ),
+          resolvedThisWeekCount:
+            Number(currentSummary.resolvedThisWeekCount ?? 0) + 1,
+        },
+      };
+    });
 
     try {
       const response = await hubspot.fetch(
-        buildUrl("/api/v1/dashboard/ticket-automation", {
-          portalId,
-          limit: "4",
-        }),
+        buildUrl(`/api/v1/dashboard/alerts/${alertId}/resolve`, { portalId }),
         {
-          method: "GET",
-          timeout: 5000,
+          method: "POST",
+          timeout: 8000,
         }
       );
-
       if (!response.ok) {
-        throw new Error(
-          `Ticket automation request failed with status ${response.status}`
-        );
+        throw new Error(`Resolve request failed with status ${response.status}`);
       }
-
-      const data = (await response.json()) as TicketAutomationResponse;
-      const results = Array.isArray(data?.results) ? data.results : [];
-
-      setTicketActivity(results);
-      setTicketActivityTotal(
-        typeof data?.total === "number" ? data.total : results.length
-      );
-      setTicketAutomationProvisioned(
-        typeof data?.provisioned === "boolean" ? data.provisioned : null
-      );
-      setTicketPipelineId(String(data?.pipelineId ?? ""));
+      await loadOverview();
+    } catch (error) {
+      setOverviewData(previous);
+      setOverviewError(error instanceof Error ? error.message : "Unknown error");
     } finally {
-      setTicketLoading(false);
+      setResolvingAlertId("");
     }
-  };
-
-  const refreshAll = async () => {
-    setLoading(true);
-    setOverviewError("");
-    setWebhookError("");
-    setTicketError("");
-
-    const results = await Promise.allSettled([
-      loadOverview(),
-      loadRecentWebhookActivity(),
-      loadTicketAutomation(),
-    ]);
-
-    if (results[0].status === "rejected") {
-      setOverviewError(getErrorMessage(results[0].reason));
-    }
-
-    if (results[1].status === "rejected") {
-      setWebhookError(getErrorMessage(results[1].reason));
-    }
-
-    if (results[2].status === "rejected") {
-      setTicketError(getErrorMessage(results[2].reason));
-    }
-
-    setLoading(false);
   };
 
   useEffect(() => {
-    refreshAll().catch((err) => console.error("Unexpected Home load error", err));
+    refresh().catch((error) => {
+      setOverviewError(error instanceof Error ? error.message : "Unknown error");
+      setLoading(false);
+    });
   }, [portalId, userId, userEmail, appId]);
 
-  const settings = overviewData?.settings ?? {};
-  const summary = overviewData?.summary ?? {};
-  const debug = overviewData?.debug ?? {};
-  const activeIncidents = Array.isArray(summary?.activeIncidents)
-    ? summary.activeIncidents
-    : [];
-  const monitoredWorkflows = String(settings?.criticalWorkflows ?? "")
-    .split("\n")
-    .map((value) => value.trim())
-    .filter(Boolean);
-  const criticalWorkflowCount = monitoredWorkflows.length;
-  const incidentPreview = activeIncidents.slice(0, 3);
-  const webhookPreview = recentWebhookActivity.slice(0, 3);
-  const ticketPreview = ticketActivity.slice(0, 3);
-  const recentActiveTickets = ticketPreview.filter(
-    (ticket) => !ticket?.properties?.opslens_ticket_resolved_at
-  ).length;
-  const recentResolvedTickets = ticketPreview.filter(
-    (ticket) => Boolean(ticket?.properties?.opslens_ticket_resolved_at)
-  ).length;
-  const pageStatus: { label: string; variant: StatusVariant } = loading
-    ? { label: "Refreshing", variant: getStatusVariant("loading") }
-    : overviewError || webhookError || ticketError
-      ? { label: "Needs attention", variant: getStatusVariant("error") }
-      : { label: "Live", variant: getStatusVariant("success") };
-  const incidentStatus: { label: string; variant: StatusVariant } = overviewError
-    ? { label: "Overview issue", variant: "warning" }
-    : Number(summary?.openIncidents ?? 0) > 0
-      ? { label: `${String(summary?.openIncidents ?? 0)} open`, variant: "warning" }
-      : { label: "Stable", variant: "success" };
-  const savedAlertStatus: { label: string; variant: StatusVariant } = overviewError
-    ? { label: "Unavailable", variant: "warning" }
-    : Number(debug?.visibleRowsAtThreshold ?? 0) > 0
-      ? { label: `${String(debug?.visibleRowsAtThreshold ?? 0)} visible`, variant: "info" }
-      : { label: "Quiet", variant: "default" };
-  const ticketStatus: { label: string; variant: StatusVariant } = ticketLoading
-    ? { label: "Refreshing", variant: "info" }
-    : ticketError
-      ? { label: "Visibility issue", variant: "warning" }
-      : ticketAutomationProvisioned === false
-        ? { label: "Not provisioned", variant: "default" }
-      : ticketActivityTotal === 0
-        ? { label: "No tickets", variant: "default" }
-        : recentActiveTickets > 0
-          ? { label: `${recentActiveTickets} active`, variant: "warning" }
-          : { label: "Resolved recently", variant: "success" };
-  const webhookStatus: { label: string; variant: StatusVariant } = webhookError
-    ? { label: "Feed issue", variant: "warning" }
-    : webhookDbConfigured === false
-      ? { label: "Database unavailable", variant: "warning" }
-      : webhookPreview.length > 0
-        ? { label: `${webhookPreview.length} recent`, variant: "info" }
-        : { label: "Quiet", variant: "default" };
-
-  const ticketAutomationUrl = buildUrl("/api/v1/dashboard/ticket-automation", {
-    portalId,
-    limit: "4",
-  });
-
   return (
-    <Flex direction="column" gap="small">
-      <Tile compact>
-        <Flex direction="column" gap="small">
-          <Flex justify="between" align="center" wrap gap="small">
-            <Box flex="auto">
-              <Heading>OpsLens control center</Heading>
+    <Flex direction="column" gap="medium">
+      <Tile>
+        <Flex direction="row" justify="between" align="center" gap="small" wrap>
+          <Box flex={1}>
+            <Flex direction="column" gap="extra-small">
+              <Heading>
+                {greeting}, {userName}
+              </Heading>
               <Text>
-                Compact portal view for incidents, saved alerts, ticket automation,
-                and webhook activity.
+                Portal {portalId || "unknown"} - {subtitle}
               </Text>
-            </Box>
-            <Flex align="center" gap="small" wrap>
-              <StatusTag variant={pageStatus.variant}>{pageStatus.label}</StatusTag>
-              <Button
-                onClick={() => {
-                  refreshAll().catch((err) =>
-                    console.error("Unexpected Home refresh error", err)
-                  );
-                }}
-                disabled={loading}
-              >
-                {loading ? "Refreshing..." : "Refresh"}
-              </Button>
+              {overviewError ? <Text>Overview issue: {overviewError}</Text> : null}
             </Flex>
+          </Box>
+          <Button
+            type="button"
+            variant="secondary"
+            disabled={loading}
+            onClick={() => refresh()}
+          >
+            {loading ? "Refreshing..." : "Refresh"}
+          </Button>
+        </Flex>
+      </Tile>
+
+      <Flex direction="row" gap="small">
+        <Box flex={1}>
+          <StatusMetric
+            label="Needs action"
+            value={actionRequiredCount}
+            detail="Open critical and high alerts"
+          />
+        </Box>
+        <Box flex={1}>
+          <StatusMetric
+            label="Watching"
+            value={watchingCount}
+            detail="Open medium alerts"
+          />
+        </Box>
+        <Box flex={1}>
+          <StatusMetric
+            label="Resolved this week"
+            value={resolvedThisWeekCount}
+            detail="Closed in the last 7 days"
+          />
+        </Box>
+      </Flex>
+
+      <Tile>
+        <Flex direction="column" gap="medium">
+          <Flex justify="between" align="center" gap="small" wrap>
+            <Box flex={1}>
+              <Heading>Action queue</Heading>
+              <Text>Workflow-impacting changes that need a consultant review.</Text>
+            </Box>
+            <StatusTag variant={actionRequiredCount > 0 ? "danger" : "success"}>
+              {actionRequiredCount > 0 ? "Needs action" : "All clear"}
+            </StatusTag>
           </Flex>
 
-          {overviewError || webhookError || ticketError ? (
-            <Flex direction="column" gap="flush">
-              {overviewError ? <Text>Overview: {overviewError}</Text> : null}
-              {ticketError ? <Text>Ticket automation: {ticketError}</Text> : null}
-              {webhookError ? <Text>Webhooks: {webhookError}</Text> : null}
-            </Flex>
+          {sortedActionRequired.length === 0 ? (
+            <EmptyState
+              title="All clear. OpsLens is monitoring your portal."
+              layout="horizontal"
+              flush
+            >
+              <Text>
+                No critical or high-severity alerts are open right now.
+              </Text>
+            </EmptyState>
           ) : (
-            <Text>
-              Last backend check {formatDate(summary?.lastCheckedUtc)}. Threshold{" "}
-              {String(settings?.alertThreshold ?? "-").toUpperCase()} for portal{" "}
-              {portalId || "unknown"}.
-            </Text>
+            <Flex direction="column" gap="small">
+              {sortedActionRequired.slice(0, 5).map((alert) => (
+                <ActionAlertCard
+                  key={String(alert.id)}
+                  alert={alert}
+                  portalId={portalId}
+                  resolving={resolvingAlertId === String(alert.id)}
+                  onResolve={markResolved}
+                />
+              ))}
+            </Flex>
           )}
         </Flex>
       </Tile>
 
-      <AutoGrid columnWidth={160} flexible={true} gap="small">
-        <MetricTile
-          label="Open incidents"
-          value={String(summary?.openIncidents ?? "-")}
-          note="Above the current threshold"
-        />
-        <MetricTile
-          label="Critical issues"
-          value={String(summary?.criticalIssues ?? "-")}
-          note="Highest-severity incident count"
-        />
-        <MetricTile
-          label="Saved alerts"
-          value={String(debug?.visibleRowsAtThreshold ?? "-")}
-          note={`${String(debug?.savedAlertRows ?? "-")} rows stored`}
-        />
-        <MetricTile
-          label="Tracked tickets"
-          value={String(ticketActivityTotal)}
-          note="OpsLens tickets in this portal"
-        />
-        <MetricTile
-          label="Webhook events"
-          value={String(webhookEventCount)}
-          note="Most recent activity sample"
-        />
-      </AutoGrid>
-
-      <AutoGrid columnWidth={320} flexible={true} gap="small">
-        <Tile compact>
-          <Flex direction="column" gap="small">
-            <Flex justify="between" align="center" wrap gap="small">
-              <Box flex="auto">
-                <Heading inline={true}>Incidents</Heading>
-                <Text>Current operator queue above the saved threshold.</Text>
-              </Box>
-              <StatusTag variant={incidentStatus.variant}>{incidentStatus.label}</StatusTag>
-            </Flex>
-
-            {overviewError ? (
-              <Text>Incident summary is unavailable until overview data reloads.</Text>
-            ) : incidentPreview.length === 0 ? (
-              <Text>No incidents are currently above the alert threshold.</Text>
-            ) : (
-              <Flex direction="column" gap="small">
-                {incidentPreview.map((incident, idx) => (
-                  <Tile compact key={incident?.id ?? idx}>
-                    <Flex direction="column" gap="flush">
-                      <Flex justify="between" align="center" wrap gap="small">
-                        <Text format={{ fontWeight: "bold" }}>
-                          {String(incident?.title ?? "Untitled incident")}
-                        </Text>
-                        <StatusTag variant={getSeverityVariant(incident?.severity)}>
-                          {String(incident?.severity ?? "unknown").toUpperCase()}
-                        </StatusTag>
-                      </Flex>
-                      <Text>ID {String(incident?.id ?? "-")}</Text>
-                      <Text>
-                        Affected records {String(incident?.affectedRecords ?? "-")}
-                      </Text>
-                      <Text>
-                        Recommendation {String(incident?.recommendation ?? "-")}
-                      </Text>
-                    </Flex>
-                  </Tile>
-                ))}
+      <Flex direction="row" gap="small">
+        <Box flex={1}>
+          <Tile>
+            <Flex direction="column" gap="medium">
+              <Flex direction="column" gap="extra-small">
+                <Heading>Watching</Heading>
+                <Text>Medium-severity alerts worth keeping an eye on.</Text>
               </Flex>
-            )}
-          </Flex>
-        </Tile>
-
-        <Tile compact>
-          <Flex direction="column" gap="small">
-            <Flex justify="between" align="center" wrap gap="small">
-              <Box flex="auto">
-                <Heading inline={true}>Saved alerts</Heading>
-                <Text>Portal-level visibility, thresholds, and monitored workflows.</Text>
-              </Box>
-              <StatusTag variant={savedAlertStatus.variant}>{savedAlertStatus.label}</StatusTag>
-            </Flex>
-
-            {overviewError ? (
-              <Text>Saved-alert context is unavailable until overview data reloads.</Text>
-            ) : (
-              <AutoGrid columnWidth={170} flexible={true} gap="small">
-                <DetailField
-                  label="Alert threshold"
-                  value={String(settings?.alertThreshold ?? "-").toUpperCase()}
-                />
-                <DetailField
-                  label="Critical workflows"
-                  value={
-                    criticalWorkflowCount > 0
-                      ? String(criticalWorkflowCount)
-                      : "None configured"
-                  }
-                />
-                <DetailField
-                  label="Saved alert rows"
-                  value={String(debug?.savedAlertRows ?? "-")}
-                />
-                <DetailField
-                  label="Settings storage"
-                  value={String(settings?.storage ?? debug?.settingsStorage ?? "-")}
-                />
-                <DetailField
-                  label="Workflow list"
-                  value={
-                    monitoredWorkflows.length > 0
-                      ? monitoredWorkflows.slice(0, 3).join(", ")
-                      : "No workflow names saved"
-                  }
-                />
-                <DetailField
-                  label="Settings updated"
-                  value={formatDate(settings?.updatedAtUtc)}
-                />
-              </AutoGrid>
-            )}
-          </Flex>
-        </Tile>
-
-        <Tile compact>
-          <Flex direction="column" gap="small">
-            <Flex justify="between" align="center" wrap gap="small">
-              <Box flex="auto">
-                <Heading inline={true}>Ticket automation</Heading>
-                <Text>Recent OpsLens ticket sync and auto-resolve visibility.</Text>
-              </Box>
-              <StatusTag variant={ticketStatus.variant}>{ticketStatus.label}</StatusTag>
-            </Flex>
-
-            {ticketError ? (
-              <Text>Ticket visibility is limited right now: {ticketError}</Text>
-            ) : ticketAutomationProvisioned === false ? (
-              <Text>OpsLens ticket automation is not provisioned for this portal yet.</Text>
-            ) : ticketActivityTotal === 0 ? (
-              <Text>No OpsLens tickets have been found for this portal yet.</Text>
-            ) : (
-              <Flex direction="column" gap="small">
-                <AutoGrid columnWidth={170} flexible={true} gap="small">
-                  <DetailField
-                    label="Tracked tickets"
-                    value={String(ticketActivityTotal)}
-                  />
-                  <DetailField
-                    label="Active in preview"
-                    value={String(recentActiveTickets)}
-                  />
-                  <DetailField
-                    label="Resolved in preview"
-                    value={String(recentResolvedTickets)}
-                  />
-                  <DetailField
-                    label="Latest ticket update"
-                    value={formatDate(
-                      ticketPreview[0]?.properties?.hs_lastmodifieddate ??
-                        ticketPreview[0]?.updatedAt
-                    )}
-                  />
-                  <DetailField
-                    label="Pipeline ID"
-                    value={ticketPipelineId || "Not returned"}
-                  />
-                </AutoGrid>
-
+              {watchingPreview.length === 0 ? (
+                <Text>No medium-severity alerts are open.</Text>
+              ) : (
                 <Flex direction="column" gap="small">
-                  {ticketPreview.map((ticket, idx) => {
-                    const properties = ticket?.properties ?? {};
-
-                    return (
-                      <Tile compact key={ticket?.id ?? idx}>
-                        <Flex direction="column" gap="flush">
-                          <Flex justify="between" align="center" wrap gap="small">
-                            <Text format={{ fontWeight: "bold" }}>
-                              {String(
-                                properties?.subject ||
-                                  `Ticket ${String(ticket?.id ?? idx + 1)}`
-                              )}
-                            </Text>
-                            <StatusTag
-                              variant={getTicketStageVariant(
-                                properties?.hs_pipeline_stage
-                              )}
-                            >
-                              {getTicketStageLabel(properties?.hs_pipeline_stage)}
-                            </StatusTag>
-                          </Flex>
-                          <Text>
-                            Contact {String(properties?.opslens_ticket_contact_id ?? "-")} •
-                            Workflow {String(properties?.opslens_ticket_workflow_id ?? "-")}
-                          </Text>
-                          <Text>
-                            Delivery {String(
-                              properties?.opslens_ticket_delivery_status ?? "-"
-                            )} • Last alert{" "}
-                            {formatDate(properties?.opslens_ticket_last_alert_at)}
-                          </Text>
-                        </Flex>
-                      </Tile>
-                    );
-                  })}
+                  {watchingPreview.map((alert) => (
+                    <Text key={String(alert.id)}>
+                      {String(alert.title || "Untitled alert")} ·{" "}
+                      {formatTimeAgo(alert.createdAtUtc)}
+                    </Text>
+                  ))}
+                  {watchingCount > watchingPreview.length ? (
+                    <Text>
+                      + {watchingCount - watchingPreview.length} more
+                    </Text>
+                  ) : null}
                 </Flex>
-              </Flex>
-            )}
-          </Flex>
-        </Tile>
-
-        {/* Webhook feed panel removed in v2 scope reduction. Home.tsx is rebuilt in week 3. */}
-      </AutoGrid>
-
-      <Accordion title="Advanced context" size="small">
-        <Flex direction="column" gap="small">
-          <Tile compact>
-            <AutoGrid columnWidth={220} flexible={true} gap="small">
-              <DetailField label="Portal ID" value={portalId || "unknown"} />
-              <DetailField label="User ID" value={userId || "unknown"} />
-              <DetailField label="User email" value={userEmail || "unknown"} />
-              <DetailField label="App ID" value={appId || "unknown"} />
-              <DetailField
-                label="Database configured"
-                value={String(debug?.dbConfigured ?? "-")}
-              />
-              <DetailField
-                label="Overview URL"
-                value={buildUrl("/api/v1/dashboard/overview", {
-                  portalId,
-                })}
-              />
-              <DetailField
-                label="Webhook URL"
-                value={buildUrl("/api/v1/webhooks/recent", { portalId })}
-              />
-              <DetailField
-                label="Ticket automation route"
-                value={ticketAutomationUrl}
-              />
-              <DetailField
-                label="Ticket pipeline"
-                value={ticketPipelineId || "Not returned"}
-              />
-            </AutoGrid>
-          </Tile>
-
-          <Tile compact>
-            <Flex direction="column" gap="flush">
-              <Text format={{ fontWeight: "bold" }}>Recent refresh notes</Text>
-              <Text>
-                Overview status {overviewError ? `issue: ${overviewError}` : "ok"}
-              </Text>
-              <Text>
-                Ticket automation status {ticketError ? `issue: ${ticketError}` : "ok"}
-              </Text>
-              <Text>
-                Webhook status {webhookError ? `issue: ${webhookError}` : "ok"}
-              </Text>
+              )}
             </Flex>
           </Tile>
-        </Flex>
-      </Accordion>
+        </Box>
+
+        <Box flex={1}>
+          <Tile>
+            <Flex direction="column" gap="medium">
+              <Flex direction="column" gap="extra-small">
+                <Heading>System health</Heading>
+                <Text>Current delivery and polling status for this portal.</Text>
+              </Flex>
+              <Flex direction="column" gap="small">
+                <HealthRow label="Last poll">
+                  <Text>{formatTimeAgo(summary.lastPollUtc)}</Text>
+                </HealthRow>
+                <HealthRow label="Slack delivery">
+                  <StatusTag variant={summary.slackConnected ? "success" : "warning"}>
+                    {summary.slackConnected ? "Connected" : "Not configured"}
+                  </StatusTag>
+                </HealthRow>
+                <HealthRow label="Threshold">
+                  <Text>{String(settings.alertThreshold || "medium").toUpperCase()}</Text>
+                </HealthRow>
+              </Flex>
+            </Flex>
+          </Tile>
+        </Box>
+      </Flex>
     </Flex>
   );
-};
+}
 
 export default HomePage;
