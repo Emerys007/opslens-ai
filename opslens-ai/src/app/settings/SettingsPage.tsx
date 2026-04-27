@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useState } from "react";
+import * as React from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   AutoGrid,
   Box,
@@ -522,95 +523,100 @@ function SettingsPage({ context }: { context: any }) {
               </Flex>
             </Tile>
 
-            <Tile>
-              <Flex direction="column" gap="small">
-                <Text format={{ fontWeight: "bold" }}>Slack preview</Text>
-                <Heading>{thresholdLabel(alertThreshold)}</Heading>
-                <Text>{previewExplanation(alertThreshold)}</Text>
-                <Divider />
-                <Box>
-                  <Flex direction="column" gap="small">
-                    <Flex align="center" gap="small" wrap>
-                      <Text>{thresholdEmoji(alertThreshold)}</Text>
-                      <Text format={{ fontWeight: "bold" }}>
-                        Property 'Lead Source' archived — 1 workflow(s) affected
-                      </Text>
-                    </Flex>
-                    <Text>
-                      Lead Source was archived in HubSpot, but the Lead Nurture
-                      workflow still references it in enrollment criteria. New
-                      contacts may skip the intended route until the property is
-                      restored or the workflow reference is replaced.
-                    </Text>
+            <Flex direction="column" gap="small">
+              <Tile>
+                <Flex direction="column" gap="small">
+                  <Text format={{ fontWeight: "bold" }}>Slack preview</Text>
+                  <Heading>{thresholdLabel(alertThreshold)}</Heading>
+                  <Text>{previewExplanation(alertThreshold)}</Text>
+                  <Divider />
+                  <Box>
                     <Flex direction="column" gap="small">
-                      <Text format={{ fontWeight: "bold" }}>
-                        Recommended action
-                      </Text>
+                      <Flex align="center" gap="small" wrap>
+                        <Text>{thresholdEmoji(alertThreshold)}</Text>
+                        <Text format={{ fontWeight: "bold" }}>
+                          Property 'Lead Source' archived — 1 workflow(s)
+                          affected
+                        </Text>
+                      </Flex>
                       <Text>
-                        Open the workflow, replace the archived property
-                        reference, then rerun enrollment tests for recent leads.
+                        Lead Source was archived in HubSpot, but the Lead
+                        Nurture workflow still references it in enrollment
+                        criteria. New contacts may skip the intended route until
+                        the property is restored or the workflow reference is
+                        replaced.
+                      </Text>
+                      <Flex direction="column" gap="small">
+                        <Text format={{ fontWeight: "bold" }}>
+                          Recommended action
+                        </Text>
+                        <Text>
+                          Open the workflow, replace the archived property
+                          reference, then rerun enrollment tests for recent
+                          leads.
+                        </Text>
+                      </Flex>
+                      <Divider />
+                      <Text>
+                        OpsLens • Portal {portalLabel} • Detected just now
                       </Text>
                     </Flex>
-                    <Divider />
-                    <Text>
-                      OpsLens • Portal {portalLabel} • Detected just now
-                    </Text>
-                  </Flex>
-                </Box>
-              </Flex>
-            </Tile>
+                  </Box>
+                </Flex>
+              </Tile>
+
+              <Tile>
+                <Flex direction="column" gap="small">
+                  <SectionHeader
+                    eyebrow="Monitoring coverage"
+                    title="What OpsLens monitors"
+                    body="What OpsLens watches across the HubSpot portal."
+                  />
+                  <Divider />
+                  <AutoGrid gap="small" columnWidth={220} flexible>
+                    <MonitorItem
+                      title="Archived properties"
+                      severity="High"
+                      variant="error"
+                      description="A property archive can break workflow filters, branches, and personalization that still depend on the field."
+                    />
+                    <MonitorItem
+                      title="Deleted properties"
+                      severity="High"
+                      variant="error"
+                      description="Deleted fields remove the source data workflows expect, so OpsLens treats affected automation as urgent."
+                    />
+                    <MonitorItem
+                      title="Renamed properties"
+                      severity="Low"
+                      variant="default"
+                      description="Label changes usually preserve API names, but OpsLens still flags them so consultants can prevent confusion."
+                    />
+                    <MonitorItem
+                      title="Property type changes"
+                      severity="Medium"
+                      variant="warning"
+                      description="Changing field type can alter workflow comparisons, list membership, and downstream reporting logic."
+                    />
+                    <MonitorItem
+                      title="Disabled workflows"
+                      severity="High"
+                      variant="error"
+                      description="A disabled workflow can stop lead routing, lifecycle updates, or customer notifications without a visible failure."
+                    />
+                    <MonitorItem
+                      title="Edited workflows"
+                      severity="Medium"
+                      variant="warning"
+                      description="Workflow edits can change enrollment, branching, and actions, so OpsLens highlights them for review."
+                    />
+                  </AutoGrid>
+                </Flex>
+              </Tile>
+            </Flex>
           </AutoGrid>
         </Flex>
       </Form>
-
-      <Tile>
-        <Flex direction="column" gap="small">
-          <SectionHeader
-            eyebrow="Monitoring coverage"
-            title="What OpsLens monitors"
-            body="OpsLens watches the HubSpot changes most likely to break automation, attribution, and operational follow-up."
-          />
-          <Divider />
-          <AutoGrid gap="small" columnWidth={260} flexible>
-            <MonitorItem
-              title="Archived properties"
-              severity="High"
-              variant="error"
-              description="A property archive can break workflow filters, branches, and personalization that still depend on the field."
-            />
-            <MonitorItem
-              title="Deleted properties"
-              severity="High"
-              variant="error"
-              description="Deleted fields remove the source data workflows expect, so OpsLens treats affected automation as urgent."
-            />
-            <MonitorItem
-              title="Renamed properties"
-              severity="Low"
-              variant="default"
-              description="Label changes usually preserve API names, but OpsLens still flags them so consultants can prevent confusion."
-            />
-            <MonitorItem
-              title="Property type changes"
-              severity="Medium"
-              variant="warning"
-              description="Changing field type can alter workflow comparisons, list membership, and downstream reporting logic."
-            />
-            <MonitorItem
-              title="Disabled workflows"
-              severity="High"
-              variant="error"
-              description="A disabled workflow can stop lead routing, lifecycle updates, or customer notifications without a visible failure."
-            />
-            <MonitorItem
-              title="Edited workflows"
-              severity="Medium"
-              variant="warning"
-              description="Workflow edits can change enrollment, branching, and actions, so OpsLens highlights them for review."
-            />
-          </AutoGrid>
-        </Flex>
-      </Tile>
     </Flex>
   );
 }
