@@ -1,6 +1,7 @@
 import * as React from "react";
 import { useEffect, useMemo, useState } from "react";
 import {
+  Accordion,
   Box,
   Button,
   Divider,
@@ -338,6 +339,13 @@ function SettingsPage({ context }: { context: any }) {
     coverageCategories.length > 0 &&
     coverageFingerprint(coverageCategories) !== loadedCoverageFingerprint;
   const coverageLocked = coverageLoading || coverageSaving || !portalId;
+  const enabledCategoryCount = coverageCategories.filter(
+    (category) => category.enabled !== false
+  ).length;
+  const coverageCategoryCount = coverageCategories.length || 6;
+  const monitoringCoverageTitle = `Monitoring coverage (${enabledCategoryCount} enabled / ${coverageCategoryCount})`;
+  const excludedWorkflowsTitle = `Excluded workflows (${workflowExclusions.length})`;
+  const excludedPropertiesTitle = `Excluded properties (${propertyExclusions.length})`;
   const monitoringTimestamp = lastSavedAt || "";
   const statusVariant: StatusVariant = errorMessage ? "warning" : "success";
 
@@ -757,9 +765,10 @@ function SettingsPage({ context }: { context: any }) {
         </Box>
       </Flex>
 
-      <Form onSubmit={saveSettings}>
-        <Flex direction="column" gap="medium">
-          <Flex direction="row" gap="small" align="start">
+      <Accordion title="Alert routing" defaultOpen size="md">
+        <Form onSubmit={saveSettings}>
+          <Flex direction="column" gap="medium">
+            <Flex direction="row" gap="small" align="start">
             <Box flex={1}>
               <Tile>
                 <Flex direction="column" gap="medium">
@@ -908,12 +917,14 @@ function SettingsPage({ context }: { context: any }) {
 
               </Flex>
             </Box>
+            </Flex>
           </Flex>
-        </Flex>
-      </Form>
+        </Form>
+      </Accordion>
 
-      <Tile>
-        <Flex direction="column" gap="medium">
+      <Accordion title={monitoringCoverageTitle} size="md">
+        <Tile>
+          <Flex direction="column" gap="medium">
           <SectionHeader
             eyebrow="Monitoring coverage"
             title="Choose what OpsLens watches"
@@ -1013,10 +1024,11 @@ function SettingsPage({ context }: { context: any }) {
               <Text>{coverageMessage}</Text>
             </Flex>
           ) : null}
-        </Flex>
-      </Tile>
+          </Flex>
+        </Tile>
+      </Accordion>
 
-      <Flex direction="column" gap="medium">
+      <Accordion title={excludedWorkflowsTitle} size="md">
         <Tile>
           <Flex direction="column" gap="medium">
             <SectionHeader
@@ -1106,7 +1118,9 @@ function SettingsPage({ context }: { context: any }) {
             </Flex>
           </Flex>
         </Tile>
+      </Accordion>
 
+      <Accordion title={excludedPropertiesTitle} size="md">
         <Tile>
           <Flex direction="column" gap="medium">
             <SectionHeader
@@ -1214,7 +1228,7 @@ function SettingsPage({ context }: { context: any }) {
             ) : null}
           </Flex>
         </Tile>
-      </Flex>
+      </Accordion>
     </Flex>
   );
 }
