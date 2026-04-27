@@ -36,7 +36,7 @@ router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 ACTION_REQUIRED_SEVERITIES = ("critical", "high")
 WATCHING_SEVERITY = "medium"
 VALID_EXCLUSION_TYPES = (EXCLUSION_TYPE_WORKFLOW, EXCLUSION_TYPE_PROPERTY)
-VALID_ACTION_PAGE_SIZES = (10, 25, 50)
+VALID_ACTION_PAGE_SIZES = (3, 5, 10, 25, 50)
 
 
 def _resolved_level(row: AlertEvent, threshold: str) -> str:

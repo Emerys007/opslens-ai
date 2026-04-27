@@ -14,7 +14,7 @@ import {
 } from "@hubspot/ui-extensions";
 
 const BACKEND_BASE_URL = "https://api.app-sync.com";
-const ACTION_PAGE_SIZE_OPTIONS = [10, 25, 50];
+const ACTION_PAGE_SIZE_OPTIONS = [3, 5, 10, 25, 50];
 
 hubspot.extend(({ context }) => <HomePage context={context} />);
 

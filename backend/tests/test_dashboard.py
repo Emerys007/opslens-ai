@@ -176,6 +176,22 @@ class DashboardEndpointTests(unittest.TestCase):
         self.assertEqual("Plain-English first action", summary["actionRequired"][0]["title"])
         self.assertEqual("Action 25", summary["actionRequired"][-1]["title"])
 
+    def test_overview_action_page_size_3_returns_up_to_3(self) -> None:
+        session = self._session()
+        try:
+            self._seed_action_alerts(session, count=12)
+        finally:
+            session.close()
+
+        summary = self._overview_summary("actionPageSize=3")
+
+        self.assertEqual(12, summary["actionRequiredCount"])
+        self.assertEqual(3, len(summary["actionRequired"]))
+        self.assertEqual(
+            ["Plain-English first action", "Action 02", "Action 03"],
+            self._action_titles(summary),
+        )
+
     def test_overview_action_page_size_50_returns_up_to_50(self) -> None:
         session = self._session()
         try:
