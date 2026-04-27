@@ -93,6 +93,22 @@ const CATEGORY_LABELS: Record<string, string> = {
   workflow_edited: "Edited workflows",
 };
 
+const COVERAGE_CATEGORY_GROUPS: Array<{ label: string; names: string[] }> = [
+  {
+    label: "Property changes",
+    names: [
+      "property_archived",
+      "property_deleted",
+      "property_renamed",
+      "property_type_changed",
+    ],
+  },
+  {
+    label: "Workflow changes",
+    names: ["workflow_disabled", "workflow_edited"],
+  },
+];
+
 const OBJECT_TYPE_OPTIONS = [
   { label: "Contact", value: "0-1" },
   { label: "Company", value: "0-2" },
@@ -1071,106 +1087,137 @@ function SettingsPage({ context }: { context: any }) {
       <Accordion title={monitoringCoverageTitle} size="md">
         <Tile>
           <Flex direction="column" gap="medium">
-          <SectionHeader
-            eyebrow="Monitoring coverage"
-            title="Choose what OpsLens watches"
-            body="Turn alert categories on or off for this portal, and override severity only where this client's operating model needs it."
-          />
-          <Divider />
+            <SectionHeader
+              eyebrow="Monitoring coverage"
+              title="Choose what OpsLens watches"
+              body="OpsLens alerts you when these changes affect a workflow, list, email template, or other automation in this portal. Changes to unused assets are tracked but not alerted."
+            />
 
-          {coverageLoading ? <Text>Loading monitoring coverage...</Text> : null}
-          {coverageError ? (
-            <Flex align="center" gap="small" wrap>
-              <StatusTag variant="danger">Error</StatusTag>
-              <Text>{coverageError}</Text>
-            </Flex>
-          ) : null}
-
-          <Flex direction="column" gap="small">
-            {coverageCategories.map((category) => (
-              <Flex
-                key={category.name}
-                direction="row"
-                align="center"
-                gap="medium"
-                wrap
-              >
-                <Box flex={2}>
-                  <Flex direction="column" gap="extra-small">
-                    <Text format={{ fontWeight: "bold" }}>
-                      {categoryLabel(category.name)}
-                    </Text>
-                    <Text>
-                      Default severity: {severityLabel(category.defaultSeverity)}
-                    </Text>
-                  </Flex>
-                </Box>
-                <Box flex={1}>
-                  <Toggle
-                    label="Enabled"
-                    checked={category.enabled}
-                    readonly={coverageLocked}
-                    onChange={(value) =>
-                      setCategoryEnabled(category.name, Boolean(value))
-                    }
-                  />
-                </Box>
-                <Box flex={2}>
-                  <Select
-                    label="Severity override"
-                    name={`severity-${category.name}`}
-                    value={
-                      category.severityOverride || DEFAULT_SEVERITY_VALUE
-                    }
-                    onChange={(value) =>
-                      setCategorySeverity(
-                        category.name,
-                        String(value ?? DEFAULT_SEVERITY_VALUE)
-                      )
-                    }
-                    readOnly={coverageLocked || !category.enabled}
-                    options={[
-                      {
-                        label: `Default (${severityLabel(
-                          category.defaultSeverity
-                        )})`,
-                        value: DEFAULT_SEVERITY_VALUE,
-                      },
-                      { label: "Low", value: "low" },
-                      { label: "Medium", value: "medium" },
-                      { label: "High", value: "high" },
-                      { label: "Critical", value: "critical" },
-                    ]}
-                  />
-                </Box>
+            {coverageLoading ? <Text>Loading monitoring coverage...</Text> : null}
+            {coverageError ? (
+              <Flex align="center" gap="small" wrap>
+                <StatusTag variant="danger">Error</StatusTag>
+                <Text>{coverageError}</Text>
               </Flex>
-            ))}
-          </Flex>
+            ) : null}
 
-          {!coverageLoading && coverageCategories.length === 0 ? (
-            <Text>
-              Monitoring coverage could not be loaded yet. The rest of this
-              settings page remains available.
-            </Text>
-          ) : null}
+            <Flex direction="column" gap="medium">
+              {COVERAGE_CATEGORY_GROUPS.map((group) => {
+                const groupCategories = coverageCategories.filter((category) =>
+                  group.names.includes(category.name)
+                );
+                if (groupCategories.length === 0) {
+                  return null;
+                }
 
-          <Flex direction="row" justify="end" gap="small">
-            <Button
-              type="button"
-              variant="primary"
-              disabled={coverageLocked || !coverageDirty}
-              onClick={saveMonitoringCoverage}
-            >
-              {coverageSaving ? "Saving..." : "Save monitoring coverage"}
-            </Button>
-          </Flex>
-
-          {coverageMessage ? (
-            <Flex align="center" gap="small" wrap>
-              <StatusTag variant="success">Saved</StatusTag>
-              <Text>{coverageMessage}</Text>
+                return (
+                  <Flex key={group.label} direction="column" gap="small">
+                    <Divider />
+                    <Text
+                      variant="microcopy"
+                      format={{
+                        fontWeight: "demibold",
+                        textTransform: "uppercase",
+                      }}
+                    >
+                      {group.label}
+                    </Text>
+                    {groupCategories.map((category) => (
+                      <Flex
+                        key={category.name}
+                        direction="row"
+                        align="center"
+                        gap="medium"
+                        wrap
+                      >
+                        <Box flex={2}>
+                          <Flex direction="column" gap="extra-small">
+                            <Text format={{ fontWeight: "bold" }}>
+                              {categoryLabel(category.name)}
+                            </Text>
+                            <Text>
+                              Default severity:{" "}
+                              {severityLabel(category.defaultSeverity)}
+                            </Text>
+                          </Flex>
+                        </Box>
+                        <Box flex={1}>
+                          <Toggle
+                            label="Enabled"
+                            checked={category.enabled}
+                            readonly={coverageLocked}
+                            onChange={(value) =>
+                              setCategoryEnabled(category.name, Boolean(value))
+                            }
+                          />
+                        </Box>
+                        <Box flex={2}>
+                          <Select
+                            label="Severity override"
+                            name={`severity-${category.name}`}
+                            value={
+                              category.severityOverride ||
+                              DEFAULT_SEVERITY_VALUE
+                            }
+                            onChange={(value) =>
+                              setCategorySeverity(
+                                category.name,
+                                String(value ?? DEFAULT_SEVERITY_VALUE)
+                              )
+                            }
+                            readOnly={coverageLocked || !category.enabled}
+                            options={[
+                              {
+                                label: `Default (${severityLabel(
+                                  category.defaultSeverity
+                                )})`,
+                                value: DEFAULT_SEVERITY_VALUE,
+                              },
+                              { label: "Low", value: "low" },
+                              { label: "Medium", value: "medium" },
+                              { label: "High", value: "high" },
+                              { label: "Critical", value: "critical" },
+                            ]}
+                          />
+                        </Box>
+                      </Flex>
+                    ))}
+                  </Flex>
+                );
+              })}
             </Flex>
-          ) : null}
+
+            {!coverageLoading && coverageCategories.length === 0 ? (
+              <Text>
+                Monitoring coverage could not be loaded yet. The rest of this
+                settings page remains available.
+              </Text>
+            ) : null}
+
+            {coverageCategories.length > 0 ? (
+              <Text variant="microcopy">
+                Tip: To stop alerts for a specific workflow or property, use the
+                Excluded workflows or Excluded properties sections below.
+              </Text>
+            ) : null}
+
+            <Flex direction="row" justify="end" gap="small">
+              <Button
+                type="button"
+                variant="primary"
+                disabled={coverageLocked || !coverageDirty}
+                onClick={saveMonitoringCoverage}
+              >
+                {coverageSaving ? "Saving..." : "Save monitoring coverage"}
+              </Button>
+            </Flex>
+
+            {coverageMessage ? (
+              <Flex align="center" gap="small" wrap>
+                <StatusTag variant="success">Saved</StatusTag>
+                <Text>{coverageMessage}</Text>
+              </Flex>
+            ) : null}
           </Flex>
         </Tile>
       </Accordion>
