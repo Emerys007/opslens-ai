@@ -72,6 +72,18 @@ type MonitoringExclusion = {
   createdByUserId?: string | null;
 };
 
+type WorkflowPickerOption = {
+  id: string;
+  name: string;
+  isEnabled: boolean;
+};
+
+type PropertyPickerOption = {
+  name: string;
+  label: string;
+  type: string;
+};
+
 const CATEGORY_LABELS: Record<string, string> = {
   property_archived: "Archived properties",
   property_deleted: "Deleted properties",
@@ -221,6 +233,18 @@ function exclusionKey(exclusion: MonitoringExclusion) {
   return `${exclusion.type}-${exclusion.id}`;
 }
 
+function workflowOptionLabel(workflow: WorkflowPickerOption) {
+  const name = String(workflow.name || workflow.id).trim();
+  const status = workflow.isEnabled ? "active" : "disabled";
+  return `${name} (${workflow.id}, ${status})`;
+}
+
+function propertyOptionLabel(property: PropertyPickerOption) {
+  const label = String(property.label || property.name).trim();
+  const type = property.type ? `, ${property.type}` : "";
+  return `${label} (${property.name}${type})`;
+}
+
 function SectionHeader({
   eyebrow,
   title,
@@ -314,6 +338,12 @@ function SettingsPage({ context }: { context: any }) {
   const [exclusionsError, setExclusionsError] = useState("");
   const [workflowExclusions, setWorkflowExclusions] = useState<MonitoringExclusion[]>([]);
   const [propertyExclusions, setPropertyExclusions] = useState<MonitoringExclusion[]>([]);
+  const [workflowPickerOptions, setWorkflowPickerOptions] = useState<WorkflowPickerOption[]>([]);
+  const [workflowPickerLoading, setWorkflowPickerLoading] = useState(false);
+  const [workflowPickerError, setWorkflowPickerError] = useState("");
+  const [propertyPickerOptions, setPropertyPickerOptions] = useState<PropertyPickerOption[]>([]);
+  const [propertyPickerLoading, setPropertyPickerLoading] = useState(false);
+  const [propertyPickerError, setPropertyPickerError] = useState("");
   const [workflowExclusionId, setWorkflowExclusionId] = useState("");
   const [workflowExclusionReason, setWorkflowExclusionReason] = useState("");
   const [propertyExclusionId, setPropertyExclusionId] = useState("");
@@ -333,6 +363,18 @@ function SettingsPage({ context }: { context: any }) {
     () => buildUrl(`${DASHBOARD_API_BASE}/monitoring-coverage`, { portalId }),
     [portalId]
   );
+  const workflowsUrl = useMemo(
+    () => buildUrl(`${DASHBOARD_API_BASE}/workflows`, { portalId }),
+    [portalId]
+  );
+  const propertiesUrl = useMemo(
+    () =>
+      buildUrl(`${DASHBOARD_API_BASE}/properties`, {
+        portalId,
+        objectTypeId: propertyExclusionObjectTypeId,
+      }),
+    [portalId, propertyExclusionObjectTypeId]
+  );
 
   const formLocked = loading || saving || !hasLoadedSettings || !portalId;
   const coverageDirty =
@@ -346,6 +388,30 @@ function SettingsPage({ context }: { context: any }) {
   const monitoringCoverageTitle = `Monitoring coverage (${enabledCategoryCount} enabled / ${coverageCategoryCount})`;
   const excludedWorkflowsTitle = `Excluded workflows (${workflowExclusions.length})`;
   const excludedPropertiesTitle = `Excluded properties (${propertyExclusions.length})`;
+  const workflowSelectOptions = [
+    {
+      label: workflowPickerLoading
+        ? "Loading monitored workflows..."
+        : "Select a monitored workflow",
+      value: "",
+    },
+    ...workflowPickerOptions.map((workflow) => ({
+      label: workflowOptionLabel(workflow),
+      value: workflow.id,
+    })),
+  ];
+  const propertySelectOptions = [
+    {
+      label: propertyPickerLoading
+        ? "Loading properties..."
+        : "Select a property",
+      value: "",
+    },
+    ...propertyPickerOptions.map((property) => ({
+      label: propertyOptionLabel(property),
+      value: property.name,
+    })),
+  ];
   const monitoringTimestamp = lastSavedAt || "";
   const statusVariant: StatusVariant = errorMessage ? "warning" : "success";
 
@@ -405,7 +471,16 @@ function SettingsPage({ context }: { context: any }) {
 
     loadMonitoringCoverage();
     loadExclusions();
-  }, [coverageUrl, portalId]);
+    loadWorkflowPickerOptions();
+  }, [coverageUrl, portalId, workflowsUrl]);
+
+  useEffect(() => {
+    if (!portalId || !propertyExclusionObjectTypeId) {
+      return;
+    }
+
+    loadPropertyPickerOptions();
+  }, [portalId, propertiesUrl, propertyExclusionObjectTypeId]);
 
   async function loadMonitoringCoverage() {
     if (!portalId) {
@@ -536,6 +611,77 @@ function SettingsPage({ context }: { context: any }) {
       setExclusionsError(message);
     } finally {
       setExclusionsLoading(false);
+    }
+  }
+
+  async function loadWorkflowPickerOptions() {
+    if (!portalId) {
+      return;
+    }
+
+    setWorkflowPickerLoading(true);
+    setWorkflowPickerError("");
+
+    try {
+      const response = await hubspot.fetch(workflowsUrl, {
+        method: "GET",
+        timeout: 15000,
+      });
+      if (!response.ok) {
+        throw new Error(`Backend returned status ${response.status}`);
+      }
+
+      const rows = ((await response.json()) as WorkflowPickerOption[]) ?? [];
+      setWorkflowPickerOptions(
+        rows
+          .map((row) => ({
+            id: String(row.id ?? "").trim(),
+            name: String(row.name ?? "").trim(),
+            isEnabled: row.isEnabled !== false,
+          }))
+          .filter((row) => row.id)
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setWorkflowPickerError(message);
+    } finally {
+      setWorkflowPickerLoading(false);
+    }
+  }
+
+  async function loadPropertyPickerOptions() {
+    if (!portalId || !propertyExclusionObjectTypeId) {
+      return;
+    }
+
+    setPropertyPickerLoading(true);
+    setPropertyPickerError("");
+
+    try {
+      const response = await hubspot.fetch(propertiesUrl, {
+        method: "GET",
+        timeout: 15000,
+      });
+      if (!response.ok) {
+        throw new Error(`Backend returned status ${response.status}`);
+      }
+
+      const rows = ((await response.json()) as PropertyPickerOption[]) ?? [];
+      setPropertyPickerOptions(
+        rows
+          .map((row) => ({
+            name: String(row.name ?? "").trim(),
+            label: String(row.label ?? "").trim(),
+            type: String(row.type ?? "").trim(),
+          }))
+          .filter((row) => row.name)
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setPropertyPickerError(message);
+      setPropertyPickerOptions([]);
+    } finally {
+      setPropertyPickerLoading(false);
     }
   }
 
@@ -945,12 +1091,11 @@ function SettingsPage({ context }: { context: any }) {
               <Flex
                 key={category.name}
                 direction="row"
-                justify="between"
                 align="center"
-                gap="small"
+                gap="medium"
                 wrap
               >
-                <Box flex={1}>
+                <Box flex={2}>
                   <Flex direction="column" gap="extra-small">
                     <Text format={{ fontWeight: "bold" }}>
                       {categoryLabel(category.name)}
@@ -960,15 +1105,17 @@ function SettingsPage({ context }: { context: any }) {
                     </Text>
                   </Flex>
                 </Box>
-                <Flex direction="row" align="center" gap="small" wrap>
+                <Box flex={1}>
                   <Toggle
-                    label={category.enabled ? "On" : "Off"}
+                    label="Enabled"
                     checked={category.enabled}
                     readonly={coverageLocked}
                     onChange={(value) =>
                       setCategoryEnabled(category.name, Boolean(value))
                     }
                   />
+                </Box>
+                <Box flex={2}>
                   <Select
                     label="Severity override"
                     name={`severity-${category.name}`}
@@ -995,7 +1142,7 @@ function SettingsPage({ context }: { context: any }) {
                       { label: "Critical", value: "critical" },
                     ]}
                   />
-                </Flex>
+                </Box>
               </Flex>
             ))}
           </Flex>
@@ -1042,7 +1189,14 @@ function SettingsPage({ context }: { context: any }) {
 
             <Flex direction="column" gap="small">
               {workflowExclusions.length === 0 ? (
-                <Text>No excluded workflows yet.</Text>
+                <Flex direction="column" gap="extra-small" align="center">
+                  <Text variant="microcopy">
+                    No excluded workflows yet.
+                  </Text>
+                  <Text variant="microcopy">
+                    Pick a monitored workflow below to suppress future workflow alerts.
+                  </Text>
+                </Flex>
               ) : (
                 workflowExclusions.map((exclusion) => (
                   <Flex
@@ -1078,43 +1232,57 @@ function SettingsPage({ context }: { context: any }) {
 
             <Divider />
 
-            <Flex direction="row" gap="small" align="center" wrap>
-              <Box flex={1}>
-                <Input
-                  label="Workflow ID"
-                  name="workflowExclusionId"
-                  value={workflowExclusionId}
-                  type="text"
-                  onChange={(value) =>
-                    setWorkflowExclusionId(String(value ?? ""))
+            <Flex direction="column" gap="small">
+              <Flex direction="row" gap="small" align="start" wrap>
+                <Box flex={2}>
+                  <Select
+                    label="Workflow"
+                    name="workflowExclusionId"
+                    value={workflowExclusionId}
+                    onChange={(value) =>
+                      setWorkflowExclusionId(String(value ?? ""))
+                    }
+                    readOnly={
+                      exclusionsSaving ||
+                      workflowPickerLoading ||
+                      workflowPickerOptions.length === 0 ||
+                      !portalId
+                    }
+                    description="Choose from workflows OpsLens has already observed; the workflow ID is shown in the option text."
+                    error={Boolean(workflowPickerError)}
+                    validationMessage={workflowPickerError || undefined}
+                    options={workflowSelectOptions}
+                  />
+                </Box>
+                <Box flex={1}>
+                  <Input
+                    label="Reason"
+                    name="workflowExclusionReason"
+                    value={workflowExclusionReason}
+                    type="text"
+                    onChange={(value) =>
+                      setWorkflowExclusionReason(String(value ?? ""))
+                    }
+                    readOnly={exclusionsSaving || !portalId}
+                    description="Optional note for future admins."
+                  />
+                </Box>
+              </Flex>
+              <Flex direction="row" justify="end" gap="small">
+                <Button
+                  type="button"
+                  variant="primary"
+                  disabled={
+                    exclusionsSaving ||
+                    workflowPickerLoading ||
+                    !portalId ||
+                    !workflowExclusionId.trim()
                   }
-                  readOnly={exclusionsSaving || !portalId}
-                  description="Paste the HubSpot workflow ID to exclude from monitoring."
-                />
-              </Box>
-              <Box flex={1}>
-                <Input
-                  label="Reason"
-                  name="workflowExclusionReason"
-                  value={workflowExclusionReason}
-                  type="text"
-                  onChange={(value) =>
-                    setWorkflowExclusionReason(String(value ?? ""))
-                  }
-                  readOnly={exclusionsSaving || !portalId}
-                  description="Optional note for future admins."
-                />
-              </Box>
-              <Button
-                type="button"
-                variant="primary"
-                disabled={
-                  exclusionsSaving || !portalId || !workflowExclusionId.trim()
-                }
-                onClick={addWorkflowExclusion}
-              >
-                Add exclusion
-              </Button>
+                  onClick={addWorkflowExclusion}
+                >
+                  Add exclusion
+                </Button>
+              </Flex>
             </Flex>
           </Flex>
         </Tile>
@@ -1132,7 +1300,14 @@ function SettingsPage({ context }: { context: any }) {
 
             <Flex direction="column" gap="small">
               {propertyExclusions.length === 0 ? (
-                <Text>No excluded properties yet.</Text>
+                <Flex direction="column" gap="extra-small" align="center">
+                  <Text variant="microcopy">
+                    No excluded properties yet.
+                  </Text>
+                  <Text variant="microcopy">
+                    Choose an object type, then pick the HubSpot property to exclude.
+                  </Text>
+                </Flex>
               ) : (
                 propertyExclusions.map((exclusion) => (
                   <Flex
@@ -1169,55 +1344,72 @@ function SettingsPage({ context }: { context: any }) {
 
             <Divider />
 
-            <Flex direction="row" gap="small" align="center" wrap>
-              <Box flex={1}>
-                <Input
-                  label="Property name"
-                  name="propertyExclusionId"
-                  value={propertyExclusionId}
-                  type="text"
-                  onChange={(value) =>
-                    setPropertyExclusionId(String(value ?? ""))
+            <Flex direction="column" gap="small">
+              <Flex direction="row" gap="small" align="start" wrap>
+                <Box flex={1}>
+                  <Select
+                    label="Object type"
+                    name="propertyExclusionObjectTypeId"
+                    value={propertyExclusionObjectTypeId}
+                    onChange={(value) => {
+                      setPropertyExclusionObjectTypeId(String(value ?? "0-1"));
+                      setPropertyExclusionId("");
+                      setPropertyPickerOptions([]);
+                    }}
+                    readOnly={exclusionsSaving || propertyPickerLoading || !portalId}
+                    description="Pick the HubSpot object before choosing a property."
+                    options={OBJECT_TYPE_OPTIONS}
+                  />
+                </Box>
+                <Box flex={2}>
+                  <Select
+                    label="Property"
+                    name="propertyExclusionId"
+                    value={propertyExclusionId}
+                    onChange={(value) =>
+                      setPropertyExclusionId(String(value ?? ""))
+                    }
+                    readOnly={
+                      exclusionsSaving ||
+                      propertyPickerLoading ||
+                      propertyPickerOptions.length === 0 ||
+                      !portalId
+                    }
+                    description="Choose by HubSpot label; the internal name is shown in the option text."
+                    error={Boolean(propertyPickerError)}
+                    validationMessage={propertyPickerError || undefined}
+                    options={propertySelectOptions}
+                  />
+                </Box>
+                <Box flex={1}>
+                  <Input
+                    label="Reason"
+                    name="propertyExclusionReason"
+                    value={propertyExclusionReason}
+                    type="text"
+                    onChange={(value) =>
+                      setPropertyExclusionReason(String(value ?? ""))
+                    }
+                    readOnly={exclusionsSaving || !portalId}
+                    description="Optional note for future admins."
+                  />
+                </Box>
+              </Flex>
+              <Flex direction="row" justify="end" gap="small">
+                <Button
+                  type="button"
+                  variant="primary"
+                  disabled={
+                    exclusionsSaving ||
+                    propertyPickerLoading ||
+                    !portalId ||
+                    !propertyExclusionId.trim()
                   }
-                  readOnly={exclusionsSaving || !portalId}
-                  description="Use the internal HubSpot property name, not the display label."
-                />
-              </Box>
-              <Box flex={1}>
-                <Select
-                  label="Object type"
-                  name="propertyExclusionObjectTypeId"
-                  value={propertyExclusionObjectTypeId}
-                  onChange={(value) =>
-                    setPropertyExclusionObjectTypeId(String(value ?? "0-1"))
-                  }
-                  readOnly={exclusionsSaving || !portalId}
-                  options={OBJECT_TYPE_OPTIONS}
-                />
-              </Box>
-              <Box flex={1}>
-                <Input
-                  label="Reason"
-                  name="propertyExclusionReason"
-                  value={propertyExclusionReason}
-                  type="text"
-                  onChange={(value) =>
-                    setPropertyExclusionReason(String(value ?? ""))
-                  }
-                  readOnly={exclusionsSaving || !portalId}
-                  description="Optional note for future admins."
-                />
-              </Box>
-              <Button
-                type="button"
-                variant="primary"
-                disabled={
-                  exclusionsSaving || !portalId || !propertyExclusionId.trim()
-                }
-                onClick={addPropertyExclusion}
-              >
-                Add exclusion
-              </Button>
+                  onClick={addPropertyExclusion}
+                >
+                  Add exclusion
+                </Button>
+              </Flex>
             </Flex>
 
             {exclusionsError ? (
