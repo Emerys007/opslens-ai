@@ -14,6 +14,7 @@ def _utc_now() -> datetime:
 
 EXCLUSION_TYPE_WORKFLOW = "workflow"
 EXCLUSION_TYPE_PROPERTY = "property"
+EXCLUSION_TYPE_LIST = "list"
 
 
 class MonitoringExclusion(Base):

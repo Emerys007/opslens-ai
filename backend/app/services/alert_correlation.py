@@ -41,6 +41,9 @@ from app.models.alert import (
     SEVERITY_HIGH,
     SEVERITY_LOW,
     SEVERITY_MEDIUM,
+    SOURCE_EVENT_LIST_ARCHIVED,
+    SOURCE_EVENT_LIST_CRITERIA_CHANGED,
+    SOURCE_EVENT_LIST_DELETED,
     SOURCE_EVENT_PROPERTY_ARCHIVED,
     SOURCE_EVENT_PROPERTY_DELETED,
     SOURCE_EVENT_PROPERTY_RENAMED,
@@ -48,11 +51,19 @@ from app.models.alert import (
     SOURCE_EVENT_WORKFLOW_DELETED,
     SOURCE_EVENT_WORKFLOW_DISABLED,
     SOURCE_EVENT_WORKFLOW_EDITED,
+    SOURCE_KIND_LIST,
     SOURCE_KIND_PROPERTY,
     SOURCE_KIND_WORKFLOW,
     STATUS_OPEN,
     Alert,
 )
+from app.models.list_change_event import (
+    LIST_EVENT_ARCHIVED,
+    LIST_EVENT_CRITERIA_CHANGED,
+    LIST_EVENT_DELETED,
+    ListChangeEvent,
+)
+from app.models.list_snapshot import ListSnapshot
 from app.models.property_change_event import (
     PROPERTY_EVENT_ARCHIVED,
     PROPERTY_EVENT_DELETED,
@@ -69,11 +80,15 @@ from app.models.workflow_change_event import (
 )
 from app.models.workflow_dependency import WorkflowDependency
 from app.models.workflow_snapshot import WorkflowSnapshot
-from app.services.dependency_mapping import find_workflows_affected_by_property
+from app.services.dependency_mapping import (
+    find_workflows_affected_by_list,
+    find_workflows_affected_by_property,
+)
 from app.services.monitoring_config import (
     MONITORING_CATEGORIES,
     get_category_severity,
     is_category_enabled,
+    is_list_excluded,
     is_property_excluded,
     is_workflow_excluded,
     load_monitoring_coverage,
@@ -111,6 +126,18 @@ _WORKFLOW_EVENT_TO_SEVERITY: dict[str, str] = {
     WORKFLOW_EVENT_DISABLED: SEVERITY_HIGH,
     WORKFLOW_EVENT_DELETED: SEVERITY_HIGH,
     WORKFLOW_EVENT_EDITED: SEVERITY_MEDIUM,
+}
+
+_LIST_EVENT_TO_SOURCE: dict[str, str | None] = {
+    LIST_EVENT_ARCHIVED: SOURCE_EVENT_LIST_ARCHIVED,
+    LIST_EVENT_DELETED: SOURCE_EVENT_LIST_DELETED,
+    LIST_EVENT_CRITERIA_CHANGED: SOURCE_EVENT_LIST_CRITERIA_CHANGED,
+}
+
+_LIST_EVENT_TO_SEVERITY: dict[str, str] = {
+    LIST_EVENT_ARCHIVED: SEVERITY_HIGH,
+    LIST_EVENT_DELETED: SEVERITY_HIGH,
+    LIST_EVENT_CRITERIA_CHANGED: SEVERITY_MEDIUM,
 }
 
 
@@ -219,6 +246,24 @@ def _lookup_workflow_name(
     if snap is None:
         return ""
     return (snap.name or "").strip()
+
+
+def _lookup_list_name(
+    session: Session,
+    portal_id: str,
+    list_id: str,
+) -> str:
+    snap = (
+        session.query(ListSnapshot)
+        .filter(
+            ListSnapshot.portal_id == portal_id,
+            ListSnapshot.list_id == list_id,
+        )
+        .one_or_none()
+    )
+    if snap is None:
+        return ""
+    return (snap.list_name or "").strip()
 
 
 def _lookup_dependency_locations(
@@ -521,6 +566,123 @@ def correlate_property_change_event(
 
 
 # ---------------------------------------------------------------------------
+# List correlator
+# ---------------------------------------------------------------------------
+
+
+def _build_list_change_block(event: ListChangeEvent, *, list_name: str) -> dict[str, Any]:
+    try:
+        payload = json.loads(event.payload_json or "{}")
+    except Exception:  # noqa: BLE001
+        payload = {}
+    block: dict[str, Any] = {
+        "list_id": event.list_id,
+        "list_name": list_name or payload.get("list_name"),
+    }
+    if isinstance(payload, dict):
+        block.update({k: v for k, v in payload.items() if v is not None})
+    return {k: v for k, v in block.items() if v is not None}
+
+
+def correlate_list_change_event(
+    session: Session,
+    event: ListChangeEvent,
+    *,
+    counters: dict[str, int] | None = None,
+) -> list[Alert]:
+    """Process one list change event and emit an alert per impacted workflow."""
+    counters = counters if counters is not None else {}
+    source_event_type = _LIST_EVENT_TO_SOURCE.get(event.event_type)
+    if source_event_type is None:
+        return []
+
+    severity = _LIST_EVENT_TO_SEVERITY[event.event_type]
+    portal_id = event.portal_id
+    list_id = event.list_id
+    coverage = load_monitoring_coverage(session, portal_id)
+
+    if not is_category_enabled(coverage, source_event_type):
+        _mark_processed(event)
+        return []
+
+    if is_list_excluded(session, portal_id, list_id):
+        _mark_processed(event)
+        return []
+
+    severity = get_category_severity(coverage, source_event_type, severity)
+
+    list_name = _lookup_list_name(session, portal_id, list_id)
+    display_name = list_name or list_id
+    impacted = find_workflows_affected_by_list(session, portal_id, list_id)
+
+    if not impacted:
+        return []
+
+    n_workflows = len(impacted)
+    title_for_event_type = {
+        SOURCE_EVENT_LIST_ARCHIVED: f"List '{display_name}' archived — {n_workflows} workflow(s) affected",
+        SOURCE_EVENT_LIST_DELETED: f"List '{display_name}' deleted — {n_workflows} workflow(s) affected",
+        SOURCE_EVENT_LIST_CRITERIA_CHANGED: (
+            f"List '{display_name}' criteria changed — {n_workflows} workflow(s) affected"
+        ),
+    }
+    title = title_for_event_type.get(
+        source_event_type,
+        f"List '{display_name}' changed — {n_workflows} workflow(s) affected",
+    )
+    change_block = _build_list_change_block(event, list_name=list_name)
+
+    alerts: list[Alert] = []
+    for impact in impacted:
+        impacted_workflow_id = str(impact.get("workflow_id") or "")
+        impacted_workflow_name = str(impact.get("workflow_name") or "")
+        locations = _lookup_dependency_locations(
+            session,
+            portal_id=portal_id,
+            workflow_id=impacted_workflow_id,
+            dependency_type="list",
+            dependency_id=list_id,
+            object_type_id=None,
+        )
+        if not locations:
+            locations = [
+                str(loc.get("location") or "")
+                for loc in (impact.get("locations") or [])
+                if loc.get("location")
+            ]
+
+        summary_payload = {
+            "kind": source_event_type,
+            "portal_id": portal_id,
+            "change": change_block,
+            "impact": {
+                "workflow_id": impacted_workflow_id,
+                "workflow_name": impacted_workflow_name,
+                "dependency_locations": locations,
+            },
+        }
+
+        alert = _upsert_alert(
+            session,
+            portal_id=portal_id,
+            severity=severity,
+            source_event_type=source_event_type,
+            source_event_id=event.id,
+            source_event_kind=SOURCE_KIND_LIST,
+            source_dependency_type="list",
+            source_dependency_id=list_id,
+            source_object_type_id=None,
+            impacted_workflow_id=impacted_workflow_id or None,
+            impacted_workflow_name=impacted_workflow_name or None,
+            title=title,
+            summary_payload=summary_payload,
+            counters=counters,
+        )
+        alerts.append(alert)
+    return alerts
+
+
+# ---------------------------------------------------------------------------
 # Workflow correlator
 # ---------------------------------------------------------------------------
 
@@ -639,6 +801,26 @@ def correlate_unprocessed_events(
         except Exception:  # noqa: BLE001 — never let one event poison the batch
             logger.exception(
                 "alert_correlation.property_event_failed",
+                extra={"event_id": event.id, "portal_id": event.portal_id},
+            )
+            continue
+        event.processed_at = now
+        counters["events_processed"] += 1
+
+    # ------- List events
+    list_events: list[ListChangeEvent] = (
+        session.query(ListChangeEvent)
+        .filter(ListChangeEvent.processed_at.is_(None))
+        .order_by(ListChangeEvent.id.asc())
+        .limit(batch_size)
+        .all()
+    )
+    for event in list_events:
+        try:
+            correlate_list_change_event(session, event, counters=counters)
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "alert_correlation.list_event_failed",
                 extra={"event_id": event.id, "portal_id": event.portal_id},
             )
             continue

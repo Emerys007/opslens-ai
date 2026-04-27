@@ -20,6 +20,7 @@ from app.models.alert import (
     STATUS_RESOLVED,
     Alert,
 )
+from app.models.list_snapshot import ListSnapshot
 from app.models.portal_setting import PortalSetting
 from app.models.workflow_snapshot import WorkflowSnapshot
 
@@ -143,6 +144,26 @@ class DashboardEndpointTests(unittest.TestCase):
             workflow_id=workflow_id,
             name=name,
             is_enabled=is_enabled,
+        )
+        session.add(row)
+        session.commit()
+        session.refresh(row)
+        return row
+
+    def _seed_list(
+        self,
+        session,
+        *,
+        portal_id: str | None = None,
+        list_id: str = "list-1",
+        list_name: str = "List",
+        is_archived: bool = False,
+    ) -> ListSnapshot:
+        row = ListSnapshot(
+            portal_id=portal_id or self.PORTAL_ID,
+            list_id=list_id,
+            list_name=list_name,
+            is_archived=is_archived,
         )
         session.add(row)
         session.commit()
@@ -556,6 +577,45 @@ class DashboardEndpointTests(unittest.TestCase):
     def test_workflows_endpoint_returns_empty_array_without_rows(self) -> None:
         response = self.client.get(
             f"/api/v1/dashboard/workflows?portalId={self.PORTAL_ID}"
+        )
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual([], response.json())
+
+    def test_lists_endpoint_returns_sorted_rows_capped_at_200(self) -> None:
+        session = self._session()
+        try:
+            for index in range(205):
+                self._seed_list(
+                    session,
+                    list_id=f"list-{index:03d}",
+                    list_name=f"List {205 - index:03d}",
+                    is_archived=index % 2 == 0,
+                )
+            self._seed_list(
+                session,
+                portal_id=self.OTHER_PORTAL_ID,
+                list_id="other-list",
+                list_name="A different portal",
+            )
+        finally:
+            session.close()
+
+        response = self.client.get(
+            f"/api/v1/dashboard/lists?portalId={self.PORTAL_ID}"
+        )
+
+        self.assertEqual(200, response.status_code)
+        payload = response.json()
+        self.assertEqual(200, len(payload))
+        self.assertEqual("List 001", payload[0]["name"])
+        self.assertEqual("List 200", payload[-1]["name"])
+        self.assertEqual({"id", "name", "isArchived"}, set(payload[0].keys()))
+        self.assertNotIn("other-list", {row["id"] for row in payload})
+
+    def test_lists_endpoint_returns_empty_array_without_rows(self) -> None:
+        response = self.client.get(
+            f"/api/v1/dashboard/lists?portalId={self.PORTAL_ID}"
         )
 
         self.assertEqual(200, response.status_code)

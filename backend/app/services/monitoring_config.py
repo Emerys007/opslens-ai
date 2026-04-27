@@ -10,6 +10,9 @@ from app.models.alert import (
     SEVERITY_HIGH,
     SEVERITY_LOW,
     SEVERITY_MEDIUM,
+    SOURCE_EVENT_LIST_ARCHIVED,
+    SOURCE_EVENT_LIST_CRITERIA_CHANGED,
+    SOURCE_EVENT_LIST_DELETED,
     SOURCE_EVENT_PROPERTY_ARCHIVED,
     SOURCE_EVENT_PROPERTY_DELETED,
     SOURCE_EVENT_PROPERTY_RENAMED,
@@ -18,6 +21,7 @@ from app.models.alert import (
     SOURCE_EVENT_WORKFLOW_EDITED,
 )
 from app.models.monitoring_exclusion import (
+    EXCLUSION_TYPE_LIST,
     EXCLUSION_TYPE_PROPERTY,
     EXCLUSION_TYPE_WORKFLOW,
     MonitoringExclusion,
@@ -32,6 +36,9 @@ MONITORING_CATEGORY_PROPERTY_RENAMED = SOURCE_EVENT_PROPERTY_RENAMED
 MONITORING_CATEGORY_PROPERTY_TYPE_CHANGED = SOURCE_EVENT_PROPERTY_TYPE_CHANGED
 MONITORING_CATEGORY_WORKFLOW_DISABLED = SOURCE_EVENT_WORKFLOW_DISABLED
 MONITORING_CATEGORY_WORKFLOW_EDITED = SOURCE_EVENT_WORKFLOW_EDITED
+MONITORING_CATEGORY_LIST_ARCHIVED = SOURCE_EVENT_LIST_ARCHIVED
+MONITORING_CATEGORY_LIST_DELETED = SOURCE_EVENT_LIST_DELETED
+MONITORING_CATEGORY_LIST_CRITERIA_CHANGED = SOURCE_EVENT_LIST_CRITERIA_CHANGED
 
 MONITORING_CATEGORY_DEFAULT_SEVERITIES: dict[str, str] = {
     MONITORING_CATEGORY_PROPERTY_ARCHIVED: SEVERITY_HIGH,
@@ -40,6 +47,9 @@ MONITORING_CATEGORY_DEFAULT_SEVERITIES: dict[str, str] = {
     MONITORING_CATEGORY_PROPERTY_TYPE_CHANGED: SEVERITY_MEDIUM,
     MONITORING_CATEGORY_WORKFLOW_DISABLED: SEVERITY_HIGH,
     MONITORING_CATEGORY_WORKFLOW_EDITED: SEVERITY_MEDIUM,
+    MONITORING_CATEGORY_LIST_ARCHIVED: SEVERITY_HIGH,
+    MONITORING_CATEGORY_LIST_DELETED: SEVERITY_HIGH,
+    MONITORING_CATEGORY_LIST_CRITERIA_CHANGED: SEVERITY_MEDIUM,
 }
 
 MONITORING_CATEGORIES = tuple(MONITORING_CATEGORY_DEFAULT_SEVERITIES.keys())
@@ -168,6 +178,24 @@ def is_property_excluded(
             MonitoringExclusion.exclusion_type == EXCLUSION_TYPE_PROPERTY,
             MonitoringExclusion.exclusion_id == property_key,
             MonitoringExclusion.object_type_id == object_type_key,
+        )
+        .first()
+        is not None
+    )
+
+
+def is_list_excluded(session, portal_id: str, list_id: str) -> bool:
+    portal_key = str(portal_id or "").strip()
+    list_key = str(list_id or "").strip()
+    if not portal_key or not list_key:
+        return False
+    return (
+        session.query(MonitoringExclusion.id)
+        .filter(
+            MonitoringExclusion.portal_id == portal_key,
+            MonitoringExclusion.exclusion_type == EXCLUSION_TYPE_LIST,
+            MonitoringExclusion.exclusion_id == list_key,
+            MonitoringExclusion.object_type_id.is_(None),
         )
         .first()
         is not None

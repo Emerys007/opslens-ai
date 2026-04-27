@@ -9,7 +9,10 @@ from sqlalchemy import case, desc, func, select
 from app.db import get_session, init_db
 from app.models.alert import STATUS_OPEN, STATUS_RESOLVED, Alert
 from app.models.alert_event import AlertEvent
+from app.models.list_change_event import ListChangeEvent
+from app.models.list_snapshot import ListSnapshot
 from app.models.monitoring_exclusion import (
+    EXCLUSION_TYPE_LIST,
     EXCLUSION_TYPE_PROPERTY,
     EXCLUSION_TYPE_WORKFLOW,
     MonitoringExclusion,
@@ -42,7 +45,11 @@ router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
 ACTION_REQUIRED_SEVERITIES = ("critical", "high")
 WATCHING_SEVERITY = "medium"
-VALID_EXCLUSION_TYPES = (EXCLUSION_TYPE_WORKFLOW, EXCLUSION_TYPE_PROPERTY)
+VALID_EXCLUSION_TYPES = (
+    EXCLUSION_TYPE_WORKFLOW,
+    EXCLUSION_TYPE_PROPERTY,
+    EXCLUSION_TYPE_LIST,
+)
 VALID_ACTION_PAGE_SIZES = (3, 5, 10, 25, 50)
 HUBSPOT_PROPERTIES_URL = "https://api.hubapi.com/crm/v3/properties/{object_type}"
 POLL_NOW_RATE_LIMIT_SECONDS = 30
@@ -189,6 +196,7 @@ def _event_count_from_poll_summary(summary: dict) -> int:
             "unarchivedEvents",
             "typeChangedEvents",
             "renamedEvents",
+            "criteriaChangedEvents",
         )
     )
 
@@ -256,8 +264,10 @@ def _action_summary(
     last_poll = _max_timestamp(
         _latest_timestamp(session, portal_id, WorkflowSnapshot, WorkflowSnapshot.last_seen_at),
         _latest_timestamp(session, portal_id, PropertySnapshot, PropertySnapshot.last_seen_at),
+        _latest_timestamp(session, portal_id, ListSnapshot, ListSnapshot.last_seen_at),
         _latest_timestamp(session, portal_id, WorkflowChangeEvent, WorkflowChangeEvent.detected_at),
         _latest_timestamp(session, portal_id, PropertyChangeEvent, PropertyChangeEvent.detected_at),
+        _latest_timestamp(session, portal_id, ListChangeEvent, ListChangeEvent.detected_at),
     )
 
     return {
@@ -385,6 +395,15 @@ def _workflow_picker_payload(row: WorkflowSnapshot) -> dict:
         "id": workflow_id,
         "name": str(row.name or "").strip() or workflow_id,
         "isEnabled": bool(row.is_enabled),
+    }
+
+
+def _list_picker_payload(row: ListSnapshot) -> dict:
+    list_id = str(row.list_id or "").strip()
+    return {
+        "id": list_id,
+        "name": str(row.list_name or "").strip() or list_id,
+        "isArchived": bool(row.is_archived),
     }
 
 
@@ -589,6 +608,29 @@ def dashboard_workflows(request: Request):
         session.close()
 
 
+@router.get("/lists")
+def dashboard_lists(request: Request):
+    portal_id = str(request.query_params.get("portalId", "")).strip()
+    if not portal_id:
+        raise HTTPException(status_code=400, detail="portalId is required.")
+
+    db_ready = init_db()
+    session = get_session()
+    if not db_ready or session is None:
+        return []
+
+    try:
+        stmt = (
+            select(ListSnapshot)
+            .where(ListSnapshot.portal_id == portal_id)
+            .order_by(func.lower(ListSnapshot.list_name), ListSnapshot.list_id)
+            .limit(200)
+        )
+        return [_list_picker_payload(row) for row in session.execute(stmt).scalars().all()]
+    finally:
+        session.close()
+
+
 @router.get("/properties")
 def dashboard_properties(request: Request):
     portal_id = str(request.query_params.get("portalId", "")).strip()
@@ -685,7 +727,10 @@ def list_monitoring_exclusions(request: Request):
     if not portal_id:
         raise HTTPException(status_code=400, detail="portalId is required.")
     if exclusion_type and exclusion_type not in VALID_EXCLUSION_TYPES:
-        raise HTTPException(status_code=400, detail="type must be workflow or property.")
+        raise HTTPException(
+            status_code=400,
+            detail="type must be workflow, property, or list.",
+        )
 
     db_ready = init_db()
     session = get_session()
@@ -720,7 +765,10 @@ def create_monitoring_exclusion(payload: dict, request: Request):
     reason = str(payload.get("reason", "")).strip() or None
 
     if exclusion_type not in VALID_EXCLUSION_TYPES:
-        raise HTTPException(status_code=400, detail="type must be workflow or property.")
+        raise HTTPException(
+            status_code=400,
+            detail="type must be workflow, property, or list.",
+        )
     if not exclusion_id:
         raise HTTPException(status_code=400, detail="id is required.")
     if exclusion_type == EXCLUSION_TYPE_PROPERTY and not object_type_id:
@@ -729,6 +777,8 @@ def create_monitoring_exclusion(payload: dict, request: Request):
             detail="objectTypeId is required for property exclusions.",
         )
     if exclusion_type == EXCLUSION_TYPE_WORKFLOW:
+        object_type_id = None
+    if exclusion_type == EXCLUSION_TYPE_LIST:
         object_type_id = None
 
     db_ready = init_db()

@@ -103,6 +103,8 @@ def init_db() -> bool:
     from app.models.alert import Alert  # noqa: F401
     from app.models.alert_event import AlertEvent  # noqa: F401
     from app.models.hubspot_installation import HubSpotInstallation  # noqa: F401
+    from app.models.list_change_event import ListChangeEvent  # noqa: F401
+    from app.models.list_snapshot import ListSnapshot  # noqa: F401
     from app.models.marketplace_install_session import MarketplaceInstallSession  # noqa: F401
     from app.models.monitoring_exclusion import MonitoringExclusion  # noqa: F401
     from app.models.portal_setting import PortalSetting  # noqa: F401
