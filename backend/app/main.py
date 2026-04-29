@@ -6,6 +6,7 @@ from app.api.v1.router import api_router
 from app.config import settings
 from app.core.logging import configure_logging, logger
 from app.db import get_session, init_db
+from app.routes.email_importer_gateway import router as email_importer_gateway_router
 from app.routes.oauth import router as oauth_router
 from app.services.workflow_polling_scheduler import WorkflowPollingScheduler
 
@@ -53,6 +54,11 @@ app = FastAPI(
 # Top-level OAuth routes must not sit behind /api/v1 because the configured
 # HubSpot redirect URL is https://api.app-sync.com/oauth-callback
 app.include_router(oauth_router)
+
+# Shared App-Sync gateway branch for Historic Email Importer. This keeps the
+# OpsLens API root and /api/v1 routes untouched while forwarding only
+# /email-importer/* to the importer worker.
+app.include_router(email_importer_gateway_router)
 
 app.include_router(api_router, prefix="/api/v1")
 
