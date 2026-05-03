@@ -216,6 +216,10 @@ function usersSettingsUrl(portalId: string) {
   return `https://app.hubspot.com/settings/${portalId}/users`;
 }
 
+function appSettingsUrl(portalId: string, appId: string) {
+  return `https://app.hubspot.com/integrations-settings/${portalId}/installed/${appId}/general`;
+}
+
 function StatusMetric({
   label,
   value,
@@ -663,6 +667,18 @@ function HomePage({ context }: HomePageProps) {
             {checkNowMessage ? (
               <Text variant="microcopy">{checkNowMessage}</Text>
             ) : null}
+            {portalId && appId ? (
+              <Text variant="microcopy">
+                <Link
+                  href={{
+                    url: appSettingsUrl(portalId, appId),
+                    external: true,
+                  }}
+                >
+                  Settings
+                </Link>
+              </Text>
+            ) : null}
           </Flex>
         </Flex>
       </Tile>
@@ -777,10 +793,16 @@ function HomePage({ context }: HomePageProps) {
         </Flex>
       </Tile>
 
-      <Flex direction="row" gap="small">
-        <Box flex={1}>
+      {/*
+        align="stretch" + alignSelf="stretch" on each Box ensures the
+        side-by-side Tiles render at the same height even when one has
+        fewer rows than the other. (Default Flex.align is "stretch", but
+        we set it explicitly so the intent is obvious to readers.)
+      */}
+      <Flex direction="row" gap="small" align="stretch">
+        <Box flex={1} alignSelf="stretch">
           <Tile>
-            <Flex direction="column" gap="medium">
+            <Flex direction="column" gap="medium" justify="start">
               <Flex direction="column" gap="extra-small">
                 <Heading>Watching</Heading>
                 <Text>Medium-severity alerts worth keeping an eye on.</Text>
@@ -806,9 +828,9 @@ function HomePage({ context }: HomePageProps) {
           </Tile>
         </Box>
 
-        <Box flex={1}>
+        <Box flex={1} alignSelf="stretch">
           <Tile>
-            <Flex direction="column" gap="medium">
+            <Flex direction="column" gap="medium" justify="start">
               <Flex direction="column" gap="extra-small">
                 <Heading>System health</Heading>
                 <Text>Current delivery and polling status for this portal.</Text>
