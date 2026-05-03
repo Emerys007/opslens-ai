@@ -21,6 +21,21 @@ class PortalSetting(Base):
     slack_delivery_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     ticket_delivery_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     monitoring_coverage: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    # Pipeline routing for ticket delivery. ``opslens_pipeline_mode`` is
+    # either ``"dedicated"`` (we created the OpsLens Alerts pipeline) or
+    # ``"shared"`` (the portal hit the ticket-pipeline limit so we attached
+    # OpsLens-prefixed stages to an existing pipeline). Stage IDs are
+    # persisted so ticket creation does not need to look up the pipeline by
+    # name on every request.
+    opslens_pipeline_mode: Mapped[str] = mapped_column(String(16), default="dedicated")
+    opslens_ticket_pipeline_id: Mapped[str] = mapped_column(String(64), default="")
+    opslens_stage_new_alert_id: Mapped[str] = mapped_column(String(64), default="")
+    opslens_stage_investigating_id: Mapped[str] = mapped_column(String(64), default="")
+    opslens_stage_waiting_id: Mapped[str] = mapped_column(String(64), default="")
+    opslens_stage_resolved_id: Mapped[str] = mapped_column(String(64), default="")
+    opslens_stage_duplicate_id: Mapped[str] = mapped_column(String(64), default="")
+
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

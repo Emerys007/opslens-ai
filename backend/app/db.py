@@ -20,6 +20,13 @@ _BACKFILL_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("portal_settings", "slack_delivery_enabled", "BOOLEAN DEFAULT TRUE"),
     ("portal_settings", "ticket_delivery_enabled", "BOOLEAN DEFAULT TRUE"),
     ("portal_settings", "monitoring_coverage", "JSON"),
+    ("portal_settings", "opslens_pipeline_mode", "VARCHAR(16) DEFAULT 'dedicated'"),
+    ("portal_settings", "opslens_ticket_pipeline_id", "VARCHAR(64) DEFAULT ''"),
+    ("portal_settings", "opslens_stage_new_alert_id", "VARCHAR(64) DEFAULT ''"),
+    ("portal_settings", "opslens_stage_investigating_id", "VARCHAR(64) DEFAULT ''"),
+    ("portal_settings", "opslens_stage_waiting_id", "VARCHAR(64) DEFAULT ''"),
+    ("portal_settings", "opslens_stage_resolved_id", "VARCHAR(64) DEFAULT ''"),
+    ("portal_settings", "opslens_stage_duplicate_id", "VARCHAR(64) DEFAULT ''"),
 )
 
 

@@ -530,11 +530,15 @@ def run_post_install_provisioner(
     token: str,
     portal_id: str,
 ) -> dict:
+    # Materialize the default settings row first so the bootstrap can
+    # write its resolved pipeline/stage ids onto an existing row rather
+    # than racing to create one.
+    default_settings, settings_created = ensure_default_portal_settings(session, portal_id)
     bootstrap_summary = ensure_portal_bootstrap(
         token=token,
         portal_id=portal_id,
+        session=session,
     )
-    default_settings, settings_created = ensure_default_portal_settings(session, portal_id)
     return {
         **bootstrap_summary,
         "defaultPortalSettingsCreated": bool(settings_created),

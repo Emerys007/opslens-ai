@@ -34,6 +34,26 @@ VISIBLE_TICKET_PROPERTIES = [
 ]
 
 
+def _resolve_pipeline_config_for_portal(token: str, portal_id: str) -> TicketPipelineConfig:
+    """Build the ticket pipeline config for ``portal_id`` preferring the
+    persisted ``portal_settings`` row over a HubSpot lookup."""
+    if not init_db():
+        return load_portal_ticket_pipeline_config(token=token, portal_id=portal_id)
+
+    session = get_session()
+    if session is None:
+        return load_portal_ticket_pipeline_config(token=token, portal_id=portal_id)
+
+    try:
+        return load_portal_ticket_pipeline_config(
+            token=token,
+            portal_id=portal_id,
+            session=session,
+        )
+    finally:
+        session.close()
+
+
 def _resolve_token_for_portal(portal_id: str) -> str:
     cleaned_portal_id = str(portal_id or "").strip()
     if not cleaned_portal_id:
@@ -123,10 +143,7 @@ def load_ticket_visibility(*, portal_id: str, limit: int = 4) -> dict:
     token = _resolve_token_for_portal(cleaned_portal_id)
 
     try:
-        pipeline_config = load_portal_ticket_pipeline_config(
-            token=token,
-            portal_id=cleaned_portal_id,
-        )
+        pipeline_config = _resolve_pipeline_config_for_portal(token, cleaned_portal_id)
     except PortalProvisioningRequiredError as exc:
         return {
             "status": "ok",

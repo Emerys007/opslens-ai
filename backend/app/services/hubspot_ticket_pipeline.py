@@ -20,6 +20,20 @@ STAGE_LABEL_WAITING = "Waiting / Monitoring"
 STAGE_LABEL_RESOLVED = "Resolved"
 STAGE_LABEL_DUPLICATE = "Closed as Duplicate"
 
+# Free / Starter HubSpot tiers cap ticket pipelines at 1. When the
+# bootstrap can't create a dedicated "OpsLens Alerts" pipeline it falls
+# back to attaching OpsLens-prefixed stages to whatever pipeline already
+# exists. The prefix avoids clobbering the customer's own stage labels.
+SHARED_STAGE_LABEL_PREFIX = "OpsLens "
+
+PIPELINE_MODE_DEDICATED = "dedicated"
+PIPELINE_MODE_SHARED = "shared"
+
+
+def shared_mode_stage_label(label: str) -> str:
+    """Map a dedicated-mode stage label to the shared-pipeline equivalent."""
+    return f"{SHARED_STAGE_LABEL_PREFIX}{label}"
+
 
 class PortalProvisioningRequiredError(RuntimeError):
     pass
@@ -50,6 +64,7 @@ class TicketPipelineConfig:
     stage_waiting: str
     stage_resolved: str
     stage_duplicate: str
+    pipeline_mode: str = PIPELINE_MODE_DEDICATED
 
     @property
     def open_stage_ids(self) -> set[str]:
@@ -218,7 +233,75 @@ def build_ticket_pipeline_config(portal_id: str, pipeline: dict) -> TicketPipeli
     )
 
 
-def load_portal_ticket_pipeline_config(*, token: str, portal_id: str) -> TicketPipelineConfig:
+def _config_from_portal_settings(portal_id: str, row) -> TicketPipelineConfig | None:
+    """Build a TicketPipelineConfig from a PortalSetting row when all
+    five OpsLens stage IDs have been persisted. Returns ``None`` if the
+    settings row is missing fields — callers should fall back to the
+    HubSpot lookup path.
+    """
+    if row is None:
+        return None
+    pipeline_id = str(getattr(row, "opslens_ticket_pipeline_id", "") or "").strip()
+    if not pipeline_id:
+        return None
+
+    stage_new_alert = str(getattr(row, "opslens_stage_new_alert_id", "") or "").strip()
+    stage_investigating = str(getattr(row, "opslens_stage_investigating_id", "") or "").strip()
+    stage_waiting = str(getattr(row, "opslens_stage_waiting_id", "") or "").strip()
+    stage_resolved = str(getattr(row, "opslens_stage_resolved_id", "") or "").strip()
+    stage_duplicate = str(getattr(row, "opslens_stage_duplicate_id", "") or "").strip()
+
+    if not all((stage_new_alert, stage_investigating, stage_waiting, stage_resolved, stage_duplicate)):
+        return None
+
+    pipeline_mode = str(getattr(row, "opslens_pipeline_mode", "") or PIPELINE_MODE_DEDICATED).strip()
+    if pipeline_mode not in (PIPELINE_MODE_DEDICATED, PIPELINE_MODE_SHARED):
+        pipeline_mode = PIPELINE_MODE_DEDICATED
+
+    return TicketPipelineConfig(
+        portal_id=str(portal_id or "").strip(),
+        pipeline_id=pipeline_id,
+        pipeline_label=DEFAULT_PIPELINE_LABEL,
+        stage_new_alert=stage_new_alert,
+        stage_investigating=stage_investigating,
+        stage_waiting=stage_waiting,
+        stage_resolved=stage_resolved,
+        stage_duplicate=stage_duplicate,
+        pipeline_mode=pipeline_mode,
+    )
+
+
+def load_portal_ticket_pipeline_config(
+    *,
+    token: str,
+    portal_id: str,
+    session=None,
+) -> TicketPipelineConfig:
+    """Resolve the ticket pipeline config for a portal.
+
+    Order of preference:
+      1. Persisted IDs in ``portal_settings`` (no HubSpot call needed).
+         This is the post-bootstrap state for both dedicated and shared
+         pipelines, and it's how tickets get routed at runtime.
+      2. Fetch ticket pipelines from HubSpot and locate the dedicated
+         "OpsLens Alerts" pipeline by label. Used when bootstrap has not
+         yet run / persisted IDs.
+
+    Raises ``PortalProvisioningRequiredError`` if neither source produces
+    a usable config.
+    """
+    portal_key = str(portal_id or "").strip()
+
+    if session is not None and portal_key:
+        # Lazy import to avoid a circular dependency between services and models
+        # at module-load time.
+        from app.models.portal_setting import PortalSetting
+
+        row = session.get(PortalSetting, portal_key)
+        config = _config_from_portal_settings(portal_key, row)
+        if config is not None:
+            return config
+
     pipelines = fetch_ticket_pipelines(token)
     pipeline = select_ticket_pipeline(pipelines)
     if pipeline is None:

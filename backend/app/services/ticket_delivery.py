@@ -164,7 +164,7 @@ def deliver_alert_to_ticket(session: Session, alert: Alert) -> str | None:
 
     try:
         pipeline_config = load_portal_ticket_pipeline_config(
-            token=token, portal_id=portal_id,
+            token=token, portal_id=portal_id, session=session,
         )
     except PortalProvisioningRequiredError as exc:
         logger.warning(

@@ -435,10 +435,16 @@ def auto_resolve_waiting_tickets(
     for portal_id in portal_ids:
         try:
             token = _resolve_token_for_portal(portal_id)
-            pipeline_config = load_portal_ticket_pipeline_config(
-                token=token,
-                portal_id=portal_id,
-            )
+            pipeline_session = get_session() if init_db() else None
+            try:
+                pipeline_config = load_portal_ticket_pipeline_config(
+                    token=token,
+                    portal_id=portal_id,
+                    session=pipeline_session,
+                )
+            finally:
+                if pipeline_session is not None:
+                    pipeline_session.close()
             portal_tokens.append((portal_id, token, pipeline_config))
         except PortalProvisioningRequiredError as exc:
             summary["skippedPortals"].append(
