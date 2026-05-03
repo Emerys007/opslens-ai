@@ -12,7 +12,7 @@ INSTALL_ORIGIN_MARKETPLACE = "marketplace"
 def _app_public_base_url() -> str:
     app_base = str(settings.app_public_base_url or "").strip().rstrip("/")
     if not app_base:
-        app_base = "https://apps.app-sync.com"
+        app_base = "https://app-sync.com"
     return app_base
 
 

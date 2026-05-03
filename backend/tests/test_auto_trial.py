@@ -77,7 +77,7 @@ class AutoTrialFlowTests(unittest.TestCase):
             ),
             patch(
                 "app.api.v1.routes.marketplace.settings.app_public_base_url",
-                "https://apps.app-sync.com",
+                "https://app-sync.com",
             ),
             patch("app.api.v1.routes.marketplace.create_customer") as create_customer,
             patch(
@@ -89,7 +89,7 @@ class AutoTrialFlowTests(unittest.TestCase):
                 json={
                     "plan": "professional",
                     "billingInterval": "monthly",
-                    "returnUrl": "https://apps.app-sync.com/install/complete",
+                    "returnUrl": "https://app-sync.com/install/complete",
                     "tenantContext": {"tenantSlug": "fresh-trial-co"},
                     "partnerUserId": "user-fresh",
                     "partnerUserEmail": "owner@example.com",
@@ -114,7 +114,7 @@ class AutoTrialFlowTests(unittest.TestCase):
                 "app.routes.oauth.parse_signed_state",
                 return_value={
                     "installSessionId": install_session_id,
-                    "returnTo": "https://apps.app-sync.com/install/complete",
+                    "returnTo": "https://app-sync.com/install/complete",
                 },
             ),
             patch(
@@ -160,7 +160,7 @@ class AutoTrialFlowTests(unittest.TestCase):
         self.assertEqual(302, callback.status_code)
         location = callback.headers["location"]
         self.assertTrue(
-            location.startswith("https://apps.app-sync.com/opslens/install/complete/?")
+            location.startswith("https://app-sync.com/opslens/install/complete/?")
         )
         self.assertIn("portalId=1111111", location)
         self.assertIn("bootstrapStatus=success", location)
@@ -229,7 +229,7 @@ class AutoTrialFlowTests(unittest.TestCase):
             ),
             patch(
                 "app.api.v1.routes.marketplace.settings.app_public_base_url",
-                "https://apps.app-sync.com",
+                "https://app-sync.com",
             ),
             patch("app.api.v1.routes.marketplace.create_customer") as create_customer,
             patch(
@@ -241,7 +241,7 @@ class AutoTrialFlowTests(unittest.TestCase):
                 json={
                     "plan": "professional",
                     "billingInterval": "monthly",
-                    "returnUrl": "https://apps.app-sync.com/install/complete",
+                    "returnUrl": "https://app-sync.com/install/complete",
                     "tenantContext": {"tenantSlug": "reinstall-co"},
                     "partnerUserId": "user-reinstall",
                     "partnerUserEmail": "owner@example.com",
@@ -258,7 +258,7 @@ class AutoTrialFlowTests(unittest.TestCase):
                 "app.routes.oauth.parse_signed_state",
                 return_value={
                     "installSessionId": install_session_id,
-                    "returnTo": "https://apps.app-sync.com/install/complete",
+                    "returnTo": "https://app-sync.com/install/complete",
                 },
             ),
             patch(
@@ -399,7 +399,7 @@ class AutoTrialFlowTests(unittest.TestCase):
             ),
             patch(
                 "app.api.v1.routes.marketplace.settings.app_public_base_url",
-                "https://apps.app-sync.com",
+                "https://app-sync.com",
             ),
             patch(
                 "app.api.v1.routes.marketplace.create_customer",
@@ -418,7 +418,7 @@ class AutoTrialFlowTests(unittest.TestCase):
                 json={
                     "plan": "professional",
                     "billingInterval": "monthly",
-                    "returnUrl": "https://apps.app-sync.com/install/complete",
+                    "returnUrl": "https://app-sync.com/install/complete",
                     "tenantContext": {"tenantSlug": "legacy-paid"},
                     "partnerUserId": "user-legacy",
                     "partnerUserEmail": "owner@example.com",

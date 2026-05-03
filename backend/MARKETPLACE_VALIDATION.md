@@ -3,7 +3,7 @@
 ## Current routing split
 
 - Marketplace-origin installs: `/oauth-callback` redirects to the exact HubSpot-provided `returnUrl`.
-- External app-sync installs: `/oauth-callback` redirects to `https://apps.app-sync.com/opslens/install/complete/`.
+- External app-sync installs: `/oauth-callback` redirects to `https://app-sync.com/opslens/install/complete/`.
 
 ## Marketplace-origin validation
 
@@ -42,7 +42,7 @@ $api = 'https://api.app-sync.com'
 $external = Invoke-RestMethod -Method Post -Uri "$api/api/v1/marketplace/install/start" -ContentType 'application/json' -Body (@{
   plan = 'professional'
   billingInterval = 'monthly'
-  returnUrl = 'https://apps.app-sync.com/install/complete'
+  returnUrl = 'https://app-sync.com/install/complete'
   tenantContext = @{
     source = 'external-routing-validation'
   }
