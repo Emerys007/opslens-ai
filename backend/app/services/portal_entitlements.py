@@ -356,8 +356,12 @@ def grant_auto_trial_for_install_session(
         return install_session, False
 
     # If the portal has previously been granted a trial, never grant another.
-    # Revoke the optimistic install-session trial so the caller's
-    # ``install_session_is_billable_active`` gate falls into payment_required.
+    # Revoke the optimistic install-session trial. The OAuth callback no
+    # longer hard-blocks on ``install_session_is_billable_active`` — the
+    # install completes either way and billing is handled out-of-band via
+    # the Stripe customer portal — but the install session must reflect
+    # the truth (no active trial) so downstream entitlement checks behave
+    # correctly.
     if entitlement is not None and entitlement.trial_started_at is not None:
         install_session = _revoke_optimistic_install_session_trial(session, install_session)
         return install_session, False
