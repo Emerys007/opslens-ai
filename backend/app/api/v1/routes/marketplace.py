@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import quote, urlencode
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Header, HTTPException, Path, Request
 from pydantic import BaseModel, Field
 
 from app.config import settings
+from app.core.logging import logger
 from app.db import get_session, init_db
+from app.models.hubspot_installation import HubSpotInstallation
+from app.models.marketplace_install_session import MarketplaceInstallSession
+from app.services.hubspot_oauth import refresh_access_token
 from app.services.marketplace_billing import (
     create_checkout_session,
     create_customer,
@@ -37,6 +41,8 @@ from app.services.portal_entitlements import (
     install_session_can_activate,
     install_session_context,
     install_session_trial_query_params,
+    mark_install_session_bootstrap,
+    run_post_install_provisioner,
     sync_installation_activation_for_install_session,
     update_entitlement_from_subscription,
     update_install_session_billing,
@@ -303,7 +309,13 @@ def marketplace_install_success(installSessionId: str):
         bootstrap_summary = install_session_bootstrap_summary(row)
         context = install_session_context(row)
         origin = install_origin(context, row.return_url)
-        redirect_status = "error" if str(row.bootstrap_status or "").strip().lower() != "success" else "ok"
+        normalized_bootstrap = str(row.bootstrap_status or "").strip().lower()
+        # Bootstrap failures are non-fatal: the install itself succeeded
+        # (OAuth tokens stored, billing in good standing). Surface
+        # bootstrapStatus=failed so the install/complete page can offer a
+        # retry, but report status=ok so the user lands in a happy-path UX.
+        # payment_required remains a true error — the install is incomplete.
+        redirect_status = "error" if normalized_bootstrap == "payment_required" else "ok"
         trial_params = install_session_trial_query_params(row)
         resolved_return_url = final_install_redirect_url(
             install_origin_value=origin,
@@ -313,7 +325,7 @@ def marketplace_install_success(installSessionId: str):
             billing_interval=row.billing_interval,
             bootstrap_status=row.bootstrap_status,
             status=redirect_status,
-            message=row.install_error if redirect_status == "error" else "",
+            message=row.install_error if normalized_bootstrap != "success" else "",
             trial=bool(trial_params.get("trial")),
             trial_expires_at=trial_params.get("trial_expires_at", ""),
         )
@@ -339,6 +351,114 @@ def marketplace_install_success(installSessionId: str):
         }
     except Exception as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    finally:
+        session.close()
+
+
+def _require_admin_key(supplied: str | None) -> None:
+    expected = str(settings.maintenance_api_key or "").strip()
+    if not expected:
+        raise HTTPException(status_code=503, detail="Admin API key is not configured.")
+    if str(supplied or "").strip() != expected:
+        raise HTTPException(status_code=401, detail="Invalid admin key.")
+
+
+def _latest_install_session_for_portal(
+    session,
+    portal_id: str,
+) -> MarketplaceInstallSession | None:
+    return (
+        session.query(MarketplaceInstallSession)
+        .filter(MarketplaceInstallSession.hubspot_portal_id == portal_id)
+        .order_by(MarketplaceInstallSession.created_at.desc())
+        .first()
+    )
+
+
+@router.post("/bootstrap/{portal_id}")
+def retry_portal_bootstrap(
+    portal_id: str = Path(..., min_length=1),
+    x_opslens_admin_key: str | None = Header(default=None),
+):
+    """Re-run the post-install bootstrap for an already-installed portal.
+
+    Authenticated via the `X-OpsLens-Admin-Key` header. Used to recover
+    portals whose original install completed (OAuth tokens stored, billing
+    in good standing) but whose schema bootstrap failed.
+    """
+    _require_admin_key(x_opslens_admin_key)
+
+    portal_key = str(portal_id or "").strip()
+    if not portal_key:
+        raise HTTPException(status_code=400, detail="portal_id is required.")
+
+    if not init_db():
+        raise HTTPException(status_code=500, detail="DATABASE_URL is not configured.")
+
+    session = get_session()
+    if session is None:
+        raise HTTPException(status_code=500, detail="Database session could not be created.")
+
+    try:
+        installation = session.get(HubSpotInstallation, portal_key)
+        if installation is None:
+            raise HTTPException(status_code=404, detail=f"No HubSpot installation found for portal {portal_key}.")
+
+        # Refresh the token if it's near-expiry. We bypass get_portal_access_token
+        # because that helper requires is_active=True and the failure case we're
+        # recovering may have left the row inactive.
+        now_utc = datetime.now(timezone.utc)
+        expires_at = installation.access_token_expires_at
+        if expires_at is None or expires_at <= (now_utc + timedelta(seconds=60)):
+            installation = refresh_access_token(session, installation)
+
+        token = str(installation.access_token or "").strip()
+        if not token:
+            raise HTTPException(status_code=409, detail=f"No access token is stored for portal {portal_key}.")
+
+        try:
+            bootstrap_summary = run_post_install_provisioner(
+                session,
+                token=token,
+                portal_id=portal_key,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(
+                "post_install_bootstrap_retry_failed",
+                extra={"portal_id": portal_key},
+            )
+            install_session = _latest_install_session_for_portal(session, portal_key)
+            if install_session is not None:
+                mark_install_session_bootstrap(
+                    session,
+                    install_session,
+                    bootstrap_status="failed",
+                    bootstrap_summary={},
+                    install_error=str(exc),
+                )
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+        install_session = _latest_install_session_for_portal(session, portal_key)
+        if install_session is not None:
+            install_session = mark_install_session_bootstrap(
+                session,
+                install_session,
+                bootstrap_status="success",
+                bootstrap_summary=bootstrap_summary,
+                install_error="",
+            )
+            sync_installation_activation_for_install_session(session, install_session)
+
+        if not installation.is_active:
+            installation.is_active = True
+            session.commit()
+
+        return {
+            "status": "ok",
+            "portalId": portal_key,
+            "bootstrapStatus": "success",
+            "createdAssetsSummary": bootstrap_summary,
+        }
     finally:
         session.close()
 

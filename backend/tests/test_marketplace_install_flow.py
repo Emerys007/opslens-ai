@@ -463,7 +463,7 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
         self.assertEqual(200, settings.status_code)
         self.assertEqual("ok", settings.json()["status"])
 
-    def test_failed_bootstrap_redirects_to_error_safe_destination(self) -> None:
+    def test_failed_bootstrap_is_non_fatal_install_completes_with_retry_signal(self) -> None:
         session = self._session()
         try:
             create_marketplace_install_session(
@@ -523,8 +523,11 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
         self.assertIn("portalId=7777777", location)
         self.assertIn("plan=business", location)
         self.assertIn("billingInterval=yearly", location)
+        # Non-fatal bootstrap: install lands on the success page with a
+        # bootstrapStatus=failed signal so the UI can offer a retry.
         self.assertIn("bootstrapStatus=failed", location)
-        self.assertIn("status=error", location)
+        self.assertIn("status=ok", location)
+        self.assertNotIn("status=error", location)
 
         success = self.client.get(
             "/api/v1/marketplace/install/success?installSessionId=failed-bootstrap-session"
@@ -533,7 +536,7 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
         success_payload = success.json()
         self.assertEqual("failed", success_payload["bootstrapStatus"])
         self.assertIn("/opslens/install/complete/?portalId=7777777", success_payload["returnUrl"])
-        self.assertIn("status=error", success_payload["returnUrl"])
+        self.assertIn("status=ok", success_payload["returnUrl"])
 
     def test_install_success_contract_reports_bootstrap_summary(self) -> None:
         session = self._session()
