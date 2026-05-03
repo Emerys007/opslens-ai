@@ -310,12 +310,14 @@ def marketplace_install_success(installSessionId: str):
         context = install_session_context(row)
         origin = install_origin(context, row.return_url)
         normalized_bootstrap = str(row.bootstrap_status or "").strip().lower()
-        # Bootstrap failures are non-fatal: the install itself succeeded
-        # (OAuth tokens stored, billing in good standing). Surface
-        # bootstrapStatus=failed so the install/complete page can offer a
-        # retry, but report status=ok so the user lands in a happy-path UX.
-        # payment_required remains a true error — the install is incomplete.
-        redirect_status = "error" if normalized_bootstrap == "payment_required" else "ok"
+        # Every portal that completes OAuth lands on install/complete with
+        # status=ok. The 14-day trial begins regardless of payment state;
+        # billing is enforced later via the Stripe customer portal and
+        # plan/feature gates rather than gating the install itself.
+        # bootstrapStatus is still surfaced so the UI can offer a retry
+        # banner when bootstrap failed (or schedule a follow-up for
+        # payment_required portals).
+        redirect_status = "ok"
         trial_params = install_session_trial_query_params(row)
         resolved_return_url = final_install_redirect_url(
             install_origin_value=origin,

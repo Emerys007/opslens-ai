@@ -292,24 +292,16 @@ def oauth_callback(
 
                 # Auto-trial: a portal that has never had a trial AND has no
                 # active paid subscription gets a fresh 14-day trial granted
-                # at OAuth completion. Re-installs with a prior trial fall
-                # through to the existing payment-required path below.
+                # at OAuth completion. Re-installs whose portal already used
+                # its trial fall through with the optimistic trial revoked,
+                # but the install still completes — billing enforcement
+                # happens later via the Stripe customer portal and plan
+                # gates, not by blocking the install.
                 install_session, _trial_granted = grant_auto_trial_for_install_session(
                     session,
                     install_session,
                     portal_id=installation.portal_id,
                 )
-
-                if not install_session_is_billable_active(install_session):
-                    install_session = mark_install_session_bootstrap(
-                        session,
-                        install_session,
-                        bootstrap_status="payment_required",
-                        bootstrap_summary={},
-                        install_error="Stripe payment must complete before the portal can be activated.",
-                    )
-                    sync_installation_activation_for_install_session(session, install_session)
-                    raise RuntimeError("Stripe payment must complete before the portal can be activated.")
 
             bootstrap_started = True
             bootstrap_status = "success"
@@ -364,7 +356,7 @@ def oauth_callback(
         except Exception as exc:
             if install_session is not None and "session" in locals():
                 current_bootstrap_status = str(install_session.bootstrap_status or "").strip().lower()
-                if current_bootstrap_status not in {"payment_required", "success"}:
+                if current_bootstrap_status != "success":
                     install_session = mark_install_session_bootstrap(
                         session,
                         install_session,
