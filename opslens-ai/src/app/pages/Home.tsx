@@ -216,8 +216,12 @@ function usersSettingsUrl(portalId: string) {
   return `https://app.hubspot.com/settings/${portalId}/users`;
 }
 
-function appSettingsUrl(portalId: string, appId: string) {
-  return `https://app.hubspot.com/integrations-settings/${portalId}/installed/${appId}/general`;
+function appSettingsUrl(portalId: string) {
+  // Generic "installed apps" landing page — works without an appId
+  // because HubSpot routes the user to the right OpsLens settings panel
+  // from there. Avoids the previous breakage where context?.app?.id was
+  // undefined at render time.
+  return `https://app.hubspot.com/integrations-settings/${portalId}/installed`;
 }
 
 function StatusMetric({
@@ -402,6 +406,17 @@ function HomePage({ context }: HomePageProps) {
   const userEmail = String(context?.user?.email ?? "");
   const appId = String(context?.app?.id ?? context?.appId ?? "");
   const userName = String(context?.user?.firstName ?? "").trim();
+
+  // Diagnostic for the Settings link — logged once per mount so we can
+  // confirm context.portal.id resolves at render time (the prior
+  // attempt rendered nothing because it ANDed with appId, which is
+  // often undefined in this surface).
+  useEffect(() => {
+    // eslint-disable-next-line no-console
+    console.log("[OpsLens] context.portal.id =", context?.portal?.id, "appId =", appId);
+  }, []);
+
+  const settingsUrl = portalId ? appSettingsUrl(portalId) : null;
 
   const summary = overviewData?.summary ?? {};
   const settings = overviewData?.settings ?? {};
@@ -663,21 +678,17 @@ function HomePage({ context }: HomePageProps) {
                 {loading ? "Refreshing..." : "Refresh"}
               </Button>
             </Flex>
+            {settingsUrl ? (
+              <Link
+                href={{ url: settingsUrl, external: true }}
+                variant="light"
+              >
+                ⚙ Settings
+              </Link>
+            ) : null}
             <Text variant="microcopy">Last updated {lastUpdatedLabel}</Text>
             {checkNowMessage ? (
               <Text variant="microcopy">{checkNowMessage}</Text>
-            ) : null}
-            {portalId && appId ? (
-              <Text variant="microcopy">
-                <Link
-                  href={{
-                    url: appSettingsUrl(portalId, appId),
-                    external: true,
-                  }}
-                >
-                  Settings
-                </Link>
-              </Text>
             ) : null}
           </Flex>
         </Flex>
@@ -794,15 +805,17 @@ function HomePage({ context }: HomePageProps) {
       </Tile>
 
       {/*
-        align="stretch" + alignSelf="stretch" on each Box ensures the
-        side-by-side Tiles render at the same height even when one has
-        fewer rows than the other. (Default Flex.align is "stretch", but
-        we set it explicitly so the intent is obvious to readers.)
+        Watching + System health share a single Tile so they render at
+        identical height by construction — one container, two columns.
+        The previous side-by-side Tile-per-Box approach left visible
+        height mismatches because Tile clamps its own intrinsic height
+        and HubSpot UI Extensions exposes no minHeight / style props on
+        Box or Tile to force equality from the outside.
       */}
-      <Flex direction="row" gap="small" align="stretch">
-        <Box flex={1} alignSelf="stretch">
-          <Tile>
-            <Flex direction="column" gap="medium" justify="start">
+      <Tile>
+        <Flex direction="row" gap="medium" align="stretch">
+          <Box flex={1} alignSelf="stretch">
+            <Flex direction="column" gap="medium">
               <Flex direction="column" gap="extra-small">
                 <Heading>Watching</Heading>
                 <Text>Medium-severity alerts worth keeping an eye on.</Text>
@@ -825,12 +838,12 @@ function HomePage({ context }: HomePageProps) {
                 </Flex>
               )}
             </Flex>
-          </Tile>
-        </Box>
+          </Box>
 
-        <Box flex={1} alignSelf="stretch">
-          <Tile>
-            <Flex direction="column" gap="medium" justify="start">
+          {/* No vertical divider — HubSpot's Divider is horizontal-only.
+              The gap="medium" on the parent Flex provides separation. */}
+          <Box flex={1} alignSelf="stretch">
+            <Flex direction="column" gap="medium">
               <Flex direction="column" gap="extra-small">
                 <Heading>System health</Heading>
                 <Text>Current delivery and polling status for this portal.</Text>
@@ -849,9 +862,9 @@ function HomePage({ context }: HomePageProps) {
                 </HealthRow>
               </Flex>
             </Flex>
-          </Tile>
-        </Box>
-      </Flex>
+          </Box>
+        </Flex>
+      </Tile>
     </Flex>
   );
 }
