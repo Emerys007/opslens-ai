@@ -3,9 +3,10 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import case, desc, func, select
 
+from app.core.security import require_hubspot_portal_request
 from app.db import get_session, init_db
 from app.models.alert import STATUS_OPEN, STATUS_RESOLVED, Alert
 from app.models.alert_event import AlertEvent
@@ -49,7 +50,11 @@ from app.services.portal_settings import (
 from app.services.hubspot_oauth import get_portal_access_token
 from app.services.workflow_polling import poll_portal_workflows
 
-router = APIRouter(prefix="/dashboard", tags=["dashboard"])
+router = APIRouter(
+    prefix="/dashboard",
+    tags=["dashboard"],
+    dependencies=[Depends(require_hubspot_portal_request)],
+)
 
 ACTION_REQUIRED_SEVERITIES = ("critical", "high")
 WATCHING_SEVERITY = "medium"

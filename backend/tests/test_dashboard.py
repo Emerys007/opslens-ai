@@ -6,8 +6,6 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
-from fastapi.testclient import TestClient
-
 from app import db as db_module
 from app.api.v1.routes import dashboard as dashboard_module
 from app.main import app
@@ -24,6 +22,7 @@ from app.models.email_template_snapshot import EmailTemplateSnapshot
 from app.models.list_snapshot import ListSnapshot
 from app.models.portal_setting import PortalSetting
 from app.models.workflow_snapshot import WorkflowSnapshot
+from tests.hubspot_fetch_auth import SignedHubSpotTestClient
 
 
 SEVERITY_CRITICAL = "critical"
@@ -43,7 +42,7 @@ class DashboardEndpointTests(unittest.TestCase):
         db_module._SessionLocal = None
         dashboard_module._LAST_POLL_AT.clear()
         db_module.init_db()
-        self.client = TestClient(app)
+        self.client = SignedHubSpotTestClient(app)
 
     def tearDown(self) -> None:
         self.client.close()

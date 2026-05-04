@@ -4,8 +4,6 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from fastapi.testclient import TestClient
-
 from app import db as db_module
 from app.main import app
 from app.models.hubspot_installation import HubSpotInstallation
@@ -16,6 +14,7 @@ from app.services.portal_entitlements import (
     get_marketplace_install_session,
     sync_installation_activation_for_install_session,
 )
+from tests.hubspot_fetch_auth import SignedHubSpotTestClient
 
 
 class MarketplaceInstallFlowTests(unittest.TestCase):
@@ -26,7 +25,7 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
         db_module._engine = None
         db_module._SessionLocal = None
         db_module.init_db()
-        self.client = TestClient(app)
+        self.client = SignedHubSpotTestClient(app)
 
     def tearDown(self) -> None:
         self.client.close()

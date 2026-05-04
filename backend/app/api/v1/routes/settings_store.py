@@ -1,10 +1,15 @@
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 
+from app.core.security import require_hubspot_portal_request
 from app.db import get_session, init_db
 from app.services.portal_entitlements import get_portal_entitlement, portal_is_entitled
 from app.services.portal_settings import load_portal_settings, save_portal_settings
 
-router = APIRouter(prefix="/settings-store", tags=["settings-store"])
+router = APIRouter(
+    prefix="/settings-store",
+    tags=["settings-store"],
+    dependencies=[Depends(require_hubspot_portal_request)],
+)
 
 
 @router.get("")

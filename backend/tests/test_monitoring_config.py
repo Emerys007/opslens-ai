@@ -4,8 +4,6 @@ import os
 import tempfile
 import unittest
 
-from fastapi.testclient import TestClient
-
 from app import db as db_module
 from app.main import app
 from app.models.monitoring_exclusion import (
@@ -19,6 +17,7 @@ from app.services.monitoring_config import (
     MONITORING_CATEGORY_PROPERTY_DELETED,
     MONITORING_CATEGORY_WORKFLOW_EDITED,
 )
+from tests.hubspot_fetch_auth import SignedHubSpotTestClient
 
 
 class MonitoringConfigEndpointTests(unittest.TestCase):
@@ -34,7 +33,7 @@ class MonitoringConfigEndpointTests(unittest.TestCase):
         db_module._engine = None
         db_module._SessionLocal = None
         db_module.init_db()
-        self.client = TestClient(app)
+        self.client = SignedHubSpotTestClient(app)
 
     def tearDown(self) -> None:
         self.client.close()
