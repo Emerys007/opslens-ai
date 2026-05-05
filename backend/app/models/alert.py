@@ -67,6 +67,7 @@ SOURCE_KIND_PROPERTY = "property_change_event"
 SOURCE_KIND_LIST = "list_change_event"
 SOURCE_KIND_EMAIL_TEMPLATE = "email_template_change_event"
 SOURCE_KIND_OWNER = "owner_change_event"
+SOURCE_KIND_INSTALL_DIAGNOSTIC = "install_diagnostic"
 
 
 class Alert(Base):

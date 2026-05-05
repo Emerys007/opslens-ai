@@ -68,6 +68,17 @@ type PollNowResponse = {
   alertsCreated?: number;
 };
 
+type InstallDiagnosticSummary = {
+  status?: string;
+  issuesFound?: number;
+};
+
+type InstallDiagnosticResponse = {
+  status?: string;
+  portalId?: string;
+  summary?: InstallDiagnosticSummary;
+};
+
 type StatusVariant = "danger" | "warning" | "info" | "success" | "default";
 
 function buildUrl(path: string, params: Record<string, string>) {
@@ -392,6 +403,8 @@ function HomePage({ context }: HomePageProps) {
   const [checkingNow, setCheckingNow] = useState(false);
   const [checkNowMessage, setCheckNowMessage] = useState("");
   const [checkNowLockedUntil, setCheckNowLockedUntil] = useState(0);
+  const [diagnosticData, setDiagnosticData] =
+    useState<InstallDiagnosticResponse | null>(null);
 
   const portalId = String(context?.portal?.id ?? "");
   const userId = String(context?.user?.id ?? "");
@@ -442,6 +455,18 @@ function HomePage({ context }: HomePageProps) {
   const checkNowLocked = checkNowLockedUntil > Date.now();
   const lastUpdatedLabel =
     timeTick >= 0 && lastUpdatedAt ? formatTimeAgo(lastUpdatedAt) : "Not updated yet";
+  const diagnosticSummary = diagnosticData?.summary;
+  const diagnosticStatus = String(diagnosticSummary?.status || "");
+  const diagnosticIssuesFound =
+    typeof diagnosticSummary?.issuesFound === "number"
+      ? diagnosticSummary.issuesFound
+      : 0;
+  const diagnosticBannerText =
+    diagnosticStatus === "completed"
+      ? diagnosticIssuesFound > 0
+        ? `OpsLens found ${diagnosticIssuesFound} potential issues in your portal at install.`
+        : "Good news: OpsLens scanned your portal and found no broken dependencies."
+      : "";
 
   const greeting = greetingForHour(new Date().getHours());
   const greetingLine = userName ? `${greeting}, ${userName}` : greeting;
@@ -478,11 +503,42 @@ function HomePage({ context }: HomePageProps) {
     return data;
   };
 
+  const loadInstallDiagnostic = async () => {
+    if (!portalId) {
+      setDiagnosticData(null);
+      return null;
+    }
+
+    const response = await hubspot.fetch(
+      buildUrl("/api/v1/dashboard/install-diagnostic", {
+        portalId,
+        userId,
+        userEmail,
+        appId,
+      }),
+      {
+        method: "GET",
+        timeout: 8000,
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error(`Diagnostic request failed with status ${response.status}`);
+    }
+
+    const data = (await response.json()) as InstallDiagnosticResponse;
+    setDiagnosticData(data);
+    return data;
+  };
+
   const refresh = async () => {
     setLoading(true);
     setOverviewError("");
     try {
       await loadOverview();
+      await loadInstallDiagnostic().catch(() => {
+        setDiagnosticData(null);
+      });
     } catch (error) {
       setOverviewError(error instanceof Error ? error.message : "Unknown error");
     } finally {
@@ -590,6 +646,7 @@ function HomePage({ context }: HomePageProps) {
 
       const payload = (await response.json()) as PollNowResponse;
       await loadOverview();
+      await loadInstallDiagnostic().catch(() => null);
       setCheckNowLockedUntil(Date.now() + 30000);
       const eventsDetected = Number(payload.eventsDetected ?? 0);
       setCheckNowMessage(
@@ -617,6 +674,9 @@ function HomePage({ context }: HomePageProps) {
     const intervalId = setInterval(() => {
       loadOverview().catch((error) => {
         setOverviewError(error instanceof Error ? error.message : "Unknown error");
+      });
+      loadInstallDiagnostic().catch(() => {
+        setDiagnosticData(null);
       });
     }, 60000);
     return () => clearInterval(intervalId);
@@ -666,6 +726,17 @@ function HomePage({ context }: HomePageProps) {
           </Flex>
         </Flex>
       </Tile>
+
+      {diagnosticBannerText ? (
+        <Tile>
+          <Flex direction="row" justify="between" align="center" gap="small" wrap>
+            <Text format={{ fontWeight: "bold" }}>{diagnosticBannerText}</Text>
+            <StatusTag variant={diagnosticIssuesFound > 0 ? "warning" : "success"}>
+              {diagnosticIssuesFound > 0 ? "Review" : "Clean"}
+            </StatusTag>
+          </Flex>
+        </Tile>
+      ) : null}
 
       <Flex direction="row" gap="small">
         <Box flex={1}>

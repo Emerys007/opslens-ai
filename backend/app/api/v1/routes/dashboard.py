@@ -48,6 +48,7 @@ from app.services.portal_settings import (
     normalize_severity,
 )
 from app.services.hubspot_oauth import get_portal_access_token
+from app.services.install_diagnostic import install_diagnostic_not_run_summary
 from app.services.workflow_polling import poll_portal_workflows
 
 router = APIRouter(
@@ -575,6 +576,39 @@ def dashboard_overview(request: Request):
                 "visibleRowsAtThreshold": len(visible_rows),
                 "settingsStorage": settings.get("storage", "unknown"),
             },
+        }
+    finally:
+        session.close()
+
+
+@router.get("/install-diagnostic")
+def dashboard_install_diagnostic(request: Request):
+    portal_id = str(request.query_params.get("portalId", "")).strip()
+    if not portal_id:
+        raise HTTPException(status_code=400, detail="portalId is required.")
+
+    db_ready = init_db()
+    session = get_session()
+    if not db_ready or session is None:
+        return {
+            "status": "ok",
+            "portalId": portal_id,
+            "summary": install_diagnostic_not_run_summary(portal_id),
+        }
+
+    try:
+        row = session.get(PortalSetting, portal_id)
+        summary = (
+            getattr(row, "install_diagnostic_summary", None)
+            if row is not None
+            else None
+        )
+        if not isinstance(summary, dict):
+            summary = install_diagnostic_not_run_summary(portal_id)
+        return {
+            "status": "ok",
+            "portalId": portal_id,
+            "summary": summary,
         }
     finally:
         session.close()

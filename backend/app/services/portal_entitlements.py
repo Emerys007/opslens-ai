@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import json
+import logging
 
 from sqlalchemy.orm import Session
 
@@ -9,6 +10,7 @@ from app.models.hubspot_installation import HubSpotInstallation
 from app.models.marketplace_install_session import MarketplaceInstallSession
 from app.models.portal_entitlement import PortalEntitlement
 from app.services.hubspot_portal_bootstrap import ensure_portal_bootstrap
+from app.services.install_diagnostic import run_install_diagnostic
 from app.services.marketplace_billing import (
     normalize_billing_interval,
     normalize_plan,
@@ -20,6 +22,7 @@ from app.services.portal_settings import ensure_default_portal_settings
 
 
 AUTO_TRIAL_DURATION = timedelta(days=14)
+logger = logging.getLogger(__name__)
 
 
 def _utc_now() -> datetime:
@@ -535,8 +538,25 @@ def run_post_install_provisioner(
         portal_id=portal_id,
     )
     default_settings, settings_created = ensure_default_portal_settings(session, portal_id)
+    try:
+        install_diagnostic_summary = run_install_diagnostic(portal_id, session)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception(
+            "post_install.install_diagnostic_failed",
+            extra={"portal_id": portal_id, "error": repr(exc)},
+        )
+        try:
+            session.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        install_diagnostic_summary = {
+            "status": "error",
+            "portalId": str(portal_id or "").strip(),
+            "reason": str(exc),
+        }
     return {
         **bootstrap_summary,
         "defaultPortalSettingsCreated": bool(settings_created),
         "defaultPortalSettings": default_settings,
+        "installDiagnostic": install_diagnostic_summary,
     }

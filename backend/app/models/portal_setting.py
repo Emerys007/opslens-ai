@@ -21,6 +21,7 @@ class PortalSetting(Base):
     slack_delivery_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     ticket_delivery_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     monitoring_coverage: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    install_diagnostic_summary: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

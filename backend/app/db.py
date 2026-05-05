@@ -20,6 +20,7 @@ _BACKFILL_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("portal_settings", "slack_delivery_enabled", "BOOLEAN DEFAULT TRUE"),
     ("portal_settings", "ticket_delivery_enabled", "BOOLEAN DEFAULT TRUE"),
     ("portal_settings", "monitoring_coverage", "JSON"),
+    ("portal_settings", "install_diagnostic_summary", "JSON"),
 )
 
 

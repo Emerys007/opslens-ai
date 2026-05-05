@@ -212,6 +212,14 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
                     "stagesUpdated": [],
                 },
             ),
+            patch(
+                "app.services.portal_entitlements.run_install_diagnostic",
+                return_value={
+                    "status": "completed",
+                    "portalId": "8886743",
+                    "issuesFound": 0,
+                },
+            ),
         ):
             callback = self.client.get(
                 "/oauth-callback?code=auth-code&state=signed-state",
@@ -296,6 +304,14 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
                     "pipelineCreated": False,
                     "stagesCreated": [],
                     "stagesUpdated": [],
+                },
+            ),
+            patch(
+                "app.services.portal_entitlements.run_install_diagnostic",
+                return_value={
+                    "status": "completed",
+                    "portalId": "8886743",
+                    "issuesFound": 0,
                 },
             ),
         ):
@@ -427,6 +443,14 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
                     "pipelineCreated": True,
                     "stagesCreated": ["New Alert"],
                     "stagesUpdated": [],
+                },
+            ),
+            patch(
+                "app.services.portal_entitlements.run_install_diagnostic",
+                return_value={
+                    "status": "completed",
+                    "portalId": "9999999",
+                    "issuesFound": 0,
                 },
             ),
         ):
