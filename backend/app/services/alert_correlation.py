@@ -574,21 +574,33 @@ def correlate_property_change_event(
     change_block = _build_property_change_block(event, property_label=property_label)
     n_workflows = len(impacted)
 
+    # Titles are worded to match what HubSpot actually permits:
+    #  - HubSpot BLOCKS archiving/deleting a property while a workflow,
+    #    list, or form still references it, so by the time we observe an
+    #    archive/delete those references were already removed (or our last
+    #    dependency snapshot predates the change). We therefore say the
+    #    property "was referenced by" N workflow(s) and prompt a check,
+    #    rather than overstating that N workflows are currently broken.
+    #  - A label rename does NOT change the property's internal name, which
+    #    is what workflows/integrations reference, so dependent workflows are
+    #    not affected by a rename.
+    #  - A field-type change is not always blocked and can break dependent
+    #    logic, so it is the one case we flag as "may be affected".
     title_for_event_type = {
-        SOURCE_EVENT_PROPERTY_ARCHIVED: f"Property '{display_name}' archived — {n_workflows} workflow(s) affected",
-        SOURCE_EVENT_PROPERTY_DELETED: f"Property '{display_name}' deleted — {n_workflows} workflow(s) affected",
+        SOURCE_EVENT_PROPERTY_ARCHIVED: f"Property '{display_name}' archived — was referenced by {n_workflows} workflow(s)",
+        SOURCE_EVENT_PROPERTY_DELETED: f"Property '{display_name}' deleted — was referenced by {n_workflows} workflow(s)",
         SOURCE_EVENT_PROPERTY_TYPE_CHANGED: (
             f"Property '{display_name}' type changed "
-            f"({event.previous_type or '?'} → {event.new_type or '?'}) — {n_workflows} workflow(s) affected"
+            f"({event.previous_type or '?'} → {event.new_type or '?'}) — {n_workflows} workflow(s) may be affected"
         ),
         SOURCE_EVENT_PROPERTY_RENAMED: (
             f"Property '{display_name}' label renamed "
-            f"({event.previous_label or '?'} → {event.new_label or '?'}) — {n_workflows} workflow(s) affected"
+            f"({event.previous_label or '?'} → {event.new_label or '?'}) — referenced by {n_workflows} workflow(s) (internal name unchanged)"
         ),
     }
     title = title_for_event_type.get(
         source_event_type,
-        f"Property '{display_name}' changed — {n_workflows} workflow(s) affected",
+        f"Property '{display_name}' changed — referenced by {n_workflows} workflow(s)",
     )
 
     alerts: list[Alert] = []
