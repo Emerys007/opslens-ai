@@ -139,6 +139,9 @@ def _alert_payload(alert: Alert) -> dict:
         "sourceEventType": alert.source_event_type,
         "impactedWorkflowId": alert.impacted_workflow_id,
         "impactedWorkflowName": alert.impacted_workflow_name,
+        "recommendedAction": (str(alert.recommended_action).strip() or None)
+        if alert.recommended_action
+        else None,
         "dependencyLocations": _dependency_locations(alert),
         "sourceDependencyId": alert.source_dependency_id,
         "sourceObjectTypeId": alert.source_object_type_id,

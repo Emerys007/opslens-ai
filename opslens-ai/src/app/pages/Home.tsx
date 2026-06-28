@@ -29,6 +29,7 @@ type DashboardAlert = {
   sourceEventType?: string;
   impactedWorkflowId?: string | null;
   impactedWorkflowName?: string | null;
+  recommendedAction?: string | null;
   dependencyLocations?: string[] | null;
   sourceDependencyId?: string | null;
   sourceObjectTypeId?: string | null;
@@ -376,6 +377,19 @@ function BlastRadius({ alert }: { alert: DashboardAlert }) {
   );
 }
 
+function RecommendedAction({ alert }: { alert: DashboardAlert }) {
+  const action = String(alert.recommendedAction || "").trim();
+  if (!action) {
+    return null;
+  }
+  return (
+    <Box>
+      <Text format={{ fontWeight: "bold" }}>Recommended action</Text>
+      <Text variant="microcopy">{action}</Text>
+    </Box>
+  );
+}
+
 function ActionAlertCard({
   alert,
   portalId,
@@ -408,6 +422,7 @@ function ActionAlertCard({
         </Flex>
 
         <BlastRadius alert={alert} />
+        <RecommendedAction alert={alert} />
 
         <Flex justify="between" align="center" gap="small" wrap>
           <HubSpotLinks alert={alert} portalId={portalId} />
