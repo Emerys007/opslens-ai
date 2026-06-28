@@ -55,6 +55,7 @@ from app.services.portal_settings import (
 )
 from app.services.hubspot_oauth import get_portal_access_token
 from app.services.install_diagnostic import install_diagnostic_not_run_summary
+from app.services.remediation_guidance import fix_guidance_for
 from app.services.workflow_polling import poll_portal_workflows
 
 router = APIRouter(
@@ -148,6 +149,7 @@ def _alert_payload(alert: Alert) -> dict:
         "recommendedAction": (str(alert.recommended_action).strip() or None)
         if alert.recommended_action
         else None,
+        "fixGuidance": fix_guidance_for(alert.source_event_type),
         "dependencyLocations": _dependency_locations(alert),
         "sourceDependencyId": alert.source_dependency_id,
         "sourceObjectTypeId": alert.source_object_type_id,

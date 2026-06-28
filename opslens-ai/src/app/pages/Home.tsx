@@ -30,6 +30,11 @@ type DashboardAlert = {
   impactedWorkflowId?: string | null;
   impactedWorkflowName?: string | null;
   recommendedAction?: string | null;
+  fixGuidance?: {
+    summary?: string;
+    steps?: string[];
+    restorable?: boolean;
+  } | null;
   dependencyLocations?: string[] | null;
   sourceDependencyId?: string | null;
   sourceObjectTypeId?: string | null;
@@ -390,6 +395,26 @@ function RecommendedAction({ alert }: { alert: DashboardAlert }) {
   );
 }
 
+function FixGuidance({ alert }: { alert: DashboardAlert }) {
+  const guidance = alert.fixGuidance;
+  const summary = String(guidance?.summary || "").trim();
+  const steps = Array.isArray(guidance?.steps)
+    ? guidance!.steps.filter((step) => String(step).trim())
+    : [];
+  if (!summary && steps.length === 0) {
+    return null;
+  }
+  return (
+    <Box>
+      <Text format={{ fontWeight: "bold" }}>How to fix</Text>
+      {summary ? <Text variant="microcopy">{summary}</Text> : null}
+      {steps.map((step, index) => (
+        <Text key={index} variant="microcopy">{`${index + 1}. ${step}`}</Text>
+      ))}
+    </Box>
+  );
+}
+
 function ActionAlertCard({
   alert,
   portalId,
@@ -423,6 +448,7 @@ function ActionAlertCard({
 
         <BlastRadius alert={alert} />
         <RecommendedAction alert={alert} />
+        <FixGuidance alert={alert} />
 
         <Flex justify="between" align="center" gap="small" wrap>
           <HubSpotLinks alert={alert} portalId={portalId} />
