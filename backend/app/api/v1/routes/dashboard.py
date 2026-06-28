@@ -37,6 +37,12 @@ from app.services.monitoring_config import (
     merge_monitoring_coverage_update,
 )
 from app.services.alert_correlation import correlate_unprocessed_events
+from app.services.dependency_mapping import (
+    find_workflows_affected_by_email_template,
+    find_workflows_affected_by_list,
+    find_workflows_affected_by_owner,
+    find_workflows_affected_by_property,
+)
 from app.services.email_template_polling import poll_portal_email_templates
 from app.services.list_polling import poll_portal_lists
 from app.services.owner_polling import poll_portal_owners
@@ -802,6 +808,83 @@ def dashboard_properties(request: Request):
         ]
         rows.sort(key=lambda item: (item["label"].lower(), item["name"].lower()))
         return rows[:500]
+    finally:
+        session.close()
+
+
+_DEPENDENT_TYPES = {"property", "list", "template", "owner"}
+
+
+def _dependents_response(portal_id, dep_type, dep_id, dependents, db_configured):
+    return {
+        "status": "ok",
+        "portalId": portal_id,
+        "type": dep_type,
+        "dependencyId": dep_id,
+        "dependents": dependents,
+        "dependentCount": len(dependents),
+        "dbConfigured": db_configured,
+    }
+
+
+@router.get("/dependents")
+def dashboard_dependents(request: Request):
+    """Read-only 'what depends on this?' lookup.
+
+    HubSpot blocks deleting/archiving an asset that's still in use but
+    won't show you *where* it's used — admins hunt through workflows by
+    hand. This surfaces every workflow (and the location within it, e.g.
+    'Enrollment trigger') that references the given property / list /
+    email template / owner, straight from the cached dependency map. No
+    HubSpot API call — purely the reverse index OpsLens already stores.
+    """
+    portal_id = str(request.query_params.get("portalId", "")).strip()
+    dep_type = str(request.query_params.get("type", "")).strip().lower()
+    dep_id = str(request.query_params.get("id", "")).strip()
+    object_type_id = str(request.query_params.get("objectTypeId", "")).strip()
+
+    if not portal_id:
+        raise HTTPException(status_code=400, detail="portalId is required.")
+    if dep_type not in _DEPENDENT_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail="type must be one of: property, list, template, owner.",
+        )
+    if not dep_id:
+        raise HTTPException(status_code=400, detail="id is required.")
+
+    db_ready = init_db()
+    session = get_session()
+    if not db_ready or session is None:
+        return _dependents_response(portal_id, dep_type, dep_id, [], False)
+
+    try:
+        if dep_type == "property":
+            matches = find_workflows_affected_by_property(
+                session, portal_id, dep_id, object_type_id=object_type_id,
+            )
+        elif dep_type == "list":
+            matches = find_workflows_affected_by_list(session, portal_id, dep_id)
+        elif dep_type == "template":
+            matches = find_workflows_affected_by_email_template(
+                session, portal_id, dep_id,
+            )
+        else:  # owner
+            matches = find_workflows_affected_by_owner(session, portal_id, dep_id)
+
+        dependents = [
+            {
+                "workflowId": match.get("workflow_id"),
+                "workflowName": match.get("workflow_name"),
+                "locations": [
+                    str(loc.get("location") or "")
+                    for loc in (match.get("locations") or [])
+                    if str(loc.get("location") or "").strip()
+                ],
+            }
+            for match in matches
+        ]
+        return _dependents_response(portal_id, dep_type, dep_id, dependents, True)
     finally:
         session.close()
 

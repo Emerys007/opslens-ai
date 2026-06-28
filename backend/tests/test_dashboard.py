@@ -21,6 +21,7 @@ from app.models.alert import (
 from app.models.email_template_snapshot import EmailTemplateSnapshot
 from app.models.list_snapshot import ListSnapshot
 from app.models.portal_setting import PortalSetting
+from app.models.workflow_dependency import WorkflowDependency
 from app.models.workflow_snapshot import WorkflowSnapshot
 from tests.hubspot_fetch_auth import SignedHubSpotTestClient
 
@@ -198,6 +199,106 @@ class DashboardEndpointTests(unittest.TestCase):
         session.commit()
         session.refresh(row)
         return row
+
+    def _seed_workflow_dependency(
+        self,
+        session,
+        *,
+        workflow_id: str,
+        dependency_type: str,
+        dependency_id: str,
+        location: str,
+        dependency_object_type: str | None = None,
+    ) -> None:
+        session.add(
+            WorkflowDependency(
+                portal_id=self.PORTAL_ID,
+                workflow_id=workflow_id,
+                dependency_type=dependency_type,
+                dependency_id=dependency_id,
+                dependency_object_type=dependency_object_type,
+                location=location,
+                revision_id="1",
+            )
+        )
+        session.commit()
+
+    def test_dependents_lists_workflows_referencing_a_property(self) -> None:
+        session = self._session()
+        try:
+            self._seed_workflow(session, workflow_id="100", name="Lead routing")
+            self._seed_workflow_dependency(
+                session,
+                workflow_id="100",
+                dependency_type="property",
+                dependency_id="lead_source",
+                dependency_object_type="0-1",
+                location="Enrollment trigger",
+            )
+        finally:
+            session.close()
+
+        response = self.client.get(
+            f"/api/v1/dashboard/dependents?portalId={self.PORTAL_ID}"
+            "&type=property&id=lead_source&objectTypeId=0-1"
+        )
+        self.assertEqual(200, response.status_code)
+        body = response.json()
+        self.assertEqual(1, body["dependentCount"])
+        dependent = body["dependents"][0]
+        self.assertEqual("100", dependent["workflowId"])
+        self.assertEqual("Lead routing", dependent["workflowName"])
+        self.assertIn("Enrollment trigger", dependent["locations"])
+
+    def test_dependents_excludes_other_portals(self) -> None:
+        session = self._session()
+        try:
+            self._seed_workflow(
+                session,
+                portal_id=self.OTHER_PORTAL_ID,
+                workflow_id="200",
+                name="Other portal flow",
+            )
+            session.add(
+                WorkflowDependency(
+                    portal_id=self.OTHER_PORTAL_ID,
+                    workflow_id="200",
+                    dependency_type="owner",
+                    dependency_id="55",
+                    location="Rotate owner action",
+                    revision_id="1",
+                )
+            )
+            session.commit()
+        finally:
+            session.close()
+
+        response = self.client.get(
+            f"/api/v1/dashboard/dependents?portalId={self.PORTAL_ID}&type=owner&id=55"
+        )
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(0, response.json()["dependentCount"])
+
+    def test_dependents_returns_empty_when_nothing_references_asset(self) -> None:
+        response = self.client.get(
+            f"/api/v1/dashboard/dependents?portalId={self.PORTAL_ID}&type=owner&id=99999"
+        )
+        self.assertEqual(200, response.status_code)
+        body = response.json()
+        self.assertEqual(0, body["dependentCount"])
+        self.assertEqual([], body["dependents"])
+
+    def test_dependents_rejects_unknown_type(self) -> None:
+        response = self.client.get(
+            f"/api/v1/dashboard/dependents?portalId={self.PORTAL_ID}&type=bogus&id=x"
+        )
+        self.assertEqual(400, response.status_code)
+
+    def test_dependents_requires_id(self) -> None:
+        response = self.client.get(
+            f"/api/v1/dashboard/dependents?portalId={self.PORTAL_ID}&type=property"
+        )
+        self.assertEqual(400, response.status_code)
 
     def _seed_list(
         self,
