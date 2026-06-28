@@ -1970,7 +1970,241 @@ function SettingsPage({ context }: { context: any }) {
           </Tile>
         </Flex>
       </Accordion>
+
+      <Accordion title="Impact check" size="md">
+        <Flex direction="column" gap="small">
+          <Heading>See what depends on an asset before you change it</Heading>
+          <DependencyImpactCheck portalId={portalId} />
+        </Flex>
+      </Accordion>
     </Flex>
+  );
+}
+
+type DependentWorkflow = {
+  workflowId?: string;
+  workflowName?: string;
+  locations?: string[];
+};
+
+type DependentsResponse = {
+  status?: string;
+  type?: string;
+  dependencyId?: string;
+  dependents?: DependentWorkflow[];
+  dependentCount?: number;
+};
+
+type ImpactAssetType = "property" | "list" | "template" | "owner";
+
+function DependencyImpactCheck({ portalId }: { portalId: string }) {
+  const [assetType, setAssetType] = useState<ImpactAssetType>("property");
+  const [objectTypeId, setObjectTypeId] = useState("0-1");
+  const [assetId, setAssetId] = useState("");
+  const [pickerOptions, setPickerOptions] = useState<
+    Array<{ label: string; value: string }>
+  >([]);
+  const [pickerLoading, setPickerLoading] = useState(false);
+  const [pickerError, setPickerError] = useState("");
+  const [checking, setChecking] = useState(false);
+  const [error, setError] = useState("");
+  const [result, setResult] = useState<DependentsResponse | null>(null);
+
+  useEffect(() => {
+    setAssetId("");
+    setResult(null);
+    setError("");
+  }, [assetType, objectTypeId]);
+
+  useEffect(() => {
+    if (!portalId || assetType === "owner") {
+      setPickerOptions([]);
+      return;
+    }
+    let cancelled = false;
+    async function loadOptions() {
+      setPickerLoading(true);
+      setPickerError("");
+      try {
+        let url = "";
+        if (assetType === "property") {
+          url = buildUrl(`${DASHBOARD_API_BASE}/properties`, {
+            portalId,
+            objectTypeId,
+          });
+        } else if (assetType === "list") {
+          url = buildUrl(`${DASHBOARD_API_BASE}/lists`, { portalId });
+        } else {
+          url = buildUrl(`${DASHBOARD_API_BASE}/templates`, { portalId });
+        }
+        const response = await hubspot.fetch(url, {
+          method: "GET",
+          timeout: 15000,
+        });
+        if (!response.ok) {
+          throw new Error(`Backend returned status ${response.status}`);
+        }
+        const data = (await response.json()) as unknown;
+        const rows = Array.isArray(data) ? data : [];
+        const options =
+          assetType === "property"
+            ? (rows as PropertyPickerOption[]).map((row) => ({
+                label: String(row.label || row.name),
+                value: String(row.name),
+              }))
+            : (rows as Array<ListPickerOption | TemplatePickerOption>).map(
+                (row) => ({ label: String(row.name), value: String(row.id) }),
+              );
+        if (!cancelled) {
+          setPickerOptions(options);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setPickerError(err instanceof Error ? err.message : String(err));
+          setPickerOptions([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setPickerLoading(false);
+        }
+      }
+    }
+    loadOptions();
+    return () => {
+      cancelled = true;
+    };
+  }, [assetType, objectTypeId, portalId]);
+
+  async function runCheck() {
+    if (!portalId || !assetId) {
+      return;
+    }
+    setChecking(true);
+    setError("");
+    setResult(null);
+    try {
+      const params: Record<string, string> = {
+        portalId,
+        type: assetType,
+        id: assetId,
+      };
+      if (assetType === "property") {
+        params.objectTypeId = objectTypeId;
+      }
+      const url = buildUrl(`${DASHBOARD_API_BASE}/dependents`, params);
+      const response = await hubspot.fetch(url, {
+        method: "GET",
+        timeout: 15000,
+      });
+      if (!response.ok) {
+        throw new Error(`Backend returned status ${response.status}`);
+      }
+      const data = (await response.json()) as DependentsResponse;
+      setResult(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  const dependents = Array.isArray(result?.dependents) ? result!.dependents : [];
+
+  return (
+    <Tile>
+      <Flex direction="column" gap="small">
+        <Text>
+          HubSpot blocks deleting an asset that's still in use but won't show
+          you where — pick a property, list, email template, or owner to see
+          every workflow that references it before you change it.
+        </Text>
+
+        <Flex direction="row" gap="small" wrap>
+          <Select
+            label="Asset type"
+            name="impactAssetType"
+            value={assetType}
+            onChange={(value) =>
+              setAssetType((String(value ?? "property") as ImpactAssetType))
+            }
+            options={[
+              { label: "Property", value: "property" },
+              { label: "List", value: "list" },
+              { label: "Email template", value: "template" },
+              { label: "Owner", value: "owner" },
+            ]}
+          />
+          {assetType === "property" ? (
+            <Select
+              label="Object type"
+              name="impactObjectType"
+              value={objectTypeId}
+              onChange={(value) => setObjectTypeId(String(value ?? "0-1"))}
+              options={OBJECT_TYPE_OPTIONS}
+            />
+          ) : null}
+        </Flex>
+
+        {assetType === "owner" ? (
+          <Input
+            label="Owner id"
+            name="impactOwnerId"
+            type="text"
+            value={assetId}
+            onChange={(value) => setAssetId(String(value ?? ""))}
+            description="The numeric HubSpot user/owner id to look up."
+          />
+        ) : (
+          <Select
+            label="Asset"
+            name="impactAssetId"
+            value={assetId}
+            onChange={(value) => setAssetId(String(value ?? ""))}
+            options={pickerOptions}
+          />
+        )}
+
+        {pickerError ? (
+          <Text>{`Could not load options: ${pickerError}`}</Text>
+        ) : null}
+
+        <Box>
+          <Button
+            type="button"
+            variant="primary"
+            disabled={!assetId || checking || pickerLoading}
+            onClick={runCheck}
+          >
+            {checking ? "Checking..." : "Check dependents"}
+          </Button>
+        </Box>
+
+        {error ? <Text>{`Lookup failed: ${error}`}</Text> : null}
+
+        {result ? (
+          dependents.length === 0 ? (
+            <StatusTag variant="success">
+              Nothing references this — safe to change
+            </StatusTag>
+          ) : (
+            <Flex direction="column" gap="extra-small">
+              <Text format={{ fontWeight: "bold" }}>
+                {`Referenced by ${dependents.length} workflow(s):`}
+              </Text>
+              {dependents.map((dependent) => (
+                <Text key={String(dependent.workflowId)}>
+                  {`• ${dependent.workflowName || dependent.workflowId || "Unknown workflow"}`}
+                  {Array.isArray(dependent.locations) &&
+                  dependent.locations.length > 0
+                    ? ` — used as ${dependent.locations.join(", ")}`
+                    : ""}
+                </Text>
+              ))}
+            </Flex>
+          )
+        ) : null}
+      </Flex>
+    </Tile>
   );
 }
 
