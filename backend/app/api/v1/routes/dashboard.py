@@ -59,7 +59,10 @@ from app.services.portal_settings import (
     normalize_severity,
 )
 from app.services.hubspot_oauth import get_portal_access_token
-from app.services.install_diagnostic import install_diagnostic_not_run_summary
+from app.services.install_diagnostic import (
+    install_diagnostic_not_run_summary,
+    run_install_diagnostic,
+)
 from app.services.remediation_guidance import fix_guidance_for
 from app.services.workflow_remediation import (
     WorkflowRemediationError,
@@ -652,6 +655,44 @@ def dashboard_install_diagnostic(request: Request):
             "status": "ok",
             "portalId": portal_id,
             "summary": summary,
+        }
+    finally:
+        session.close()
+
+
+@router.post("/install-diagnostic/run")
+def dashboard_run_install_diagnostic(request: Request):
+    """Re-run the on-install dependency scan on demand (force=True) and
+    return the fresh summary. Synchronous — it polls HubSpot and rebuilds
+    the dependency map, so it can take a little while.
+    """
+    portal_id = str(request.query_params.get("portalId", "")).strip()
+    if not portal_id:
+        raise HTTPException(status_code=400, detail="portalId is required.")
+
+    db_ready = init_db()
+    session = get_session()
+    if not db_ready or session is None:
+        raise HTTPException(status_code=503, detail="Database is not configured.")
+
+    try:
+        try:
+            summary = run_install_diagnostic(portal_id, session, force=True)
+        except Exception as exc:  # noqa: BLE001
+            try:
+                session.rollback()
+            except Exception:  # noqa: BLE001
+                pass
+            raise HTTPException(
+                status_code=502,
+                detail="The scan could not be completed. Please try again.",
+            ) from exc
+        return {
+            "status": "ok",
+            "portalId": portal_id,
+            "summary": summary
+            if isinstance(summary, dict)
+            else install_diagnostic_not_run_summary(portal_id),
         }
     finally:
         session.close()

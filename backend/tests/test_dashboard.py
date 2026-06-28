@@ -399,6 +399,36 @@ class DashboardEndpointTests(unittest.TestCase):
         finally:
             session.close()
 
+    def test_run_install_diagnostic_returns_fresh_summary(self) -> None:
+        with patch(
+            "app.api.v1.routes.dashboard.run_install_diagnostic",
+            return_value={
+                "status": "completed",
+                "issuesFound": 2,
+                "portalId": self.PORTAL_ID,
+            },
+        ) as mocked:
+            response = self.client.post(
+                f"/api/v1/dashboard/install-diagnostic/run?portalId={self.PORTAL_ID}"
+            )
+        self.assertEqual(200, response.status_code)
+        body = response.json()
+        self.assertEqual("completed", body["summary"]["status"])
+        self.assertEqual(2, body["summary"]["issuesFound"])
+        # Forced re-run.
+        _, kwargs = mocked.call_args
+        self.assertTrue(kwargs.get("force"))
+
+    def test_run_install_diagnostic_surfaces_failure_as_502(self) -> None:
+        with patch(
+            "app.api.v1.routes.dashboard.run_install_diagnostic",
+            side_effect=RuntimeError("HubSpot unreachable"),
+        ):
+            response = self.client.post(
+                f"/api/v1/dashboard/install-diagnostic/run?portalId={self.PORTAL_ID}"
+            )
+        self.assertEqual(502, response.status_code)
+
     def _seed_list(
         self,
         session,

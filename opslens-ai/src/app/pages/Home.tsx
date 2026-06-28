@@ -534,6 +534,7 @@ function HomePage({ context }: HomePageProps) {
   const [checkNowLockedUntil, setCheckNowLockedUntil] = useState(0);
   const [diagnosticData, setDiagnosticData] =
     useState<InstallDiagnosticResponse | null>(null);
+  const [scanningDiagnostic, setScanningDiagnostic] = useState(false);
 
   const portalId = String(context?.portal?.id ?? "");
   const userId = String(context?.user?.id ?? "");
@@ -601,12 +602,38 @@ function HomePage({ context }: HomePageProps) {
     typeof diagnosticSummary?.issuesFound === "number"
       ? diagnosticSummary.issuesFound
       : 0;
-  const diagnosticBannerText =
-    diagnosticStatus === "completed"
-      ? diagnosticIssuesFound > 0
-        ? `OpsLens found ${diagnosticIssuesFound} potential issues in your portal at install.`
-        : "Good news: OpsLens scanned your portal and found no broken dependencies."
-      : "";
+  let diagnosticBannerText = "";
+  let diagnosticBannerVariant: StatusVariant = "default";
+  let diagnosticBannerTag = "";
+  if (scanningDiagnostic) {
+    diagnosticBannerText = "Scanning your portal for broken dependencies...";
+    diagnosticBannerVariant = "info";
+    diagnosticBannerTag = "Scanning";
+  } else if (diagnosticStatus === "completed") {
+    if (diagnosticIssuesFound > 0) {
+      diagnosticBannerText = `OpsLens found ${diagnosticIssuesFound} potential issue${
+        diagnosticIssuesFound === 1 ? "" : "s"
+      } in your portal.`;
+      diagnosticBannerVariant = "warning";
+      diagnosticBannerTag = "Review";
+    } else {
+      diagnosticBannerText =
+        "Good news: OpsLens scanned your portal and found no broken dependencies.";
+      diagnosticBannerVariant = "success";
+      diagnosticBannerTag = "Clean";
+    }
+  } else if (diagnosticStatus === "error") {
+    diagnosticBannerText = "OpsLens couldn't complete the dependency scan.";
+    diagnosticBannerVariant = "danger";
+    diagnosticBannerTag = "Failed";
+  } else {
+    diagnosticBannerText =
+      "OpsLens hasn't scanned this portal for broken dependencies yet.";
+    diagnosticBannerVariant = "default";
+    diagnosticBannerTag = "Not run";
+  }
+  const scanButtonLabel =
+    diagnosticStatus === "completed" ? "Re-run scan" : "Run scan";
 
   const greeting = greetingForHour(new Date().getHours());
   const greetingLine = userName ? `${greeting}, ${userName}` : greeting;
@@ -789,6 +816,41 @@ function HomePage({ context }: HomePageProps) {
     }
   };
 
+  const runDiagnosticScan = async () => {
+    if (!portalId || scanningDiagnostic) {
+      return;
+    }
+    setScanningDiagnostic(true);
+    setOverviewError("");
+    try {
+      const response = await hubspot.fetch(
+        buildUrl("/api/v1/dashboard/install-diagnostic/run", { portalId }),
+        {
+          method: "POST",
+          timeout: 60000,
+        }
+      );
+      if (!response.ok) {
+        let detail = `Scan failed with status ${response.status}`;
+        try {
+          const body = (await response.json()) as { detail?: string };
+          if (body?.detail) {
+            detail = String(body.detail);
+          }
+        } catch (parseError) {
+          // Keep the default message if the error body isn't JSON.
+        }
+        throw new Error(detail);
+      }
+      const data = (await response.json()) as InstallDiagnosticResponse;
+      setDiagnosticData(data);
+    } catch (error) {
+      setOverviewError(error instanceof Error ? error.message : "Unknown error");
+    } finally {
+      setScanningDiagnostic(false);
+    }
+  };
+
   const clearCheckNowMessageSoon = () => {
     setTimeout(() => {
       setCheckNowMessage("");
@@ -912,16 +974,24 @@ function HomePage({ context }: HomePageProps) {
         </Flex>
       </Tile>
 
-      {diagnosticBannerText ? (
-        <Tile>
-          <Flex direction="row" justify="between" align="center" gap="small" wrap>
+      <Tile>
+        <Flex direction="row" justify="between" align="center" gap="small" wrap>
+          <Flex direction="row" align="center" gap="small" wrap>
             <Text format={{ fontWeight: "bold" }}>{diagnosticBannerText}</Text>
-            <StatusTag variant={diagnosticIssuesFound > 0 ? "warning" : "success"}>
-              {diagnosticIssuesFound > 0 ? "Review" : "Clean"}
+            <StatusTag variant={diagnosticBannerVariant}>
+              {diagnosticBannerTag}
             </StatusTag>
           </Flex>
-        </Tile>
-      ) : null}
+          <Button
+            type="button"
+            variant="secondary"
+            disabled={!portalId || scanningDiagnostic}
+            onClick={runDiagnosticScan}
+          >
+            {scanningDiagnostic ? "Scanning..." : scanButtonLabel}
+          </Button>
+        </Flex>
+      </Tile>
 
       <Flex direction="row" gap="small">
         <Box flex={1}>
