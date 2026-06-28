@@ -29,6 +29,7 @@ type DashboardAlert = {
   sourceEventType?: string;
   impactedWorkflowId?: string | null;
   impactedWorkflowName?: string | null;
+  dependencyLocations?: string[] | null;
   sourceDependencyId?: string | null;
   sourceObjectTypeId?: string | null;
   createdAtUtc?: string | null;
@@ -344,6 +345,37 @@ function HubSpotLinks({
   );
 }
 
+function BlastRadius({ alert }: { alert: DashboardAlert }) {
+  const isAssetChange =
+    isPropertyAlert(alert.sourceEventType) ||
+    isListAlert(alert.sourceEventType) ||
+    isTemplateAlert(alert.sourceEventType) ||
+    isOwnerAlert(alert.sourceEventType);
+  const workflowName = String(alert.impactedWorkflowName || "").trim();
+
+  if (!isAssetChange || !workflowName) {
+    return null;
+  }
+
+  const verb = isOwnerAlert(alert.sourceEventType)
+    ? "Still referenced in"
+    : "Affects";
+  const locations = Array.isArray(alert.dependencyLocations)
+    ? alert.dependencyLocations.filter((loc) => String(loc).trim())
+    : [];
+  const where =
+    locations.length > 0 ? ` — used as ${locations.join(", ")}` : "";
+
+  return (
+    <Box>
+      <Text format={{ fontWeight: "bold" }}>Blast radius</Text>
+      <Text variant="microcopy">
+        {`${verb} workflow “${workflowName}”${where}`}
+      </Text>
+    </Box>
+  );
+}
+
 function ActionAlertCard({
   alert,
   portalId,
@@ -374,6 +406,8 @@ function ActionAlertCard({
             </Flex>
           </Box>
         </Flex>
+
+        <BlastRadius alert={alert} />
 
         <Flex justify="between" align="center" gap="small" wrap>
           <HubSpotLinks alert={alert} portalId={portalId} />

@@ -28,6 +28,55 @@ from tests.hubspot_fetch_auth import SignedHubSpotTestClient
 SEVERITY_CRITICAL = "critical"
 
 
+class DependencyLocationsHelperTests(unittest.TestCase):
+    """The blast-radius display reads dependency_locations off the alert
+    summary. The serializer must surface them and never raise on bad data."""
+
+    @staticmethod
+    def _alert(summary):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(summary=summary)
+
+    def test_parses_dependency_locations_from_summary(self) -> None:
+        import json as _json
+
+        alert = self._alert(
+            _json.dumps(
+                {"impact": {"dependency_locations": ["Enrollment trigger", "If/then branch"]}}
+            )
+        )
+        self.assertEqual(
+            ["Enrollment trigger", "If/then branch"],
+            dashboard_module._dependency_locations(alert),
+        )
+
+    def test_returns_empty_for_missing_or_malformed_summary(self) -> None:
+        import json as _json
+
+        self.assertEqual([], dashboard_module._dependency_locations(self._alert(None)))
+        self.assertEqual([], dashboard_module._dependency_locations(self._alert("not json")))
+        self.assertEqual(
+            [], dashboard_module._dependency_locations(self._alert(_json.dumps({"impact": {}})))
+        )
+        self.assertEqual(
+            [],
+            dashboard_module._dependency_locations(
+                self._alert(_json.dumps({"impact": {"dependency_locations": "x"}}))
+            ),
+        )
+
+    def test_filters_blank_locations(self) -> None:
+        import json as _json
+
+        alert = self._alert(
+            _json.dumps({"impact": {"dependency_locations": ["Enrollment trigger", "", "  "]}})
+        )
+        self.assertEqual(
+            ["Enrollment trigger"], dashboard_module._dependency_locations(alert)
+        )
+
+
 class DashboardEndpointTests(unittest.TestCase):
     PORTAL_ID = "51300126"
     OTHER_PORTAL_ID = "99999999"

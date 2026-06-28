@@ -109,6 +109,28 @@ def _alert_title(alert: Alert) -> str:
     return str(alert.title or "").strip()
 
 
+def _dependency_locations(alert: Alert) -> list[str]:
+    """Pull the 'where is the changed asset used' strings the correlator
+    persisted on the alert summary (e.g. 'Enrollment trigger', 'If/then
+    branch'). These power the blast-radius display. Returns [] when the
+    summary is missing or malformed — never raises.
+    """
+    raw = getattr(alert, "summary", None)
+    if not raw:
+        return []
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    impact = payload.get("impact") if isinstance(payload, dict) else None
+    if not isinstance(impact, dict):
+        return []
+    locations = impact.get("dependency_locations")
+    if not isinstance(locations, list):
+        return []
+    return [str(loc) for loc in locations if str(loc).strip()]
+
+
 def _alert_payload(alert: Alert) -> dict:
     return {
         "id": str(alert.id),
@@ -117,6 +139,7 @@ def _alert_payload(alert: Alert) -> dict:
         "sourceEventType": alert.source_event_type,
         "impactedWorkflowId": alert.impacted_workflow_id,
         "impactedWorkflowName": alert.impacted_workflow_name,
+        "dependencyLocations": _dependency_locations(alert),
         "sourceDependencyId": alert.source_dependency_id,
         "sourceObjectTypeId": alert.source_object_type_id,
         "createdAtUtc": _isoformat(alert.created_at),
