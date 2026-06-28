@@ -24,8 +24,14 @@ class Settings(BaseSettings):
 
     stripe_secret_key: str = ""
     stripe_webhook_secret: str = ""
+    stripe_price_starter_monthly: str = ""
+    stripe_price_starter_yearly: str = ""
     stripe_price_professional_monthly: str = ""
     stripe_price_professional_yearly: str = ""
+    stripe_price_agency_monthly: str = ""
+    stripe_price_agency_yearly: str = ""
+    # Legacy "business" tier prices, retained for back-compat with any live
+    # subscriptions created before the starter/professional/agency rename.
     stripe_price_business_monthly: str = ""
     stripe_price_business_yearly: str = ""
 

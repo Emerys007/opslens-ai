@@ -13,7 +13,11 @@ from app.config import settings
 
 
 STRIPE_API_BASE = "https://api.stripe.com/v1"
-VALID_PLANS = {"professional", "business"}
+# Marketing-aligned self-serve plans. "business" is the pre-rename top tier,
+# kept as an accepted value for back-compat with any live subscriptions /
+# stored rows; new installs use "agency". Enterprise is contact-sales only
+# (no self-serve Stripe price), so it is not a billable plan here.
+VALID_PLANS = {"starter", "professional", "agency", "business"}
 VALID_INTERVALS = {"monthly", "yearly"}
 ACTIVE_SUBSCRIPTION_STATUSES = {"active", "trialing"}
 
@@ -32,7 +36,7 @@ def _stripe_secret_key() -> str:
 def normalize_plan(plan: str | None) -> str:
     value = str(plan or "").strip().lower()
     if value not in VALID_PLANS:
-        raise ValueError("plan must be one of: professional, business.")
+        raise ValueError("plan must be one of: starter, professional, agency.")
     return value
 
 
@@ -55,8 +59,12 @@ def price_id_for(plan: str, billing_interval: str) -> str:
     normalized_interval = normalize_billing_interval(billing_interval)
 
     mapping = {
+        ("starter", "monthly"): str(settings.stripe_price_starter_monthly or "").strip(),
+        ("starter", "yearly"): str(settings.stripe_price_starter_yearly or "").strip(),
         ("professional", "monthly"): str(settings.stripe_price_professional_monthly or "").strip(),
         ("professional", "yearly"): str(settings.stripe_price_professional_yearly or "").strip(),
+        ("agency", "monthly"): str(settings.stripe_price_agency_monthly or "").strip(),
+        ("agency", "yearly"): str(settings.stripe_price_agency_yearly or "").strip(),
         ("business", "monthly"): str(settings.stripe_price_business_monthly or "").strip(),
         ("business", "yearly"): str(settings.stripe_price_business_yearly or "").strip(),
     }
@@ -103,9 +111,15 @@ def plan_code(plan: str, billing_interval: str) -> str:
 
 def plan_from_price_id(price_id: str | None) -> tuple[str, str]:
     cleaned = str(price_id or "").strip()
+    if not cleaned:
+        return "", ""
     mapping = {
+        str(settings.stripe_price_starter_monthly or "").strip(): ("starter", "monthly"),
+        str(settings.stripe_price_starter_yearly or "").strip(): ("starter", "yearly"),
         str(settings.stripe_price_professional_monthly or "").strip(): ("professional", "monthly"),
         str(settings.stripe_price_professional_yearly or "").strip(): ("professional", "yearly"),
+        str(settings.stripe_price_agency_monthly or "").strip(): ("agency", "monthly"),
+        str(settings.stripe_price_agency_yearly or "").strip(): ("agency", "yearly"),
         str(settings.stripe_price_business_monthly or "").strip(): ("business", "monthly"),
         str(settings.stripe_price_business_yearly or "").strip(): ("business", "yearly"),
     }
