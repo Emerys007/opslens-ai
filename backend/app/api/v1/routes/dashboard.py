@@ -8,7 +8,12 @@ from sqlalchemy import case, desc, func, select
 
 from app.core.security import require_hubspot_portal_request
 from app.db import get_session, init_db
-from app.models.alert import STATUS_OPEN, STATUS_RESOLVED, Alert
+from app.models.alert import (
+    SOURCE_EVENT_WORKFLOW_DISABLED,
+    STATUS_OPEN,
+    STATUS_RESOLVED,
+    Alert,
+)
 from app.models.alert_event import AlertEvent
 from app.models.email_template_change_event import EmailTemplateChangeEvent
 from app.models.email_template_snapshot import EmailTemplateSnapshot
@@ -56,6 +61,10 @@ from app.services.portal_settings import (
 from app.services.hubspot_oauth import get_portal_access_token
 from app.services.install_diagnostic import install_diagnostic_not_run_summary
 from app.services.remediation_guidance import fix_guidance_for
+from app.services.workflow_remediation import (
+    WorkflowRemediationError,
+    reenable_workflow,
+)
 from app.services.workflow_polling import poll_portal_workflows
 
 router = APIRouter(
@@ -1093,6 +1102,70 @@ def resolve_dashboard_alert(alert_id: str, request: Request):
         return {
             "status": "ok",
             "alertId": str(alert.id),
+            "resolvedAtUtc": _isoformat(alert.resolved_at),
+        }
+    finally:
+        session.close()
+
+
+@router.post("/alerts/{alert_id}/reenable-workflow")
+def dashboard_reenable_workflow(alert_id: str, request: Request):
+    """One-click fix for a 'workflow disabled' alert: re-enable the workflow
+    in HubSpot, then resolve the alert. This WRITES to the portal via the v4
+    Automation API. Scoped to the signed portal; only valid for
+    workflow_disabled alerts that carry an impacted workflow id.
+    """
+    portal_id = str(request.query_params.get("portalId", "")).strip()
+
+    try:
+        cleaned_alert_id = int(str(alert_id).strip())
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="Alert not found.") from exc
+
+    db_ready = init_db()
+    session = get_session()
+    if not db_ready or session is None or not portal_id:
+        raise HTTPException(status_code=404, detail="Alert not found.")
+
+    try:
+        alert = session.execute(
+            select(Alert)
+            .where(Alert.id == cleaned_alert_id)
+            .where(Alert.portal_id == portal_id)
+        ).scalar_one_or_none()
+        if alert is None:
+            raise HTTPException(status_code=404, detail="Alert not found.")
+
+        if alert.source_event_type != SOURCE_EVENT_WORKFLOW_DISABLED:
+            raise HTTPException(
+                status_code=400,
+                detail="Re-enable is only available for disabled-workflow alerts.",
+            )
+        workflow_id = str(alert.impacted_workflow_id or "").strip()
+        if not workflow_id:
+            raise HTTPException(
+                status_code=400,
+                detail="This alert has no workflow to re-enable.",
+            )
+
+        try:
+            result = reenable_workflow(session, portal_id, workflow_id)
+        except WorkflowRemediationError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+        # The fix succeeded -> clear the alert.
+        if alert.resolved_at is None:
+            alert.resolved_at = _utc_now()
+        alert.status = STATUS_RESOLVED
+        session.commit()
+        session.refresh(alert)
+
+        return {
+            "status": "ok",
+            "alertId": str(alert.id),
+            "workflowId": result.get("workflowId"),
+            "isEnabled": result.get("isEnabled", True),
+            "alreadyEnabled": result.get("alreadyEnabled", False),
             "resolvedAtUtc": _isoformat(alert.resolved_at),
         }
     finally:

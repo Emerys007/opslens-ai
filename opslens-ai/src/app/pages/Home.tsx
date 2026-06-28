@@ -419,15 +419,23 @@ function ActionAlertCard({
   alert,
   portalId,
   resolving,
+  reenabling,
   onResolve,
+  onReenable,
 }: {
   alert: DashboardAlert;
   portalId: string;
   resolving: boolean;
+  reenabling: boolean;
   onResolve: (alertId: string) => void;
+  onReenable: (alertId: string, workflowId: string) => void;
 }) {
   const alertId = String(alert.id || "");
   const severity = String(alert.severity || "unknown").toUpperCase();
+  const isReenableCandidate =
+    alert.sourceEventType === "workflow_disabled" &&
+    Boolean(alert.impactedWorkflowId);
+  const [confirmingReenable, setConfirmingReenable] = useState(false);
 
   return (
     <Tile>
@@ -452,14 +460,51 @@ function ActionAlertCard({
 
         <Flex justify="between" align="center" gap="small" wrap>
           <HubSpotLinks alert={alert} portalId={portalId} />
-          <Button
-            type="button"
-            variant="secondary"
-            disabled={!alertId || resolving}
-            onClick={() => onResolve(alertId)}
-          >
-            {resolving ? "Resolving..." : "Mark resolved"}
-          </Button>
+          <Flex direction="row" gap="small" align="center" wrap>
+            {isReenableCandidate ? (
+              confirmingReenable ? (
+                <Flex direction="row" gap="small" align="center" wrap>
+                  <Text variant="microcopy">Turn this workflow back on?</Text>
+                  <Button
+                    type="button"
+                    variant="primary"
+                    disabled={reenabling}
+                    onClick={() => {
+                      setConfirmingReenable(false);
+                      onReenable(alertId, String(alert.impactedWorkflowId || ""));
+                    }}
+                  >
+                    {reenabling ? "Re-enabling..." : "Confirm"}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    disabled={reenabling}
+                    onClick={() => setConfirmingReenable(false)}
+                  >
+                    Cancel
+                  </Button>
+                </Flex>
+              ) : (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={reenabling || resolving}
+                  onClick={() => setConfirmingReenable(true)}
+                >
+                  Re-enable workflow
+                </Button>
+              )
+            ) : null}
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={!alertId || resolving || reenabling}
+              onClick={() => onResolve(alertId)}
+            >
+              {resolving ? "Resolving..." : "Mark resolved"}
+            </Button>
+          </Flex>
         </Flex>
       </Flex>
     </Tile>
@@ -471,6 +516,7 @@ function HomePage({ context }: HomePageProps) {
   const [overviewError, setOverviewError] = useState("");
   const [overviewData, setOverviewData] = useState<OverviewResponse | null>(null);
   const [resolvingAlertId, setResolvingAlertId] = useState("");
+  const [reenablingAlertId, setReenablingAlertId] = useState("");
   const [actionPageSize, setActionPageSize] = useState(10);
   const [actionPage, setActionPage] = useState(1);
   const [lastUpdatedAt, setLastUpdatedAt] = useState("");
@@ -687,6 +733,43 @@ function HomePage({ context }: HomePageProps) {
     }
   };
 
+  const reenableWorkflow = async (alertId: string, workflowId: string) => {
+    if (!alertId || !workflowId || !portalId) {
+      return;
+    }
+
+    setReenablingAlertId(alertId);
+    setOverviewError("");
+    try {
+      const response = await hubspot.fetch(
+        buildUrl(`/api/v1/dashboard/alerts/${alertId}/reenable-workflow`, {
+          portalId,
+        }),
+        {
+          method: "POST",
+          timeout: 20000,
+        }
+      );
+      if (!response.ok) {
+        let detail = `Re-enable failed with status ${response.status}`;
+        try {
+          const body = (await response.json()) as { detail?: string };
+          if (body?.detail) {
+            detail = String(body.detail);
+          }
+        } catch (parseError) {
+          // Keep the default message if the error body isn't JSON.
+        }
+        throw new Error(detail);
+      }
+      await loadOverview();
+    } catch (error) {
+      setOverviewError(error instanceof Error ? error.message : "Unknown error");
+    } finally {
+      setReenablingAlertId("");
+    }
+  };
+
   const clearCheckNowMessageSoon = () => {
     setTimeout(() => {
       setCheckNowMessage("");
@@ -867,7 +950,9 @@ function HomePage({ context }: HomePageProps) {
                   alert={alert}
                   portalId={portalId}
                   resolving={resolvingAlertId === String(alert.id)}
+                  reenabling={reenablingAlertId === String(alert.id)}
                   onResolve={markResolved}
+                  onReenable={reenableWorkflow}
                 />
               ))}
             </Flex>

@@ -13,7 +13,9 @@ from app.models.alert import (
     SEVERITY_HIGH,
     SEVERITY_MEDIUM,
     SOURCE_EVENT_PROPERTY_ARCHIVED,
+    SOURCE_EVENT_WORKFLOW_DISABLED,
     SOURCE_KIND_PROPERTY,
+    SOURCE_KIND_WORKFLOW,
     STATUS_OPEN,
     STATUS_RESOLVED,
     Alert,
@@ -299,6 +301,103 @@ class DashboardEndpointTests(unittest.TestCase):
             f"/api/v1/dashboard/dependents?portalId={self.PORTAL_ID}&type=property"
         )
         self.assertEqual(400, response.status_code)
+
+    def _seed_workflow_disabled_alert(self, session, *, workflow_id: str = "500") -> Alert:
+        alert = Alert(
+            portal_id=self.PORTAL_ID,
+            alert_signature=f"sig-wf-disabled-{workflow_id}",
+            severity=SEVERITY_HIGH,
+            status=STATUS_OPEN,
+            source_event_type=SOURCE_EVENT_WORKFLOW_DISABLED,
+            source_event_kind=SOURCE_KIND_WORKFLOW,
+            source_dependency_type="workflow",
+            source_dependency_id=workflow_id,
+            impacted_workflow_id=workflow_id,
+            impacted_workflow_name="Lead routing",
+            title="Workflow 'Lead routing' disabled",
+            summary="{}",
+            created_at=datetime.now(timezone.utc),
+        )
+        session.add(alert)
+        session.commit()
+        session.refresh(alert)
+        return alert
+
+    def test_reenable_workflow_happy_path_resolves_alert(self) -> None:
+        session = self._session()
+        try:
+            alert = self._seed_workflow_disabled_alert(session)
+            alert_id = str(alert.id)
+        finally:
+            session.close()
+
+        with patch(
+            "app.api.v1.routes.dashboard.reenable_workflow",
+            return_value={
+                "status": "ok",
+                "workflowId": "500",
+                "isEnabled": True,
+                "alreadyEnabled": False,
+            },
+        ):
+            response = self.client.post(
+                f"/api/v1/dashboard/alerts/{alert_id}/reenable-workflow"
+                f"?portalId={self.PORTAL_ID}"
+            )
+
+        self.assertEqual(200, response.status_code)
+        body = response.json()
+        self.assertEqual("500", body["workflowId"])
+        self.assertTrue(body["isEnabled"])
+        self.assertIsNotNone(body["resolvedAtUtc"])
+
+        session = self._session()
+        try:
+            refreshed = session.get(Alert, int(alert_id))
+            self.assertEqual(STATUS_RESOLVED, refreshed.status)
+        finally:
+            session.close()
+
+    def test_reenable_rejects_non_workflow_alert(self) -> None:
+        session = self._session()
+        try:
+            alert = self._seed_alert(session)  # property_archived
+            alert_id = str(alert.id)
+        finally:
+            session.close()
+
+        response = self.client.post(
+            f"/api/v1/dashboard/alerts/{alert_id}/reenable-workflow?portalId={self.PORTAL_ID}"
+        )
+        self.assertEqual(400, response.status_code)
+
+    def test_reenable_surfaces_remediation_error_as_502(self) -> None:
+        from app.services.workflow_remediation import WorkflowRemediationError
+
+        session = self._session()
+        try:
+            alert = self._seed_workflow_disabled_alert(session)
+            alert_id = str(alert.id)
+        finally:
+            session.close()
+
+        with patch(
+            "app.api.v1.routes.dashboard.reenable_workflow",
+            side_effect=WorkflowRemediationError("That workflow no longer exists in HubSpot."),
+        ):
+            response = self.client.post(
+                f"/api/v1/dashboard/alerts/{alert_id}/reenable-workflow"
+                f"?portalId={self.PORTAL_ID}"
+            )
+        self.assertEqual(502, response.status_code)
+
+        # The alert must remain open when the fix failed.
+        session = self._session()
+        try:
+            refreshed = session.get(Alert, int(alert_id))
+            self.assertEqual(STATUS_OPEN, refreshed.status)
+        finally:
+            session.close()
 
     def _seed_list(
         self,
