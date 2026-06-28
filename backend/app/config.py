@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     app_port: int = 8000
     log_level: str = "INFO"
     backend_public_base_url: str = "https://api.app-sync.com"
-    app_public_base_url: str = "https://apps.app-sync.com"
+    app_public_base_url: str = "https://app-sync.com"
     email_importer_origin: str = "https://historic-email-importer-worker.onrender.com"
 
     hubspot_client_id: str = ""

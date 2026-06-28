@@ -7,12 +7,20 @@ import urllib.request
 
 from app.services.hubspot_ticket_pipeline import (
     DEFAULT_PIPELINE_LABEL,
+    PIPELINE_MODE_DEDICATED,
+    PIPELINE_MODE_SHARED,
     PIPELINES_API_VERSION,
     PIPELINE_OBJECT_TYPE,
     REQUIRED_TICKET_STAGES,
+    STAGE_LABEL_DUPLICATE,
+    STAGE_LABEL_INVESTIGATING,
+    STAGE_LABEL_NEW_ALERT,
+    STAGE_LABEL_RESOLVED,
+    STAGE_LABEL_WAITING,
     build_ticket_pipeline_config,
     fetch_ticket_pipelines,
     select_ticket_pipeline,
+    shared_mode_stage_label,
     stage_id_by_label,
     stage_ticket_state,
 )
@@ -330,6 +338,34 @@ def _already_exists_response(status: int, body: dict) -> bool:
     return False
 
 
+def _is_pipeline_limit_response(status: int, body: dict) -> bool:
+    """Detect HubSpot's "max ticket pipelines reached" 400 response.
+
+    Free / Starter portals are capped at 1 ticket pipeline. The response
+    looks like:
+
+        {
+          "category": "API_LIMIT",
+          "message": "You have reached your limit of 1 ticket pipelines.",
+          "context": {"maximum pipelines": ["1"]}
+        }
+
+    Match defensively on both ``category`` and the ``maximum pipelines``
+    context key — HubSpot has been known to localize messages.
+    """
+    if status != 400:
+        return False
+
+    category = str((body or {}).get("category") or "").strip().upper()
+    if category == "API_LIMIT":
+        context_keys = list(((body or {}).get("context") or {}).keys())
+        if any("pipeline" in str(key).lower() for key in context_keys):
+            return True
+
+    body_text = _body_text(body)
+    return "limit" in body_text and "pipeline" in body_text
+
+
 def _scope_hint(object_type: str) -> str:
     if object_type == "contacts":
         return "crm.schemas.contacts.write"
@@ -413,17 +449,105 @@ def _pipeline_id(pipeline: dict) -> str:
     return str(pipeline.get("id") or pipeline.get("pipelineId") or "").strip()
 
 
+def _ensure_dedicated_pipeline_stages(
+    *,
+    token: str,
+    portal_id: str,
+    pipeline: dict,
+    stage_labels: tuple[str, ...] | None = None,
+) -> tuple[list[str], list[str]]:
+    """Create or normalize the OpsLens stages on a pipeline we own.
+
+    Returns ``(created_labels, updated_labels)``. Used for the dedicated
+    "OpsLens Alerts" pipeline path; in shared mode the stages get
+    OpsLens-prefixed labels so we use a different code path.
+    """
+    pipeline_id = _pipeline_id(pipeline)
+    created_stages: list[str] = []
+    updated_stages: list[str] = []
+
+    for display_order, required_stage in enumerate(REQUIRED_TICKET_STAGES):
+        target_label = required_stage.label
+        if stage_labels is not None:
+            target_label = stage_labels[display_order]
+
+        current_stage_id = stage_id_by_label(pipeline, target_label)
+        current_ticket_state = stage_ticket_state(pipeline, target_label)
+
+        if not current_stage_id:
+            status, body = _request_json(
+                token,
+                "POST",
+                f"/crm/pipelines/{PIPELINES_API_VERSION}/{PIPELINE_OBJECT_TYPE}/{pipeline_id}/stages",
+                {
+                    "displayOrder": display_order,
+                    "label": target_label,
+                    "metadata": {"ticketState": required_stage.ticket_state},
+                },
+            )
+            if status not in (200, 201):
+                raise RuntimeError(
+                    f"Failed to create the HubSpot ticket stage {target_label} for portal {portal_id}. "
+                    f"Response: {body}"
+                )
+            created_stages.append(target_label)
+            continue
+
+        if current_ticket_state != required_stage.ticket_state:
+            status, body = _request_json(
+                token,
+                "PATCH",
+                f"/crm/pipelines/{PIPELINES_API_VERSION}/{PIPELINE_OBJECT_TYPE}/{pipeline_id}/stages/{current_stage_id}",
+                {
+                    "displayOrder": display_order,
+                    "label": target_label,
+                    "metadata": {"ticketState": required_stage.ticket_state},
+                },
+            )
+            if status != 200:
+                raise RuntimeError(
+                    f"Failed to normalize the HubSpot ticket stage {target_label} for portal {portal_id}. "
+                    f"Response: {body}"
+                )
+            updated_stages.append(target_label)
+
+    return created_stages, updated_stages
+
+
+def _resolve_stage_ids(pipeline: dict, stage_labels: tuple[str, ...]) -> dict[str, str]:
+    """Map each ``REQUIRED_TICKET_STAGES`` entry to its persisted stage id.
+
+    ``stage_labels`` is parallel to ``REQUIRED_TICKET_STAGES`` and is the
+    actual label used in this pipeline (prefixed in shared mode).
+    """
+    return {
+        required.label: stage_id_by_label(pipeline, label)
+        for required, label in zip(REQUIRED_TICKET_STAGES, stage_labels)
+    }
+
+
 def _ensure_pipeline_and_stages(
     *,
     token: str,
     portal_id: str,
-) -> tuple[bool, list[str], list[str], str]:
+) -> tuple[bool, list[str], list[str], str, str, dict[str, str]]:
+    """Provision the OpsLens ticket pipeline (or fall back to a shared one).
+
+    Returns ``(pipeline_created, stages_created, stages_updated,
+    pipeline_id, pipeline_mode, stage_ids_by_canonical_label)``.
+
+    ``stage_ids_by_canonical_label`` maps the *dedicated-mode* label
+    (e.g. ``"New Alert"``) to the actual stage id in HubSpot — same keys
+    in both modes so callers can persist them uniformly.
+    """
     pipeline_created = False
     created_stages: list[str] = []
     updated_stages: list[str] = []
+    pipeline_mode = PIPELINE_MODE_DEDICATED
 
     pipelines = fetch_ticket_pipelines(token)
     pipeline = select_ticket_pipeline(pipelines)
+    stage_labels: tuple[str, ...] = tuple(stage.label for stage in REQUIRED_TICKET_STAGES)
 
     if pipeline is None:
         status, body = _request_json(
@@ -443,70 +567,100 @@ def _ensure_pipeline_and_stages(
                 ],
             },
         )
-        if status not in (200, 201):
+
+        if status in (200, 201):
+            pipeline_created = True
+            pipeline = body
+        elif _is_pipeline_limit_response(status, body):
+            # Free / Starter portals can't host a dedicated OpsLens
+            # pipeline. Fall back to attaching OpsLens-prefixed stages to
+            # whichever pipeline already exists.
+            if not pipelines:
+                # Defensive: HubSpot said the limit is 1, so there must be
+                # at least one pipeline. If somehow there isn't, surface
+                # the original error rather than silently doing nothing.
+                raise RuntimeError(
+                    f"HubSpot reported the ticket pipeline limit but returned no existing "
+                    f"pipelines for portal {portal_id}. Response: {body}"
+                )
+            pipeline = pipelines[0]
+            pipeline_mode = PIPELINE_MODE_SHARED
+            stage_labels = tuple(shared_mode_stage_label(stage.label) for stage in REQUIRED_TICKET_STAGES)
+        else:
             raise RuntimeError(
                 f"Failed to create the OpsLens Alerts ticket pipeline for portal {portal_id}. "
                 f"This step depends on the installing portal allowing ticket pipeline management with the `tickets` scope. "
                 f"Response: {body}"
             )
 
-        pipeline_created = True
-        pipeline = body
-
     pipeline_id = _pipeline_id(pipeline)
     if not pipeline_id:
         raise RuntimeError(f"OpsLens ticket pipeline could not be resolved for portal {portal_id}.")
 
-    for display_order, required_stage in enumerate(REQUIRED_TICKET_STAGES):
-        current_stage_id = stage_id_by_label(pipeline, required_stage.label)
-        current_ticket_state = stage_ticket_state(pipeline, required_stage.label)
+    created_stages, updated_stages = _ensure_dedicated_pipeline_stages(
+        token=token,
+        portal_id=portal_id,
+        pipeline=pipeline,
+        stage_labels=stage_labels,
+    )
 
-        if not current_stage_id:
-            status, body = _request_json(
-                token,
-                "POST",
-                f"/crm/pipelines/{PIPELINES_API_VERSION}/{PIPELINE_OBJECT_TYPE}/{pipeline_id}/stages",
-                {
-                    "displayOrder": display_order,
-                    "label": required_stage.label,
-                    "metadata": {"ticketState": required_stage.ticket_state},
-                },
-            )
-            if status not in (200, 201):
-                raise RuntimeError(
-                    f"Failed to create the HubSpot ticket stage {required_stage.label} for portal {portal_id}. "
-                    f"Response: {body}"
-                )
-            created_stages.append(required_stage.label)
-            continue
-
-        if current_ticket_state != required_stage.ticket_state:
-            status, body = _request_json(
-                token,
-                "PATCH",
-                f"/crm/pipelines/{PIPELINES_API_VERSION}/{PIPELINE_OBJECT_TYPE}/{pipeline_id}/stages/{current_stage_id}",
-                {
-                    "displayOrder": display_order,
-                    "label": required_stage.label,
-                    "metadata": {"ticketState": required_stage.ticket_state},
-                },
-            )
-            if status != 200:
-                raise RuntimeError(
-                    f"Failed to normalize the HubSpot ticket stage {required_stage.label} for portal {portal_id}. "
-                    f"Response: {body}"
-                )
-            updated_stages.append(required_stage.label)
-
-    refreshed_pipeline = select_ticket_pipeline(fetch_ticket_pipelines(token))
+    refreshed_pipelines = fetch_ticket_pipelines(token)
+    refreshed_pipeline: dict | None = None
+    for candidate in refreshed_pipelines:
+        if _pipeline_id(candidate) == pipeline_id:
+            refreshed_pipeline = candidate
+            break
     if refreshed_pipeline is None:
         raise RuntimeError(f"OpsLens ticket pipeline could not be reloaded for portal {portal_id}.")
 
-    config = build_ticket_pipeline_config(portal_id, refreshed_pipeline)
-    return pipeline_created, created_stages, updated_stages, config.pipeline_id
+    stage_ids = _resolve_stage_ids(refreshed_pipeline, stage_labels)
+
+    missing = [label for label, value in stage_ids.items() if not value]
+    if missing:
+        raise RuntimeError(
+            f"OpsLens ticket pipeline for portal {portal_id} is missing stage ids "
+            f"after provisioning: {', '.join(missing)}."
+        )
+
+    return pipeline_created, created_stages, updated_stages, pipeline_id, pipeline_mode, stage_ids
 
 
-def ensure_portal_bootstrap(*, token: str, portal_id: str) -> dict:
+def _persist_pipeline_settings(
+    *,
+    session,
+    portal_id: str,
+    pipeline_id: str,
+    pipeline_mode: str,
+    stage_ids: dict[str, str],
+) -> None:
+    """Write the resolved pipeline + stage ids onto the portal's
+    ``PortalSetting`` row. Creates the row if it does not yet exist so
+    the bootstrap is the single point that materializes routing state.
+    """
+    if session is None:
+        return
+
+    # Lazy import: this module is also exercised in tests that mock the
+    # underlying HubSpot calls without touching the DB layer.
+    from app.models.portal_setting import PortalSetting
+
+    row = session.get(PortalSetting, portal_id)
+    if row is None:
+        row = PortalSetting(portal_id=portal_id)
+        session.add(row)
+
+    row.opslens_pipeline_mode = pipeline_mode
+    row.opslens_ticket_pipeline_id = pipeline_id
+    row.opslens_stage_new_alert_id = stage_ids.get(STAGE_LABEL_NEW_ALERT, "")
+    row.opslens_stage_investigating_id = stage_ids.get(STAGE_LABEL_INVESTIGATING, "")
+    row.opslens_stage_waiting_id = stage_ids.get(STAGE_LABEL_WAITING, "")
+    row.opslens_stage_resolved_id = stage_ids.get(STAGE_LABEL_RESOLVED, "")
+    row.opslens_stage_duplicate_id = stage_ids.get(STAGE_LABEL_DUPLICATE, "")
+
+    session.commit()
+
+
+def ensure_portal_bootstrap(*, token: str, portal_id: str, session=None) -> dict:
     cleaned_portal_id = str(portal_id or "").strip()
     if not cleaned_portal_id:
         raise RuntimeError("portal_id is required for HubSpot portal bootstrap.")
@@ -521,6 +675,8 @@ def ensure_portal_bootstrap(*, token: str, portal_id: str) -> dict:
         "stagesCreated": [],
         "stagesUpdated": [],
         "pipelineId": "",
+        "pipelineMode": PIPELINE_MODE_DEDICATED,
+        "stageIds": {},
     }
 
     summary["contactPropertyGroupCreated"] = _ensure_group(
@@ -557,9 +713,19 @@ def ensure_portal_bootstrap(*, token: str, portal_id: str) -> dict:
         summary["stagesCreated"],
         summary["stagesUpdated"],
         summary["pipelineId"],
+        summary["pipelineMode"],
+        summary["stageIds"],
     ) = _ensure_pipeline_and_stages(
         token=token,
         portal_id=cleaned_portal_id,
+    )
+
+    _persist_pipeline_settings(
+        session=session,
+        portal_id=cleaned_portal_id,
+        pipeline_id=summary["pipelineId"],
+        pipeline_mode=summary["pipelineMode"],
+        stage_ids=summary["stageIds"],
     )
 
     return summary

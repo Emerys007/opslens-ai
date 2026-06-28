@@ -45,6 +45,30 @@ def _resolve_token_for_portal(portal_id: str) -> str:
         session.close()
 
 
+def _resolve_pipeline_config_for_portal(token: str, portal_id: str):
+    """Build the ticket pipeline config for ``portal_id``, preferring
+    the persisted ``portal_settings`` row over a HubSpot lookup. A fresh
+    DB session is opened so callers don't need to thread one through.
+    """
+    if not init_db():
+        # Fall back to the HubSpot lookup path — the helper will raise
+        # if it still can't resolve a config.
+        return load_portal_ticket_pipeline_config(token=token, portal_id=portal_id)
+
+    session = get_session()
+    if session is None:
+        return load_portal_ticket_pipeline_config(token=token, portal_id=portal_id)
+
+    try:
+        return load_portal_ticket_pipeline_config(
+            token=token,
+            portal_id=portal_id,
+            session=session,
+        )
+    finally:
+        session.close()
+
+
 def _headers(token: str) -> dict[str, str]:
     auth_token = str(token or "").strip()
     if not auth_token:
@@ -623,10 +647,7 @@ def sync_hubspot_ticket_for_alert(payload: dict) -> dict:
 
         token = _resolve_token_for_portal(portal_id)
         result["ticketSyncAttempted"] = True
-        pipeline_config = load_portal_ticket_pipeline_config(
-            token=token,
-            portal_id=portal_id,
-        )
+        pipeline_config = _resolve_pipeline_config_for_portal(token, portal_id)
 
         company_id = _get_contact_company_id(token, contact_id)
 

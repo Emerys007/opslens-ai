@@ -45,7 +45,7 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
         with (
             patch("app.services.marketplace_billing.settings.stripe_price_professional_monthly", "price_prof_month"),
             patch("app.api.v1.routes.marketplace.settings.backend_public_base_url", "https://api.app-sync.com"),
-            patch("app.api.v1.routes.marketplace.settings.app_public_base_url", "https://apps.app-sync.com"),
+            patch("app.api.v1.routes.marketplace.settings.app_public_base_url", "https://app-sync.com"),
             patch("app.api.v1.routes.marketplace.create_customer", return_value={"id": "cus_123"}) as create_customer,
             patch(
                 "app.api.v1.routes.marketplace.create_checkout_session",
@@ -57,7 +57,7 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
                 json={
                     "plan": "professional",
                     "billingInterval": "monthly",
-                    "returnUrl": "https://apps.app-sync.com/install/complete",
+                    "returnUrl": "https://app-sync.com/install/complete",
                     "tenantContext": {"tenantSlug": "demo-co"},
                     "partnerUserId": "user_123",
                     "partnerUserEmail": "owner@example.com",
@@ -103,7 +103,7 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
                 install_session_id="trial-session",
                 plan="business",
                 billing_interval="yearly",
-                return_url="https://apps.app-sync.com/install/return",
+                return_url="https://app-sync.com/install/return",
                 tenant_context={"tenantSlug": "trial-co"},
                 partner_user_email="owner@example.com",
                 trial_approved=True,
@@ -128,7 +128,7 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
                 install_session_id="pending-session",
                 plan="professional",
                 billing_interval="monthly",
-                return_url="https://apps.app-sync.com/install/return",
+                return_url="https://app-sync.com/install/return",
                 tenant_context={"tenantSlug": "pending-co"},
                 partner_user_email="owner@example.com",
                 trial_approved=False,
@@ -256,7 +256,7 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
                 install_session_id="external-trial-session",
                 plan="business",
                 billing_interval="yearly",
-                return_url="https://apps.app-sync.com/install/complete",
+                return_url="https://app-sync.com/install/complete",
                 tenant_context={"tenantSlug": "external-trial"},
                 partner_user_email="owner@example.com",
                 trial_approved=True,
@@ -269,7 +269,7 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
                 "app.routes.oauth.parse_signed_state",
                 return_value={
                     "installSessionId": "external-trial-session",
-                    "returnTo": "https://apps.app-sync.com/install/complete",
+                    "returnTo": "https://app-sync.com/install/complete",
                 },
             ),
             patch(
@@ -322,7 +322,7 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
 
         self.assertEqual(302, callback.status_code)
         location = callback.headers["location"]
-        self.assertTrue(location.startswith("https://apps.app-sync.com/opslens/install/complete/?"))
+        self.assertTrue(location.startswith("https://app-sync.com/opslens/install/complete/?"))
         self.assertIn("portalId=8886743", location)
         self.assertIn("plan=business", location)
         self.assertIn("billingInterval=yearly", location)
@@ -343,7 +343,7 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
         with (
             patch("app.services.marketplace_billing.settings.stripe_price_professional_monthly", "price_prof_month"),
             patch("app.api.v1.routes.marketplace.settings.backend_public_base_url", "https://api.app-sync.com"),
-            patch("app.api.v1.routes.marketplace.settings.app_public_base_url", "https://apps.app-sync.com"),
+            patch("app.api.v1.routes.marketplace.settings.app_public_base_url", "https://app-sync.com"),
             patch("app.api.v1.routes.marketplace.create_customer", return_value={"id": "cus_paid_123"}),
             patch(
                 "app.api.v1.routes.marketplace.create_checkout_session",
@@ -355,7 +355,7 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
                 json={
                     "plan": "professional",
                     "billingInterval": "monthly",
-                    "returnUrl": "https://apps.app-sync.com/install/complete",
+                    "returnUrl": "https://app-sync.com/install/complete",
                     "tenantContext": {"tenantSlug": "paid-callback"},
                     "partnerUserId": "user-456",
                     "partnerUserEmail": "owner@example.com",
@@ -408,7 +408,7 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
                 "app.routes.oauth.parse_signed_state",
                 return_value={
                     "installSessionId": install_session_id,
-                    "returnTo": "https://apps.app-sync.com/install/complete",
+                    "returnTo": "https://app-sync.com/install/complete",
                 },
             ),
             patch(
@@ -461,7 +461,7 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
 
         self.assertEqual(302, callback.status_code)
         callback_location = callback.headers["location"]
-        self.assertTrue(callback_location.startswith("https://apps.app-sync.com/opslens/install/complete/?"))
+        self.assertTrue(callback_location.startswith("https://app-sync.com/opslens/install/complete/?"))
         self.assertIn("portalId=9999999", callback_location)
         self.assertIn("plan=professional", callback_location)
         self.assertIn("billingInterval=monthly", callback_location)
@@ -486,7 +486,7 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
         self.assertEqual(200, settings.status_code)
         self.assertEqual("ok", settings.json()["status"])
 
-    def test_failed_bootstrap_redirects_to_error_safe_destination(self) -> None:
+    def test_failed_bootstrap_is_non_fatal_install_completes_with_retry_signal(self) -> None:
         session = self._session()
         try:
             create_marketplace_install_session(
@@ -494,7 +494,7 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
                 install_session_id="failed-bootstrap-session",
                 plan="business",
                 billing_interval="yearly",
-                return_url="https://apps.app-sync.com/install/complete",
+                return_url="https://app-sync.com/install/complete",
                 tenant_context={"tenantSlug": "failed-bootstrap"},
                 partner_user_email="owner@example.com",
                 trial_approved=True,
@@ -507,7 +507,7 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
                 "app.routes.oauth.parse_signed_state",
                 return_value={
                     "installSessionId": "failed-bootstrap-session",
-                    "returnTo": "https://apps.app-sync.com/install/complete",
+                    "returnTo": "https://app-sync.com/install/complete",
                 },
             ),
             patch(
@@ -542,12 +542,15 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
 
         self.assertEqual(302, callback.status_code)
         location = callback.headers["location"]
-        self.assertTrue(location.startswith("https://apps.app-sync.com/opslens/install/complete/?"))
+        self.assertTrue(location.startswith("https://app-sync.com/opslens/install/complete/?"))
         self.assertIn("portalId=7777777", location)
         self.assertIn("plan=business", location)
         self.assertIn("billingInterval=yearly", location)
+        # Non-fatal bootstrap: install lands on the success page with a
+        # bootstrapStatus=failed signal so the UI can offer a retry.
         self.assertIn("bootstrapStatus=failed", location)
-        self.assertIn("status=error", location)
+        self.assertIn("status=ok", location)
+        self.assertNotIn("status=error", location)
 
         success = self.client.get(
             "/api/v1/marketplace/install/success?installSessionId=failed-bootstrap-session"
@@ -556,7 +559,7 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
         success_payload = success.json()
         self.assertEqual("failed", success_payload["bootstrapStatus"])
         self.assertIn("/opslens/install/complete/?portalId=7777777", success_payload["returnUrl"])
-        self.assertIn("status=error", success_payload["returnUrl"])
+        self.assertIn("status=ok", success_payload["returnUrl"])
 
     def test_install_success_contract_reports_bootstrap_summary(self) -> None:
         session = self._session()
@@ -566,7 +569,7 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
                 install_session_id="success-session",
                 plan="professional",
                 billing_interval="monthly",
-                return_url="https://apps.app-sync.com/install/return",
+                return_url="https://app-sync.com/install/return",
                 tenant_context={"tenantSlug": "success-co"},
                 partner_user_email="owner@example.com",
                 trial_approved=True,
@@ -613,7 +616,7 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
                 install_session_id="activation-session",
                 plan="business",
                 billing_interval="monthly",
-                return_url="https://apps.app-sync.com/install/return",
+                return_url="https://app-sync.com/install/return",
                 tenant_context={"tenantSlug": "activation-co"},
                 partner_user_email="owner@example.com",
                 trial_approved=False,

@@ -6,8 +6,11 @@ These tests cover four scenarios:
    is created, and the install-complete redirect carries ``trial=1`` and
    ``trial_expires_at=<ISO>`` query params.
 2. Re-installing into a portal that already used its trial does NOT grant a
-   second trial; the OAuth callback falls into the existing
-   ``payment_required`` branch.
+   second trial — the optimistic install-session trial is revoked. The
+   install itself still completes (status=ok) with the post-install
+   bootstrap running normally; payment enforcement happens later via
+   the Stripe customer portal and plan/feature gates rather than by
+   blocking the install.
 3. ``subscription_is_active`` returns False once a trial has expired, even
    when ``trial_approved`` is still True on the row.
 4. The pre-existing Stripe-checkout install path is still reachable when the
@@ -77,7 +80,7 @@ class AutoTrialFlowTests(unittest.TestCase):
             ),
             patch(
                 "app.api.v1.routes.marketplace.settings.app_public_base_url",
-                "https://apps.app-sync.com",
+                "https://app-sync.com",
             ),
             patch("app.api.v1.routes.marketplace.create_customer") as create_customer,
             patch(
@@ -89,7 +92,7 @@ class AutoTrialFlowTests(unittest.TestCase):
                 json={
                     "plan": "professional",
                     "billingInterval": "monthly",
-                    "returnUrl": "https://apps.app-sync.com/install/complete",
+                    "returnUrl": "https://app-sync.com/install/complete",
                     "tenantContext": {"tenantSlug": "fresh-trial-co"},
                     "partnerUserId": "user-fresh",
                     "partnerUserEmail": "owner@example.com",
@@ -114,7 +117,7 @@ class AutoTrialFlowTests(unittest.TestCase):
                 "app.routes.oauth.parse_signed_state",
                 return_value={
                     "installSessionId": install_session_id,
-                    "returnTo": "https://apps.app-sync.com/install/complete",
+                    "returnTo": "https://app-sync.com/install/complete",
                 },
             ),
             patch(
@@ -168,7 +171,7 @@ class AutoTrialFlowTests(unittest.TestCase):
         self.assertEqual(302, callback.status_code)
         location = callback.headers["location"]
         self.assertTrue(
-            location.startswith("https://apps.app-sync.com/opslens/install/complete/?")
+            location.startswith("https://app-sync.com/opslens/install/complete/?")
         )
         self.assertIn("portalId=1111111", location)
         self.assertIn("bootstrapStatus=success", location)
@@ -237,7 +240,7 @@ class AutoTrialFlowTests(unittest.TestCase):
             ),
             patch(
                 "app.api.v1.routes.marketplace.settings.app_public_base_url",
-                "https://apps.app-sync.com",
+                "https://app-sync.com",
             ),
             patch("app.api.v1.routes.marketplace.create_customer") as create_customer,
             patch(
@@ -249,7 +252,7 @@ class AutoTrialFlowTests(unittest.TestCase):
                 json={
                     "plan": "professional",
                     "billingInterval": "monthly",
-                    "returnUrl": "https://apps.app-sync.com/install/complete",
+                    "returnUrl": "https://app-sync.com/install/complete",
                     "tenantContext": {"tenantSlug": "reinstall-co"},
                     "partnerUserId": "user-reinstall",
                     "partnerUserEmail": "owner@example.com",
@@ -266,7 +269,7 @@ class AutoTrialFlowTests(unittest.TestCase):
                 "app.routes.oauth.parse_signed_state",
                 return_value={
                     "installSessionId": install_session_id,
-                    "returnTo": "https://apps.app-sync.com/install/complete",
+                    "returnTo": "https://app-sync.com/install/complete",
                 },
             ),
             patch(
@@ -289,6 +292,26 @@ class AutoTrialFlowTests(unittest.TestCase):
                     "scopes": ["oauth", "tickets"],
                 },
             ),
+            # The install no longer short-circuits on payment state, so
+            # the post-install provisioner runs even for re-installs that
+            # have used their trial. Mock it so the test does not reach
+            # for real HubSpot APIs.
+            patch(
+                "app.services.portal_entitlements.ensure_portal_bootstrap",
+                return_value={
+                    "portalId": portal_id,
+                    "pipelineId": "pipeline-reinstall",
+                    "pipelineMode": "dedicated",
+                    "stageIds": {},
+                    "contactPropertyGroupCreated": False,
+                    "ticketPropertyGroupCreated": False,
+                    "contactPropertiesCreated": [],
+                    "ticketPropertiesCreated": [],
+                    "pipelineCreated": False,
+                    "stagesCreated": [],
+                    "stagesUpdated": [],
+                },
+            ),
         ):
             callback = self.client.get(
                 "/oauth-callback?code=auth-code&state=signed-state",
@@ -299,8 +322,11 @@ class AutoTrialFlowTests(unittest.TestCase):
         location = callback.headers["location"]
         # Re-install must NOT advertise a fresh trial in the redirect.
         self.assertNotIn("trial=1", location)
-        # Bootstrap should have short-circuited to payment_required.
-        self.assertIn("bootstrapStatus=payment_required", location)
+        # Install still completes successfully even though the portal has
+        # exhausted its trial; billing is handled out-of-band.
+        self.assertIn("bootstrapStatus=success", location)
+        self.assertIn("status=ok", location)
+        self.assertNotIn("bootstrapStatus=payment_required", location)
 
         # The portal entitlement must still carry the original trial windows;
         # the auto-trial code must not have overwritten them.
@@ -407,7 +433,7 @@ class AutoTrialFlowTests(unittest.TestCase):
             ),
             patch(
                 "app.api.v1.routes.marketplace.settings.app_public_base_url",
-                "https://apps.app-sync.com",
+                "https://app-sync.com",
             ),
             patch(
                 "app.api.v1.routes.marketplace.create_customer",
@@ -426,7 +452,7 @@ class AutoTrialFlowTests(unittest.TestCase):
                 json={
                     "plan": "professional",
                     "billingInterval": "monthly",
-                    "returnUrl": "https://apps.app-sync.com/install/complete",
+                    "returnUrl": "https://app-sync.com/install/complete",
                     "tenantContext": {"tenantSlug": "legacy-paid"},
                     "partnerUserId": "user-legacy",
                     "partnerUserEmail": "owner@example.com",
