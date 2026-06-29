@@ -8,9 +8,10 @@ import hmac
 import json
 import os
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import desc
 
+from app.core.security import require_hubspot_portal_request
 from app.db import get_session, init_db
 from app.models.webhook_event import WebhookEvent
 
@@ -229,7 +230,10 @@ async def receive_hubspot_webhooks(request: Request):
     }
 
 
-@router.get("/recent")
+@router.get(
+    "/recent",
+    dependencies=[Depends(require_hubspot_portal_request)],
+)
 async def recent_webhooks(
     portalId: str | None = Query(default=None),
     objectId: str | None = Query(default=None),

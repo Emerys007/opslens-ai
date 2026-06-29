@@ -143,5 +143,24 @@ class PortalAuthTests(unittest.TestCase):
         self.assertFalse(payload["settings"]["ticketDeliveryEnabled"])
 
 
+    def test_alerts_recent_rejects_unsigned_request(self) -> None:
+        response = self.client.get(
+            f"/api/v1/alerts/recent?portalId={self.PORTAL_ID}"
+        )
+        self.assertEqual(401, response.status_code)
+
+    def test_contact_risk_rejects_unsigned_request(self) -> None:
+        response = self.client.get(
+            f"/api/v1/records/contact-risk?portalId={self.PORTAL_ID}"
+        )
+        self.assertEqual(401, response.status_code)
+
+    def test_webhooks_recent_rejects_unsigned_request(self) -> None:
+        response = self.client.get(
+            f"/api/v1/webhooks/recent?portalId={self.PORTAL_ID}"
+        )
+        self.assertEqual(401, response.status_code)
+
+
 if __name__ == "__main__":
     unittest.main()

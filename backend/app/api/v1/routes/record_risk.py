@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy import desc, select
 
+from app.core.security import require_hubspot_portal_request
 from app.db import get_session, init_db
 from app.models.alert_event import AlertEvent
 from app.services.portal_settings import (
@@ -9,7 +10,13 @@ from app.services.portal_settings import (
     normalize_severity,
 )
 
-router = APIRouter(prefix="/records", tags=["records"])
+# Reads per-portal record risk + alert events, so the caller must present a
+# valid signed HubSpot request (same signature the UI uses).
+router = APIRouter(
+    prefix="/records",
+    tags=["records"],
+    dependencies=[Depends(require_hubspot_portal_request)],
+)
 
 
 def _severity_visible_at_threshold(level: str, threshold: str) -> bool:

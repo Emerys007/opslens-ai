@@ -12,6 +12,11 @@ env/
 .env.local
 .env.production
 
+# Secrets / OAuth tokens — NEVER commit live HubSpot tokens
+oauth_tokens/
+*hubspot_tokens*.json
+*.token.json
+
 # Logs
 logs/
 *.log

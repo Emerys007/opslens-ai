@@ -1,10 +1,17 @@
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy import desc, select
 
+from app.core.security import require_hubspot_portal_request
 from app.db import get_session, init_db
 from app.models.alert_event import AlertEvent
 
-router = APIRouter(prefix="/alerts", tags=["alerts"])
+# Reads cross-portal alert events, so the caller must present a valid signed
+# HubSpot request (same signature the UI uses). Previously unauthenticated.
+router = APIRouter(
+    prefix="/alerts",
+    tags=["alerts"],
+    dependencies=[Depends(require_hubspot_portal_request)],
+)
 
 
 @router.get("/recent")
