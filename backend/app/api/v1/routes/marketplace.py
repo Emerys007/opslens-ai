@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -358,10 +359,19 @@ def marketplace_install_success(installSessionId: str):
 
 
 def _require_admin_key(supplied: str | None) -> None:
-    expected = str(settings.maintenance_api_key or "").strip()
-    if not expected:
+    # Accept EITHER MAINTENANCE_API_KEY or OPSLENS_MAINTENANCE_KEY.
+    configured = [
+        key
+        for key in (
+            str(settings.maintenance_api_key or "").strip(),
+            str(settings.opslens_maintenance_key or "").strip(),
+        )
+        if key
+    ]
+    if not configured:
         raise HTTPException(status_code=503, detail="Admin API key is not configured.")
-    if str(supplied or "").strip() != expected:
+    supplied_clean = str(supplied or "").strip()
+    if not any(hmac.compare_digest(supplied_clean, key) for key in configured):
         raise HTTPException(status_code=401, detail="Invalid admin key.")
 
 

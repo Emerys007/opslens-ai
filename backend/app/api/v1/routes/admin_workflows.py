@@ -32,14 +32,20 @@ router = APIRouter()
 
 
 def _require_admin_key(supplied: str | None) -> None:
-    expected = str(settings.maintenance_api_key or "").strip()
-    if not expected:
-        # Fail closed: if no key is configured the endpoint is effectively
-        # disabled. This matches the pattern in ticket_maintenance.py
-        # where an unset key blocks access in production. Operators must
-        # explicitly set MAINTENANCE_API_KEY to enable manual triggers.
+    # Accept EITHER MAINTENANCE_API_KEY or OPSLENS_MAINTENANCE_KEY (the deploy
+    # historically set the latter). Fail closed when neither is configured.
+    configured = [
+        key
+        for key in (
+            str(settings.maintenance_api_key or "").strip(),
+            str(settings.opslens_maintenance_key or "").strip(),
+        )
+        if key
+    ]
+    if not configured:
         raise HTTPException(status_code=503, detail="Admin API key is not configured.")
-    if not hmac.compare_digest(str(supplied or "").strip(), expected):
+    supplied_clean = str(supplied or "").strip()
+    if not any(hmac.compare_digest(supplied_clean, key) for key in configured):
         raise HTTPException(status_code=401, detail="Invalid admin key.")
 
 

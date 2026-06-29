@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     # Background workflow polling.
     workflow_poll_interval_seconds: int = 120
     maintenance_api_key: str = ""
+    # Alias accepted by the admin/maintenance endpoints (the deploy historically
+    # used OPSLENS_MAINTENANCE_KEY). Either key authorizes admin calls.
+    opslens_maintenance_key: str = ""
 
     # Alert rewriter (Anthropic Claude). Empty key OR
     # ``alert_rewriter_enabled=False`` disables the rewriter — the

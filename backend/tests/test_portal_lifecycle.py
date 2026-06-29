@@ -226,6 +226,17 @@ class AdminPurgeEndpointTests(_LifecycleBase):
         finally:
             session.close()
 
+    def test_set_plan_accepts_opslens_maintenance_key(self) -> None:
+        # The deploy's OPSLENS_MAINTENANCE_KEY must authorize admin calls too,
+        # not only MAINTENANCE_API_KEY.
+        with patch.object(settings, "opslens_maintenance_key", "opslens-key"):
+            response = self.client.post(
+                f"/api/v1/admin/portals/{self.PORTAL_ID}/plan?plan=professional",
+                headers={"X-OpsLens-Admin-Key": "opslens-key"},
+            )
+        self.assertEqual(200, response.status_code)
+        self.assertEqual("professional", response.json()["plan"])
+
     def test_set_plan_rejects_invalid_plan(self) -> None:
         response = self.client.post(
             f"/api/v1/admin/portals/{self.PORTAL_ID}/plan?plan=bogus",
