@@ -17,10 +17,6 @@ from app.models.webhook_event import WebhookEvent
 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 
-DATA_DIR = Path(__file__).resolve().parents[4] / "data"
-DATA_DIR.mkdir(parents=True, exist_ok=True)
-WEBHOOK_LOG_FILE = DATA_DIR / "hubspot_webhook_events.jsonl"
-
 MAX_SIGNATURE_AGE_MS = 5 * 60 * 1000
 
 URI_DECODE_MAP = {
@@ -119,11 +115,6 @@ def _validate_v3_signature(request: Request, raw_body: bytes) -> dict:
     return result
 
 
-def _append_webhook_log(item: dict) -> None:
-    with WEBHOOK_LOG_FILE.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(item) + "\n")
-
-
 def _ms_to_dt(value) -> datetime | None:
     try:
         if value in (None, ""):
@@ -205,13 +196,6 @@ async def receive_hubspot_webhooks(request: Request):
         if not isinstance(event, dict):
             continue
 
-        log_item = {
-            "receivedAtUtc": datetime.now(timezone.utc).isoformat(),
-            "validation": validation,
-            "event": event,
-        }
-        _append_webhook_log(log_item)
-
         ok, error = _save_event_row(event, validation)
         if ok:
             saved += 1
@@ -226,7 +210,6 @@ async def receive_hubspot_webhooks(request: Request):
         "dbErrors": errors,
         "signatureVersion": validation["signatureVersion"],
         "uriUsedForValidation": validation["uri"],
-        "loggedTo": str(WEBHOOK_LOG_FILE),
     }
 
 

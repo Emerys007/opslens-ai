@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from typing import Any, Callable
 
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models.hubspot_installation import HubSpotInstallation
+from app.models.scheduler_lease import SchedulerLease  # noqa: F401 — register table
+from app.services.scheduler_lease import try_acquire_lease
 from app.services.alert_correlation import correlate_unprocessed_events
 from app.services.alert_rewriter import rewrite_pending_alerts
 from app.services.email_template_polling import poll_portal_email_templates
@@ -94,9 +97,13 @@ def _accumulate_status(summary: dict[str, Any], status_value: str) -> None:
         summary["portalsErrored"] += 1
 
 
-async def run_polling_cycle(session_factory: SessionFactory) -> dict[str, Any]:
+def run_polling_cycle_sync(session_factory: SessionFactory) -> dict[str, Any]:
     """Poll every active portal once for both workflows AND property
     schema. Returns a summary dict.
+
+    Synchronous: all HubSpot/Slack/ticket I/O here is blocking urllib, so this
+    must be run in a worker thread (see ``run_polling_cycle``) to avoid
+    blocking the FastAPI event loop.
 
     Each portal gets two sequential passes per cycle (workflows, then
     properties). Each pass runs in its own session so a transient
@@ -365,6 +372,13 @@ async def run_polling_cycle(session_factory: SessionFactory) -> dict[str, Any]:
     return summary
 
 
+async def run_polling_cycle(session_factory: SessionFactory) -> dict[str, Any]:
+    """Async wrapper that runs the blocking polling cycle in a worker thread so
+    the FastAPI event loop stays responsive during a poll. Manual triggers (the
+    admin endpoint) call this directly and are NOT leader-gated."""
+    return await asyncio.to_thread(run_polling_cycle_sync, session_factory)
+
+
 class WorkflowPollingScheduler:
     """In-process polling loop with a fixed interval.
 
@@ -391,6 +405,12 @@ class WorkflowPollingScheduler:
         )
         self._task: asyncio.Task[None] | None = None
         self._stopping = asyncio.Event()
+        # Leader election: a unique id per process; the lease must outlive one
+        # interval so the active leader keeps renewing it, but expire soon after
+        # a crash so another replica can take over.
+        self._holder_id = str(uuid.uuid4())
+        self._lease_name = "polling_cycle"
+        self._lease_ttl_seconds = self._interval_seconds + 60
 
     def is_running(self) -> bool:
         return self._task is not None and not self._task.done()
@@ -409,9 +429,41 @@ class WorkflowPollingScheduler:
                 return
 
             try:
-                await run_polling_cycle(self._session_factory)
+                # Lease check + the blocking cycle both run off the event loop.
+                await asyncio.to_thread(self._run_cycle_if_leader)
             except Exception:  # noqa: BLE001 — never let the loop die
                 logger.exception("workflow_polling_scheduler.cycle_crashed")
+
+    def _run_cycle_if_leader(self) -> None:
+        """Acquire the leader lease, then (if leader) run one polling cycle.
+        Runs entirely in a worker thread. Fails OPEN on lease errors so a broken
+        lease mechanism can't silently stop polling on a single instance."""
+        acquired = False
+        lease_ok = True
+        session = self._session_factory()
+        if session is not None:
+            try:
+                acquired = try_acquire_lease(
+                    session,
+                    self._lease_name,
+                    self._holder_id,
+                    self._lease_ttl_seconds,
+                )
+            except Exception:  # noqa: BLE001 — lease must not kill polling
+                logger.exception("workflow_polling_scheduler.lease_error")
+                lease_ok = False
+            finally:
+                session.close()
+
+        if not acquired and lease_ok:
+            # Another replica legitimately holds the lease — skip this cycle.
+            logger.debug(
+                "workflow_polling_scheduler.not_leader",
+                extra={"holder": self._holder_id},
+            )
+            return
+
+        run_polling_cycle_sync(self._session_factory)
 
     def start(self) -> None:
         if self.is_running():
