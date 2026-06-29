@@ -28,6 +28,8 @@ from app.models.monitoring_exclusion import (
 )
 from app.models.owner_change_event import OwnerChangeEvent
 from app.models.owner_snapshot import OwnerSnapshot
+from app.models.hubspot_installation import HubSpotInstallation
+from app.models.marketplace_install_session import MarketplaceInstallSession
 from app.models.portal_setting import PortalSetting
 from app.models.property_change_event import PropertyChangeEvent
 from app.models.property_snapshot import PropertySnapshot
@@ -623,6 +625,121 @@ def dashboard_overview(request: Request):
                 "savedAlertRows": len(rows),
                 "visibleRowsAtThreshold": len(visible_rows),
                 "settingsStorage": settings.get("storage", "unknown"),
+            },
+        }
+    finally:
+        session.close()
+
+
+# Agency-tier multi-portal rollup --------------------------------------------
+
+_AGENCY_PLANS = {"agency", "business", "enterprise"}
+_PORTFOLIO_PORTAL_CAP = 50
+
+
+def _find_portals_for_user(session, user_email: str) -> list[str]:
+    """Portals an agency partner manages: ones they installed directly, plus
+    ones installed via their App-Sync partner account. Email match only — a
+    caller can only ever see portals tied to their own (signed) identity."""
+    email = str(user_email or "").strip().lower()
+    if not email:
+        return []
+    portal_ids: set[str] = set()
+    for (pid,) in session.execute(
+        select(HubSpotInstallation.portal_id).where(
+            func.lower(HubSpotInstallation.installing_user_email) == email,
+            HubSpotInstallation.is_active.is_(True),
+        )
+    ).all():
+        if pid:
+            portal_ids.add(str(pid))
+    for (pid,) in session.execute(
+        select(MarketplaceInstallSession.hubspot_portal_id).where(
+            func.lower(MarketplaceInstallSession.partner_user_email) == email,
+        )
+    ).all():
+        if pid:
+            portal_ids.add(str(pid))
+    return sorted(portal_ids)
+
+
+def _portfolio_portal_summary(session, portal_id: str) -> dict:
+    settings = load_portal_settings(session, portal_id)
+    entitlement = get_portal_entitlement(session, portal_id)
+    install = session.get(HubSpotInstallation, portal_id)
+    action_filter = func.lower(Alert.severity).in_(ACTION_REQUIRED_SEVERITIES)
+    watching_filter = func.lower(Alert.severity) == WATCHING_SEVERITY
+    last_poll = _max_timestamp(
+        _latest_timestamp(session, portal_id, WorkflowSnapshot, WorkflowSnapshot.last_seen_at),
+        _latest_timestamp(session, portal_id, PropertySnapshot, PropertySnapshot.last_seen_at),
+        _latest_timestamp(session, portal_id, ListSnapshot, ListSnapshot.last_seen_at),
+        _latest_timestamp(
+            session, portal_id, EmailTemplateSnapshot, EmailTemplateSnapshot.last_seen_at
+        ),
+        _latest_timestamp(session, portal_id, OwnerSnapshot, OwnerSnapshot.last_seen_at),
+    )
+    return {
+        "portalId": portal_id,
+        "hubDomain": str(getattr(install, "hub_domain", "") or ""),
+        "plan": str(entitlement.get("plan") or ""),
+        "active": bool(entitlement.get("active")),
+        "actionRequiredCount": _count_alerts(
+            session, portal_id, Alert.status == STATUS_OPEN, action_filter
+        ),
+        "watchingCount": _count_alerts(
+            session, portal_id, Alert.status == STATUS_OPEN, watching_filter
+        ),
+        "lastPollUtc": _isoformat(last_poll),
+        "slackConnected": bool(str(settings.get("slackWebhookUrl") or "").strip()),
+    }
+
+
+@router.get("/portfolio")
+def dashboard_portfolio(request: Request):
+    """Agency multi-portal rollup: aggregate alert counts across every portal
+    the requesting partner manages. Cross-portal data is returned ONLY when the
+    current portal is on an Agency-tier plan (the gated feature); otherwise just
+    the current portal is returned with agencyEnabled=false."""
+    query = request.query_params
+    portal_id = str(query.get("portalId", "")).strip()
+    user_email = str(query.get("userEmail", "")).strip()
+    if not portal_id:
+        raise HTTPException(status_code=400, detail="portalId is required.")
+
+    empty = {
+        "status": "ok",
+        "agencyEnabled": False,
+        "portals": [],
+        "totals": {"portalCount": 0, "actionRequiredTotal": 0, "watchingTotal": 0},
+    }
+    if not init_db():
+        return empty
+    session = get_session()
+    if session is None:
+        return empty
+    try:
+        current_plan = str(
+            get_portal_entitlement(session, portal_id).get("plan") or ""
+        ).strip().lower()
+        agency_enabled = current_plan in _AGENCY_PLANS
+
+        if agency_enabled:
+            portal_ids = _find_portals_for_user(session, user_email)
+            if portal_id not in portal_ids:
+                portal_ids.append(portal_id)
+            portal_ids = sorted(set(portal_ids))[:_PORTFOLIO_PORTAL_CAP]
+        else:
+            portal_ids = [portal_id]
+
+        summaries = [_portfolio_portal_summary(session, pid) for pid in portal_ids]
+        return {
+            "status": "ok",
+            "agencyEnabled": agency_enabled,
+            "portals": summaries,
+            "totals": {
+                "portalCount": len(summaries),
+                "actionRequiredTotal": sum(s["actionRequiredCount"] for s in summaries),
+                "watchingTotal": sum(s["watchingCount"] for s in summaries),
             },
         }
     finally:

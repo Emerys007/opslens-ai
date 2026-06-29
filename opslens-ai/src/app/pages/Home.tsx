@@ -76,6 +76,28 @@ type OverviewResponse = {
   };
 };
 
+type PortfolioPortal = {
+  portalId?: string;
+  hubDomain?: string;
+  plan?: string;
+  active?: boolean;
+  actionRequiredCount?: number;
+  watchingCount?: number;
+  lastPollUtc?: string | null;
+  slackConnected?: boolean;
+};
+
+type PortfolioResponse = {
+  status?: string;
+  agencyEnabled?: boolean;
+  portals?: PortfolioPortal[];
+  totals?: {
+    portalCount?: number;
+    actionRequiredTotal?: number;
+    watchingTotal?: number;
+  };
+};
+
 type PollNowResponse = {
   status?: string;
   eventsDetected?: number;
@@ -576,6 +598,7 @@ function HomePage({ context }: HomePageProps) {
   const [diagnosticData, setDiagnosticData] =
     useState<InstallDiagnosticResponse | null>(null);
   const [scanningDiagnostic, setScanningDiagnostic] = useState(false);
+  const [portfolio, setPortfolio] = useState<PortfolioResponse | null>(null);
 
   const portalId = String(context?.portal?.id ?? "");
   const userId = String(context?.user?.id ?? "");
@@ -739,6 +762,26 @@ function HomePage({ context }: HomePageProps) {
     return data;
   };
 
+  const loadPortfolio = async () => {
+    if (!portalId) {
+      setPortfolio(null);
+      return null;
+    }
+    const response = await hubspot.fetch(
+      buildUrl("/api/v1/dashboard/portfolio", { portalId, userEmail }),
+      {
+        method: "GET",
+        timeout: 8000,
+      }
+    );
+    if (!response.ok) {
+      return null;
+    }
+    const data = (await response.json()) as PortfolioResponse;
+    setPortfolio(data);
+    return data;
+  };
+
   const refresh = async () => {
     setLoading(true);
     setOverviewError("");
@@ -747,6 +790,7 @@ function HomePage({ context }: HomePageProps) {
       await loadInstallDiagnostic().catch(() => {
         setDiagnosticData(null);
       });
+      await loadPortfolio().catch(() => setPortfolio(null));
     } catch (error) {
       setOverviewError(error instanceof Error ? error.message : "Unknown error");
     } finally {
@@ -958,6 +1002,7 @@ function HomePage({ context }: HomePageProps) {
       loadInstallDiagnostic().catch(() => {
         setDiagnosticData(null);
       });
+      loadPortfolio().catch(() => setPortfolio(null));
     }, 60000);
     return () => clearInterval(intervalId);
   }, [portalId, userId, userEmail, appId, actionPageSize, actionPage]);
@@ -1036,6 +1081,81 @@ function HomePage({ context }: HomePageProps) {
           </Statistics>
         </Flex>
       </Card>
+
+      {portfolio?.agencyEnabled &&
+      Array.isArray(portfolio.portals) &&
+      portfolio.portals.length > 0 ? (
+        <Card>
+          <Flex direction="column" gap="medium">
+            <Flex justify="between" align="center" gap="small" wrap>
+              <Box flex={1}>
+                <Heading>Client portals</Heading>
+                <Text>
+                  Every HubSpot portal you manage with OpsLens, in one place.
+                </Text>
+              </Box>
+              <Tag variant="info">Agency</Tag>
+            </Flex>
+
+            <Statistics>
+              <StatisticsItem
+                label="Portals monitored"
+                number={portfolio.totals?.portalCount ?? portfolio.portals.length}
+              />
+              <StatisticsItem
+                label="Needs action"
+                number={portfolio.totals?.actionRequiredTotal ?? 0}
+              >
+                <Text variant="microcopy">Across all client portals</Text>
+              </StatisticsItem>
+              <StatisticsItem
+                label="Watching"
+                number={portfolio.totals?.watchingTotal ?? 0}
+              />
+            </Statistics>
+
+            <Divider />
+
+            <Flex direction="column" gap="small">
+              {portfolio.portals.map((p) => {
+                const needsAction = Number(p.actionRequiredCount ?? 0);
+                const watching = Number(p.watchingCount ?? 0);
+                return (
+                  <Flex
+                    key={String(p.portalId)}
+                    direction="row"
+                    justify="between"
+                    align="center"
+                    gap="small"
+                    wrap
+                  >
+                    <Box flex={1}>
+                      <Flex direction="column" gap="extra-small">
+                        <Text format={{ fontWeight: "bold" }}>
+                          {p.hubDomain || `Portal ${p.portalId}`}
+                        </Text>
+                        <Text variant="microcopy">
+                          {`${String(p.plan || "—").toUpperCase()} · Slack ${
+                            p.slackConnected ? "connected" : "off"
+                          } · Last poll ${formatTimeAgo(p.lastPollUtc)}`}
+                        </Text>
+                      </Flex>
+                    </Box>
+                    <Flex direction="row" gap="small" align="center" wrap>
+                      <StatusTag variant={needsAction > 0 ? "danger" : "success"}>
+                        {needsAction > 0 ? `${needsAction} need action` : "All clear"}
+                      </StatusTag>
+                      {watching > 0 ? (
+                        <Tag variant="info">{`${watching} watching`}</Tag>
+                      ) : null}
+                    </Flex>
+                  </Flex>
+                );
+              })}
+            </Flex>
+          </Flex>
+        </Card>
+      ) : null}
 
       <Alert
         title={diagnosticBannerText}

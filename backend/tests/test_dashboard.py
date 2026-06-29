@@ -21,7 +21,9 @@ from app.models.alert import (
     Alert,
 )
 from app.models.email_template_snapshot import EmailTemplateSnapshot
+from app.models.hubspot_installation import HubSpotInstallation
 from app.models.list_snapshot import ListSnapshot
+from app.models.portal_entitlement import PortalEntitlement
 from app.models.portal_setting import PortalSetting
 from app.models.workflow_dependency import WorkflowDependency
 from app.models.workflow_snapshot import WorkflowSnapshot
@@ -1301,6 +1303,80 @@ class DashboardEndpointTests(unittest.TestCase):
 
         self.assertEqual(400, response.status_code)
         post_mock.assert_not_called()
+
+
+    def _seed_installation(self, session, portal_id: str, email: str) -> None:
+        session.add(
+            HubSpotInstallation(
+                portal_id=portal_id,
+                installing_user_email=email,
+                access_token="AT",
+                refresh_token="RT",
+                is_active=True,
+            )
+        )
+        session.commit()
+
+    def _seed_entitlement(self, session, portal_id: str, plan: str) -> None:
+        session.add(
+            PortalEntitlement(
+                portal_id=portal_id,
+                plan=plan,
+                billing_interval="monthly",
+                subscription_status="active",
+                trial_approved=False,
+            )
+        )
+        session.commit()
+
+    def test_portfolio_non_agency_returns_only_current_portal(self) -> None:
+        session = self._session()
+        try:
+            self._seed_entitlement(session, self.PORTAL_ID, "professional")
+            # Another portal by the same partner — must NOT leak into a non-agency view.
+            self._seed_installation(session, "88888888", "partner@agency.test")
+            self._seed_entitlement(session, "88888888", "agency")
+        finally:
+            session.close()
+
+        response = self.client.get(
+            f"/api/v1/dashboard/portfolio?portalId={self.PORTAL_ID}"
+            f"&userEmail=partner@agency.test"
+        )
+        self.assertEqual(200, response.status_code)
+        body = response.json()
+        self.assertFalse(body["agencyEnabled"])
+        self.assertEqual(1, body["totals"]["portalCount"])
+        self.assertEqual(self.PORTAL_ID, body["portals"][0]["portalId"])
+
+    def test_portfolio_agency_aggregates_partner_portals(self) -> None:
+        session = self._session()
+        try:
+            self._seed_entitlement(session, self.PORTAL_ID, "agency")
+            self._seed_installation(session, self.PORTAL_ID, "partner@agency.test")
+            self._seed_installation(session, "88888888", "partner@agency.test")
+            self._seed_entitlement(session, "88888888", "agency")
+            self._seed_alert(
+                session,
+                portal_id="88888888",
+                severity=SEVERITY_HIGH,
+                status=STATUS_OPEN,
+                title="Workflow disabled in client portal",
+            )
+        finally:
+            session.close()
+
+        response = self.client.get(
+            f"/api/v1/dashboard/portfolio?portalId={self.PORTAL_ID}"
+            f"&userEmail=partner@agency.test"
+        )
+        self.assertEqual(200, response.status_code)
+        body = response.json()
+        self.assertTrue(body["agencyEnabled"])
+        self.assertEqual(2, body["totals"]["portalCount"])
+        self.assertGreaterEqual(body["totals"]["actionRequiredTotal"], 1)
+        portal_ids = {row["portalId"] for row in body["portals"]}
+        self.assertEqual({self.PORTAL_ID, "88888888"}, portal_ids)
 
 
 if __name__ == "__main__":
