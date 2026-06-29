@@ -5,8 +5,6 @@ import {
   Box,
   Button,
   Card,
-  DescriptionList,
-  DescriptionListItem,
   Divider,
   Flex,
   Form,
@@ -1296,46 +1294,86 @@ function SettingsPage({ context }: { context: any }) {
 
   return (
     <Flex direction="column" gap="medium">
-      <Alert
-        variant="success"
-        title="OpsLens is monitoring this portal"
-      >
-        <Flex direction="column" gap="small">
-          <Text>
-            Portal settings are loaded through the connected-app session, so
-            this page reflects the configuration OpsLens will use for this
-            account.
-          </Text>
-          <DescriptionList direction="row">
-            <DescriptionListItem label="Monitoring">
-              <StatusTag variant={statusVariant}>Active</StatusTag>
-            </DescriptionListItem>
-            <DescriptionListItem label="Last settings sync">
-              {formatTimestamp(monitoringTimestamp)}
-            </DescriptionListItem>
-            <DescriptionListItem label="Portal id">
-              {portalLabel}
-            </DescriptionListItem>
-          </DescriptionList>
-          <Text variant="microcopy">{relativeTime(monitoringTimestamp)}</Text>
+      <Card>
+        <Flex direction="column" gap="medium">
+          <Flex justify="between" align="center" gap="small" wrap>
+            <Flex direction="column" gap="extra-small">
+              <Flex align="center" gap="small" wrap>
+                <Heading>OpsLens is monitoring this portal</Heading>
+                <StatusTag variant={statusVariant}>
+                  {errorMessage ? "Needs attention" : "Active"}
+                </StatusTag>
+              </Flex>
+              <Text variant="microcopy">
+                Live configuration for this connected account — loaded securely
+                over the app session.
+              </Text>
+            </Flex>
+          </Flex>
+
+          <Flex direction="row" gap="medium" wrap>
+            <Box flex={1}>
+              <Tile compact>
+                <Flex direction="column" gap="extra-small">
+                  <Text variant="microcopy">Monitoring</Text>
+                  <Flex align="center" gap="small">
+                    <Tag variant={errorMessage ? "warning" : "success"}>
+                      {errorMessage ? "Check access" : "Active"}
+                    </Tag>
+                  </Flex>
+                  <Text variant="microcopy">
+                    Workflows, properties, segments &amp; templates
+                  </Text>
+                </Flex>
+              </Tile>
+            </Box>
+            <Box flex={1}>
+              <Tile compact>
+                <Flex direction="column" gap="extra-small">
+                  <Text variant="microcopy">Last settings sync</Text>
+                  <Text format={{ fontWeight: "bold" }}>
+                    {formatTimestamp(monitoringTimestamp)}
+                  </Text>
+                  <Text variant="microcopy">
+                    {relativeTime(monitoringTimestamp)}
+                  </Text>
+                </Flex>
+              </Tile>
+            </Box>
+            <Box flex={1}>
+              <Tile compact>
+                <Flex direction="column" gap="extra-small">
+                  <Text variant="microcopy">Portal ID</Text>
+                  <Text format={{ fontWeight: "bold" }}>{portalLabel}</Text>
+                  <Text variant="microcopy">Connected account</Text>
+                </Flex>
+              </Tile>
+            </Box>
+          </Flex>
+
           <Divider />
-          <Flex direction="column" gap="extra-small">
-            <Text variant="microcopy">
-              Segment or email-template options empty, or recently changed what
-              OpsLens can access? Reconnect to grant the latest permissions —
-              you'll re-approve OpsLens in HubSpot, then run a scan.
-            </Text>
-            <Link
+
+          <Flex justify="between" align="center" gap="medium" wrap>
+            <Box flex={1}>
+              <Text variant="microcopy">
+                Segment or email-template pickers empty, or recently changed
+                what OpsLens can access? Reconnect to grant the latest
+                permissions, then run a scan.
+              </Text>
+            </Box>
+            <Button
+              variant="secondary"
+              size="sm"
               href={{
                 url: "https://api.app-sync.com/oauth/start",
                 external: true,
               }}
             >
-              Reconnect / grant new permissions
-            </Link>
+              Reconnect / grant permissions
+            </Button>
           </Flex>
         </Flex>
-      </Alert>
+      </Card>
 
       {!portalId ? (
         <Alert variant="warning" title="Portal context is still loading">
