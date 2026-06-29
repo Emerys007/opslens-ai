@@ -25,6 +25,7 @@ from app.models.list_snapshot import ListSnapshot
 from app.models.portal_setting import PortalSetting
 from app.models.workflow_dependency import WorkflowDependency
 from app.models.workflow_snapshot import WorkflowSnapshot
+from app.services.slack_oauth import SlackOAuthError
 from tests.hubspot_fetch_auth import SignedHubSpotTestClient
 
 
@@ -1171,6 +1172,99 @@ class DashboardEndpointTests(unittest.TestCase):
         self.assertEqual(200, response.status_code)
         self.assertEqual(1, response.json()["eventsDetected"])
         workflow_mock.assert_called_once()
+
+    def test_slack_status_reports_connected_when_webhook_present(self) -> None:
+        session = self._session()
+        try:
+            session.add(
+                PortalSetting(
+                    portal_id=self.PORTAL_ID,
+                    slack_webhook_url="https://hooks.slack.com/services/T/B/x",
+                    slack_channel_name="#ops-alerts",
+                    slack_team_name="Acme",
+                )
+            )
+            session.commit()
+        finally:
+            session.close()
+
+        response = self.client.get(
+            f"/api/v1/dashboard/slack/status?portalId={self.PORTAL_ID}"
+        )
+
+        self.assertEqual(200, response.status_code)
+        payload = response.json()
+        self.assertTrue(payload["connected"])
+        self.assertEqual("#ops-alerts", payload["channel"])
+        self.assertEqual("Acme", payload["team"])
+
+    def test_slack_status_reports_not_connected_without_webhook(self) -> None:
+        response = self.client.get(
+            f"/api/v1/dashboard/slack/status?portalId={self.PORTAL_ID}"
+        )
+
+        self.assertEqual(200, response.status_code)
+        payload = response.json()
+        self.assertFalse(payload["connected"])
+        self.assertEqual("", payload["channel"])
+
+    def test_slack_install_url_returns_authorization_url(self) -> None:
+        with patch(
+            "app.api.v1.routes.dashboard.build_slack_authorize_url",
+            return_value="https://slack.com/oauth/v2/authorize?state=abc",
+        ) as build_mock:
+            response = self.client.get(
+                f"/api/v1/dashboard/slack/install-url?portalId={self.PORTAL_ID}"
+            )
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(
+            "https://slack.com/oauth/v2/authorize?state=abc",
+            response.json()["authorizationUrl"],
+        )
+        self.assertEqual(self.PORTAL_ID, build_mock.call_args.args[0])
+
+    def test_slack_install_url_returns_503_when_not_configured(self) -> None:
+        with patch(
+            "app.api.v1.routes.dashboard.build_slack_authorize_url",
+            side_effect=SlackOAuthError("Slack is not configured (SLACK_CLIENT_ID)."),
+        ):
+            response = self.client.get(
+                f"/api/v1/dashboard/slack/install-url?portalId={self.PORTAL_ID}"
+            )
+
+        self.assertEqual(503, response.status_code)
+
+    def test_slack_disconnect_clears_connection(self) -> None:
+        session = self._session()
+        try:
+            session.add(
+                PortalSetting(
+                    portal_id=self.PORTAL_ID,
+                    slack_webhook_url="https://hooks.slack.com/services/T/B/x",
+                    slack_channel_name="#ops-alerts",
+                    slack_team_name="Acme",
+                )
+            )
+            session.commit()
+        finally:
+            session.close()
+
+        response = self.client.post(
+            f"/api/v1/dashboard/slack/disconnect?portalId={self.PORTAL_ID}"
+        )
+
+        self.assertEqual(200, response.status_code)
+        self.assertFalse(response.json()["connected"])
+
+        session = self._session()
+        try:
+            row = session.get(PortalSetting, self.PORTAL_ID)
+            self.assertEqual("", row.slack_webhook_url)
+            self.assertEqual("", row.slack_channel_name)
+            self.assertEqual("", row.slack_team_name)
+        finally:
+            session.close()
 
 
 if __name__ == "__main__":

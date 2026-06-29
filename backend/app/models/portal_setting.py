@@ -20,6 +20,11 @@ class PortalSetting(Base):
     # starts receiving Slack notifications and tickets without configuration.
     slack_delivery_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     ticket_delivery_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Set when Slack is connected via the OAuth "incoming-webhook" flow: the
+    # team and channel the webhook posts to (for display). The webhook URL
+    # itself is stored in slack_webhook_url (shared with manual setup).
+    slack_team_name: Mapped[str] = mapped_column(Text, default="")
+    slack_channel_name: Mapped[str] = mapped_column(Text, default="")
     monitoring_coverage: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     install_diagnostic_summary: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 

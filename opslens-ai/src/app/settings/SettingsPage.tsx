@@ -397,6 +397,14 @@ function SettingsPage({ context }: { context: any }) {
   const [ticketDeliveryEnabled, setTicketDeliveryEnabled] = useState(true);
   const [lastSavedAt, setLastSavedAt] = useState("");
   const [settingsStorage, setSettingsStorage] = useState("");
+  const [slackConnected, setSlackConnected] = useState(false);
+  const [slackChannel, setSlackChannel] = useState("");
+  const [slackTeam, setSlackTeam] = useState("");
+  const [slackStatusLoading, setSlackStatusLoading] = useState(false);
+  const [slackAuthUrl, setSlackAuthUrl] = useState("");
+  const [slackConnectError, setSlackConnectError] = useState("");
+  const [slackDisconnecting, setSlackDisconnecting] = useState(false);
+  const [showManualWebhook, setShowManualWebhook] = useState(false);
   const [coverageLoading, setCoverageLoading] = useState(false);
   const [coverageSaving, setCoverageSaving] = useState(false);
   const [coverageError, setCoverageError] = useState("");
@@ -466,6 +474,14 @@ function SettingsPage({ context }: { context: any }) {
         objectTypeId: propertyExclusionObjectTypeId,
       }),
     [portalId, propertyExclusionObjectTypeId]
+  );
+  const slackStatusUrl = useMemo(
+    () => buildUrl(`${DASHBOARD_API_BASE}/slack/status`, { portalId }),
+    [portalId]
+  );
+  const slackInstallUrl = useMemo(
+    () => buildUrl(`${DASHBOARD_API_BASE}/slack/install-url`, { portalId }),
+    [portalId]
   );
 
   const formLocked = loading || saving || !hasLoadedSettings || !portalId;
@@ -612,6 +628,103 @@ function SettingsPage({ context }: { context: any }) {
 
     loadPropertyPickerOptions();
   }, [portalId, propertiesUrl, propertyExclusionObjectTypeId]);
+
+  useEffect(() => {
+    if (!portalId) {
+      return;
+    }
+
+    loadSlackStatus();
+    loadSlackAuthUrl();
+  }, [portalId, slackStatusUrl, slackInstallUrl]);
+
+  async function loadSlackStatus() {
+    if (!portalId) {
+      return;
+    }
+
+    setSlackStatusLoading(true);
+    setSlackConnectError("");
+
+    try {
+      const response = await hubspot.fetch(slackStatusUrl, {
+        method: "GET",
+        timeout: 15000,
+      });
+      if (!response.ok) {
+        throw new Error(`Backend returned status ${response.status}`);
+      }
+
+      const data = (await response.json()) as {
+        connected?: boolean;
+        channel?: string;
+        team?: string;
+      };
+      setSlackConnected(Boolean(data?.connected));
+      setSlackChannel(String(data?.channel ?? ""));
+      setSlackTeam(String(data?.team ?? ""));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setSlackConnectError(message);
+    } finally {
+      setSlackStatusLoading(false);
+    }
+  }
+
+  async function loadSlackAuthUrl() {
+    if (!portalId) {
+      return;
+    }
+
+    try {
+      const response = await hubspot.fetch(slackInstallUrl, {
+        method: "GET",
+        timeout: 15000,
+      });
+      if (!response.ok) {
+        // 503 means Slack isn't configured yet — leave the manual webhook path.
+        setSlackAuthUrl("");
+        return;
+      }
+
+      const data = (await response.json()) as { authorizationUrl?: string };
+      setSlackAuthUrl(String(data?.authorizationUrl ?? ""));
+    } catch {
+      setSlackAuthUrl("");
+    }
+  }
+
+  async function disconnectSlack() {
+    if (!portalId) {
+      return;
+    }
+
+    setSlackDisconnecting(true);
+    setSlackConnectError("");
+
+    try {
+      const url = buildUrl(`${DASHBOARD_API_BASE}/slack/disconnect`, { portalId });
+      const response = await hubspot.fetch(url, {
+        method: "POST",
+        timeout: 15000,
+      });
+      if (!response.ok) {
+        throw new Error(`Backend returned status ${response.status}`);
+      }
+
+      setSlackConnected(false);
+      setSlackChannel("");
+      setSlackTeam("");
+      setSlackWebhookUrl("");
+      await loadSlackStatus();
+      await loadSlackAuthUrl();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setSlackConnectError(message);
+    } finally {
+      setSlackDisconnecting(false);
+    }
+  }
 
   async function loadMonitoringCoverage() {
     if (!portalId) {
@@ -1246,17 +1359,100 @@ function SettingsPage({ context }: { context: any }) {
                         </Text>
                       </Flex>
 
-                      <Input
-                        label="Slack webhook URL"
-                        name="slackWebhookUrl"
-                        value={slackWebhookUrl}
-                        type="text"
-                        onChange={(value) =>
-                          setSlackWebhookUrl(String(value ?? ""))
-                        }
-                        readOnly={formLocked}
-                        description="OpsLens posts Slack alerts to this incoming webhook when a monitored change meets the selected threshold."
-                      />
+                      <Flex direction="column" gap="small">
+                        <Flex align="center" gap="small" wrap>
+                          <Text format={{ fontWeight: "bold" }}>Slack</Text>
+                          <Tag variant={slackConnected ? "success" : "default"}>
+                            {slackConnected ? "Connected" : "Not connected"}
+                          </Tag>
+                        </Flex>
+
+                        {slackConnected ? (
+                          <Flex direction="column" gap="small">
+                            <Text>OpsLens posts alerts to this Slack channel:</Text>
+                            <Flex align="center" gap="small" wrap>
+                              <Tag variant="success">
+                                {slackChannel || "your selected channel"}
+                              </Tag>
+                              {slackTeam ? (
+                                <Text variant="microcopy">
+                                  {slackTeam} workspace
+                                </Text>
+                              ) : null}
+                            </Flex>
+                            <Flex direction="row" gap="small" align="center" wrap>
+                              {slackAuthUrl ? (
+                                <Link
+                                  href={{ url: slackAuthUrl, external: true }}
+                                >
+                                  Reconnect or change channel
+                                </Link>
+                              ) : null}
+                              <Button
+                                type="button"
+                                variant="secondary"
+                                disabled={slackDisconnecting || !portalId}
+                                onClick={disconnectSlack}
+                              >
+                                {slackDisconnecting
+                                  ? "Disconnecting…"
+                                  : "Disconnect Slack"}
+                              </Button>
+                            </Flex>
+                          </Flex>
+                        ) : (
+                          <Flex direction="column" gap="small">
+                            <Text>
+                              Connect your Slack workspace and pick a channel —
+                              OpsLens posts alerts there. No webhook URLs to copy.
+                            </Text>
+                            {slackAuthUrl ? (
+                              <Link href={{ url: slackAuthUrl, external: true }}>
+                                Connect Slack &amp; choose a channel
+                              </Link>
+                            ) : slackStatusLoading ? (
+                              <Text variant="microcopy">
+                                Preparing the Slack connection…
+                              </Text>
+                            ) : (
+                              <Text variant="microcopy">
+                                One-click Slack connect isn't available right
+                                now. Use the manual webhook option below.
+                              </Text>
+                            )}
+                          </Flex>
+                        )}
+
+                        {slackConnectError ? (
+                          <Alert variant="warning" title="Slack">
+                            {slackConnectError}
+                          </Alert>
+                        ) : null}
+
+                        <Divider />
+
+                        <Toggle
+                          label="Use a manual Slack webhook URL instead (advanced)"
+                          checked={showManualWebhook}
+                          readonly={formLocked}
+                          onChange={(value) =>
+                            setShowManualWebhook(Boolean(value))
+                          }
+                        />
+                        {showManualWebhook ? (
+                          <Input
+                            label="Slack webhook URL"
+                            name="slackWebhookUrl"
+                            value={slackWebhookUrl}
+                            type="text"
+                            onChange={(value) =>
+                              setSlackWebhookUrl(String(value ?? ""))
+                            }
+                            readOnly={formLocked}
+                            description="OpsLens posts Slack alerts to this incoming webhook when a monitored change meets the selected threshold. Connecting Slack above sets this automatically."
+                          />
+                        ) : null}
+                      </Flex>
 
                       <Select
                         label="Slack alert threshold"

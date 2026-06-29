@@ -64,6 +64,7 @@ from app.services.install_diagnostic import (
     run_install_diagnostic,
 )
 from app.services.remediation_guidance import fix_guidance_for
+from app.services.slack_oauth import SlackOAuthError, build_slack_authorize_url
 from app.services.workflow_remediation import (
     WorkflowRemediationError,
     reenable_workflow,
@@ -623,6 +624,65 @@ def dashboard_overview(request: Request):
                 "settingsStorage": settings.get("storage", "unknown"),
             },
         }
+    finally:
+        session.close()
+
+
+@router.get("/slack/install-url")
+def dashboard_slack_install_url(request: Request):
+    """Return the Slack OAuth URL (incoming-webhook). State is signed for the
+    authenticated portal, so the Slack callback can only attach the connection
+    to this portal — no cross-tenant redirection."""
+    portal_id = str(request.query_params.get("portalId", "")).strip()
+    if not portal_id:
+        raise HTTPException(status_code=400, detail="portalId is required.")
+    try:
+        return {"status": "ok", "authorizationUrl": build_slack_authorize_url(portal_id)}
+    except SlackOAuthError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.get("/slack/status")
+def dashboard_slack_status(request: Request):
+    portal_id = str(request.query_params.get("portalId", "")).strip()
+    if not portal_id:
+        raise HTTPException(status_code=400, detail="portalId is required.")
+
+    db_ready = init_db()
+    session = get_session()
+    if not db_ready or session is None:
+        return {"status": "ok", "connected": False, "channel": "", "team": ""}
+    try:
+        row = session.get(PortalSetting, portal_id)
+        webhook = str(getattr(row, "slack_webhook_url", "") or "").strip() if row else ""
+        return {
+            "status": "ok",
+            "connected": bool(webhook),
+            "channel": (str(getattr(row, "slack_channel_name", "") or "") if row else ""),
+            "team": (str(getattr(row, "slack_team_name", "") or "") if row else ""),
+        }
+    finally:
+        session.close()
+
+
+@router.post("/slack/disconnect")
+def dashboard_slack_disconnect(request: Request):
+    portal_id = str(request.query_params.get("portalId", "")).strip()
+    if not portal_id:
+        raise HTTPException(status_code=400, detail="portalId is required.")
+
+    db_ready = init_db()
+    session = get_session()
+    if not db_ready or session is None:
+        raise HTTPException(status_code=503, detail="Database is not configured.")
+    try:
+        row = session.get(PortalSetting, portal_id)
+        if row is not None:
+            row.slack_webhook_url = ""
+            row.slack_channel_name = ""
+            row.slack_team_name = ""
+            session.commit()
+        return {"status": "ok", "connected": False}
     finally:
         session.close()
 

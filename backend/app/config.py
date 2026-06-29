@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     stripe_price_business_monthly: str = ""
     stripe_price_business_yearly: str = ""
 
+    # Slack "Connect" OAuth (incoming-webhook flow). The redirect URI must be
+    # registered on the Slack app as https://api.app-sync.com/slack/oauth-callback.
+    slack_client_id: str = ""
+    slack_client_secret: str = ""
+
     # Background workflow polling.
     workflow_poll_interval_seconds: int = 120
     maintenance_api_key: str = ""

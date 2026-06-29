@@ -9,6 +9,7 @@ from app.core.logging import configure_logging, logger
 from app.db import get_session, init_db
 from app.routes.email_importer_gateway import router as email_importer_gateway_router
 from app.routes.oauth import router as oauth_router
+from app.routes.slack_oauth import router as slack_oauth_router
 from app.services.workflow_polling_scheduler import WorkflowPollingScheduler
 
 configure_logging()
@@ -68,6 +69,10 @@ app.add_middleware(
 # Top-level OAuth routes must not sit behind /api/v1 because the configured
 # HubSpot redirect URL is https://api.app-sync.com/oauth-callback
 app.include_router(oauth_router)
+
+# Slack "Connect" OAuth callback (Slack redirects to
+# https://api.app-sync.com/slack/oauth-callback).
+app.include_router(slack_oauth_router)
 
 # Shared App-Sync gateway branch for Historic Email Importer. This keeps the
 # OpsLens API root and /api/v1 routes untouched while forwarding only
