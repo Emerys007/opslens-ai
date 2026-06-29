@@ -35,7 +35,9 @@
         "https://api.app-sync.com"
       ],
       "iframe": [],
-      "img": []
+      "img": [
+        "https://platform.slack-edge.com"
+      ]
     },
     "support": {
       "supportEmail": "support@app-sync.com",

@@ -11,6 +11,7 @@ import {
   Flex,
   Form,
   Heading,
+  Image,
   Input,
   Link,
   Select,
@@ -1407,9 +1408,19 @@ function SettingsPage({ context }: { context: any }) {
                               OpsLens posts alerts there. No webhook URLs to copy.
                             </Text>
                             {slackAuthUrl ? (
-                              <Link href={{ url: slackAuthUrl, external: true }}>
-                                Connect Slack &amp; choose a channel
-                              </Link>
+                              <Flex direction="column" gap="extra-small">
+                                <Image
+                                  src="https://platform.slack-edge.com/img/add_to_slack@2x.png"
+                                  href={{ url: slackAuthUrl, external: true }}
+                                  width={139}
+                                  height={40}
+                                  alt="Add to Slack"
+                                />
+                                <Text variant="microcopy">
+                                  Opens Slack to approve OpsLens and pick a
+                                  channel.
+                                </Text>
+                              </Flex>
                             ) : slackStatusLoading ? (
                               <Text variant="microcopy">
                                 Preparing the Slack connection…
