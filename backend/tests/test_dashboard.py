@@ -1329,6 +1329,23 @@ class DashboardEndpointTests(unittest.TestCase):
         )
         session.commit()
 
+    def test_inactive_installation_blocks_portal_data(self) -> None:
+        # Per-portal binding: an uninstalled/deauthorized portal (inactive
+        # install row) cannot have its data served, even with a valid signature.
+        session = self._session()
+        try:
+            session.add(
+                HubSpotInstallation(portal_id=self.PORTAL_ID, is_active=False)
+            )
+            session.commit()
+        finally:
+            session.close()
+
+        response = self.client.get(
+            f"/api/v1/dashboard/overview?portalId={self.PORTAL_ID}"
+        )
+        self.assertEqual(403, response.status_code)
+
     def test_overview_topline_counts_come_from_v2_alert_table(self) -> None:
         session = self._session()
         try:

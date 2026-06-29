@@ -5,7 +5,7 @@ import hmac
 import time
 from urllib.parse import unquote, urlparse
 
-from fastapi import HTTPException, Request, status
+from fastapi import Depends, HTTPException, Request, status
 
 from app.config import settings
 
@@ -177,3 +177,37 @@ async def require_hubspot_portal_request(request: Request) -> HubSpotPortalReque
         user_email=_single_signed_query_value(request, "userEmail"),
         app_id=app_id,
     )
+
+
+async def require_active_portal_installation(
+    portal_request: "HubSpotPortalRequest" = Depends(require_hubspot_portal_request),
+) -> "HubSpotPortalRequest":
+    """Stricter per-portal binding layered on the signature check: reject
+    requests for a portal whose OpsLens installation has been deauthorized /
+    uninstalled, so an uninstalled portal's residual data can never be served.
+
+    Tolerant by design — if there is NO installation record at all (fresh,
+    dev, or unprovisioned portal), the request is allowed; only an explicitly
+    INACTIVE install is rejected. This composes with require_hubspot_portal_request
+    (which runs first) as defense-in-depth. NOTE: HubSpot's UI-extension fetch
+    signs with the app's single shared secret, so this is not a cryptographic
+    per-portal binding — the root trust remains the protected client secret +
+    HubSpot's context attestation of portalId."""
+    from app.db import get_session, init_db
+    from app.models.hubspot_installation import HubSpotInstallation
+
+    if not init_db():
+        return portal_request
+    session = get_session()
+    if session is None:
+        return portal_request
+    try:
+        row = session.get(HubSpotInstallation, portal_request.portal_id)
+        if row is not None and not row.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This portal's OpsLens installation is not active.",
+            )
+        return portal_request
+    finally:
+        session.close()

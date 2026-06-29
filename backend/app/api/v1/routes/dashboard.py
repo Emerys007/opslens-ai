@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import case, desc, func, select
 
-from app.core.security import require_hubspot_portal_request
+from app.core.security import require_active_portal_installation
 from app.db import get_session, init_db
 from app.models.alert import (
     SOURCE_EVENT_WORKFLOW_DISABLED,
@@ -77,7 +77,7 @@ from app.services.workflow_polling import poll_portal_workflows
 router = APIRouter(
     prefix="/dashboard",
     tags=["dashboard"],
-    dependencies=[Depends(require_hubspot_portal_request)],
+    dependencies=[Depends(require_active_portal_installation)],
 )
 
 ACTION_REQUIRED_SEVERITIES = ("critical", "high")

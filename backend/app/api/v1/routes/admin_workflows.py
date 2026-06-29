@@ -21,6 +21,8 @@ from app.services.dependency_mapping import (
     find_workflows_affected_by_property,
     list_workflow_dependencies,
 )
+from app.models.portal_entitlement import PortalEntitlement
+from app.services.marketplace_billing import normalize_plan
 from app.services.portal_purge import purge_portal_data
 from app.services.property_polling import poll_portal_properties
 from app.services.workflow_polling import poll_portal_workflows
@@ -66,6 +68,50 @@ def trigger_workflow_poll(
         except Exception:  # noqa: BLE001
             session.rollback()
             raise
+    finally:
+        session.close()
+
+
+@router.post("/admin/portals/{portal_id}/plan")
+def set_portal_plan(
+    portal_id: str = Path(..., min_length=1),
+    plan: str = Query(..., description="starter | professional | agency"),
+    x_opslens_admin_key: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Override a portal's entitlement plan (support / demo). Sets the plan and
+    marks the subscription active so tier-gated features (detection categories,
+    multi-portal dashboard, white-label) unlock. Maintenance-key gated."""
+    _require_admin_key(x_opslens_admin_key)
+    try:
+        plan_norm = normalize_plan(plan)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    portal_key = str(portal_id or "").strip()
+    if not portal_key:
+        raise HTTPException(status_code=400, detail="portal_id is required.")
+
+    session = get_session()
+    if session is None:
+        raise HTTPException(status_code=503, detail="Database is not configured.")
+    try:
+        row = session.get(PortalEntitlement, portal_key)
+        if row is None:
+            row = PortalEntitlement(
+                portal_id=portal_key,
+                billing_interval="monthly",
+                trial_approved=False,
+            )
+            session.add(row)
+        row.plan = plan_norm
+        row.subscription_status = "active"
+        session.commit()
+        return {
+            "status": "ok",
+            "portalId": portal_key,
+            "plan": plan_norm,
+            "subscriptionStatus": row.subscription_status,
+        }
     finally:
         session.close()
 

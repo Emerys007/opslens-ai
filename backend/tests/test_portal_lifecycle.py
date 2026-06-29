@@ -205,6 +205,34 @@ class AdminPurgeEndpointTests(_LifecycleBase):
         self.client.close()
         super().tearDown()
 
+    def test_set_plan_requires_key_and_sets_agency(self) -> None:
+        unsigned = self.client.post(
+            f"/api/v1/admin/portals/{self.PORTAL_ID}/plan?plan=agency"
+        )
+        self.assertEqual(401, unsigned.status_code)
+
+        response = self.client.post(
+            f"/api/v1/admin/portals/{self.PORTAL_ID}/plan?plan=agency",
+            headers={"X-OpsLens-Admin-Key": "test-admin-key"},
+        )
+        self.assertEqual(200, response.status_code)
+        self.assertEqual("agency", response.json()["plan"])
+
+        session = self._session()
+        try:
+            row = session.get(PortalEntitlement, self.PORTAL_ID)
+            self.assertEqual("agency", row.plan)
+            self.assertEqual("active", row.subscription_status)
+        finally:
+            session.close()
+
+    def test_set_plan_rejects_invalid_plan(self) -> None:
+        response = self.client.post(
+            f"/api/v1/admin/portals/{self.PORTAL_ID}/plan?plan=bogus",
+            headers={"X-OpsLens-Admin-Key": "test-admin-key"},
+        )
+        self.assertEqual(400, response.status_code)
+
     def test_purge_endpoint_requires_admin_key(self) -> None:
         response = self.client.post(
             f"/api/v1/admin/portals/{self.PORTAL_ID}/purge"
