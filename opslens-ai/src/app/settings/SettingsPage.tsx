@@ -1,16 +1,24 @@
 import * as React from "react";
 import { useEffect, useMemo, useState } from "react";
 import {
-  Accordion,
+  Alert,
   Box,
   Button,
+  Card,
+  DescriptionList,
+  DescriptionListItem,
   Divider,
   Flex,
   Form,
   Heading,
   Input,
   Select,
+  Statistics,
+  StatisticsItem,
   StatusTag,
+  Tab,
+  Tabs,
+  Tag,
   Text,
   Tile,
   Toggle,
@@ -1167,816 +1175,844 @@ function SettingsPage({ context }: { context: any }) {
 
   return (
     <Flex direction="column" gap="medium">
-      <Tile>
-        <Flex direction="column" gap="medium">
-          <Flex justify="between" align="center" gap="small" wrap>
-            <Box flex={1}>
-              <SectionHeader
-                eyebrow="System status"
-                title="OpsLens is monitoring this HubSpot portal"
-                body="Portal settings are loaded through the connected-app session, so the page reflects the configuration OpsLens will use for this account."
-              />
-            </Box>
-            <StatusTag variant="success">Monitoring active</StatusTag>
-          </Flex>
+      <Alert
+        variant="success"
+        title="OpsLens is monitoring this portal"
+      >
+        <Flex direction="column" gap="small">
+          <Text>
+            Portal settings are loaded through the connected-app session, so
+            this page reflects the configuration OpsLens will use for this
+            account.
+          </Text>
+          <DescriptionList direction="row">
+            <DescriptionListItem label="Monitoring">
+              <StatusTag variant={statusVariant}>Active</StatusTag>
+            </DescriptionListItem>
+            <DescriptionListItem label="Last settings sync">
+              {formatTimestamp(monitoringTimestamp)}
+            </DescriptionListItem>
+            <DescriptionListItem label="Portal id">
+              {portalLabel}
+            </DescriptionListItem>
+          </DescriptionList>
+          <Text variant="microcopy">{relativeTime(monitoringTimestamp)}</Text>
         </Flex>
-      </Tile>
+      </Alert>
 
-      <Flex direction="row" gap="small">
-        <Box flex={1}>
-          <StatusMetric
-            label="Monitoring"
-            value="Active"
-            detail={relativeTime(monitoringTimestamp)}
-            status={statusVariant}
-          />
-        </Box>
-        <Box flex={1}>
-          <StatusMetric
-            label="Last settings sync"
-            value={formatTimestamp(monitoringTimestamp)}
-            detail="Settings synced from OpsLens backend"
-          />
-        </Box>
-        <Box flex={1}>
-          <StatusMetric
-            label="Portal"
-            value={portalLabel}
-            detail="Connected via OAuth"
-          />
-        </Box>
-      </Flex>
+      {!portalId ? (
+        <Alert variant="warning" title="Portal context is still loading">
+          Portal context is still loading from HubSpot.
+        </Alert>
+      ) : null}
 
-      <Accordion title="Alert routing" defaultOpen size="md">
-        <Form onSubmit={saveSettings}>
-          <Flex direction="column" gap="medium">
-            <Flex direction="row" gap="small" align="start">
-            <Box flex={1}>
-              <Tile>
-                <Flex direction="column" gap="medium">
-                  <SectionHeader
-                    eyebrow="Alert routing"
-                    title="Send the right alerts to the right place"
-                    body="Choose where OpsLens should deliver workflow risk signals and how sensitive Slack should be for this portal."
-                  />
-
-                  <Input
-                    label="Slack webhook URL"
-                    name="slackWebhookUrl"
-                    value={slackWebhookUrl}
-                    type="text"
-                    onChange={(value) =>
-                      setSlackWebhookUrl(String(value ?? ""))
-                    }
-                    readOnly={formLocked}
-                    description="OpsLens posts Slack alerts to this incoming webhook when a monitored change meets the selected threshold."
-                  />
-
-                  <Select
-                    label="Slack alert threshold"
-                    name="alertThreshold"
-                    value={alertThreshold}
-                    onChange={(value) =>
-                      setAlertThreshold(String(value ?? "medium"))
-                    }
-                    readOnly={formLocked}
-                    description="Use a higher threshold for quiet client channels, or medium when consultants want earlier warning on schema edits."
-                    options={[
-                      { label: "Critical only", value: "critical" },
-                      { label: "High and critical", value: "high" },
-                      { label: "Medium, high, and critical", value: "medium" },
-                    ]}
-                  />
-
-                  <Flex direction="row" gap="medium">
-                    <Box flex={1}>
-                      <DeliveryToggle
-                        label="Send Slack alerts"
-                        checked={slackDeliveryEnabled}
-                        disabled={formLocked}
-                        onChange={setSlackDeliveryEnabled}
-                        description="Slack delivery is best for fast triage by the consultant or operations team watching the portal."
-                      />
-                    </Box>
-                    <Box flex={1}>
-                      <DeliveryToggle
-                        label="Create HubSpot tickets"
-                        checked={ticketDeliveryEnabled}
-                        disabled={formLocked}
-                        onChange={setTicketDeliveryEnabled}
-                        description="Ticket delivery keeps a durable HubSpot record for issues that need owner assignment and follow-up."
-                      />
-                    </Box>
-                  </Flex>
-
-                  <Flex direction="row" justify="end" gap="small">
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      disabled={formLocked}
-                      onClick={handleTestAlert}
-                    >
-                      Test alert
-                    </Button>
-                    <Button
-                      type="submit"
-                      variant="primary"
-                      disabled={formLocked}
-                    >
-                      {saving ? "Saving…" : "Save settings"}
-                    </Button>
-                  </Flex>
-
-                  {saveMessage ? (
-                    <Flex align="center" gap="small" wrap>
-                      <StatusTag variant="success">Saved</StatusTag>
-                      <Text>{saveMessage}</Text>
-                    </Flex>
-                  ) : null}
-                  {testMessage ? (
-                    <Flex align="center" gap="small" wrap>
-                      <StatusTag variant="warning">Test unavailable</StatusTag>
-                      <Text>{testMessage}</Text>
-                    </Flex>
-                  ) : null}
-                  {errorMessage ? (
-                    <Flex align="center" gap="small" wrap>
-                      <StatusTag variant="danger">Error</StatusTag>
-                      <Text>{errorMessage}</Text>
-                    </Flex>
-                  ) : null}
-                  {!portalId ? (
-                    <StatusTag variant="warning">
-                      Portal context is still loading from HubSpot.
-                    </StatusTag>
-                  ) : null}
-                </Flex>
-              </Tile>
-            </Box>
-
-            <Box flex={1}>
-              <Flex direction="column" gap="small">
-                <Tile>
-                  <Flex direction="column" gap="medium">
-                    <Text format={{ fontWeight: "bold" }}>
-                      Slack preview — {thresholdLabel(alertThreshold)}
-                    </Text>
-                    <Divider />
-                    <Box>
-                      <Flex direction="column" gap="small">
-                        <Flex align="center" gap="small" wrap>
-                          <Text>{thresholdEmoji(alertThreshold)}</Text>
-                          <Text format={{ fontWeight: "bold" }}>
-                            Property 'Lead Source' archived — 1 workflow(s)
-                            affected
-                          </Text>
-                        </Flex>
+      <Tabs variant="enclosed" defaultSelected="alert-routing">
+        <Tab tabId="alert-routing" title="Alert routing">
+          <Form onSubmit={saveSettings}>
+            <Flex direction="column" gap="medium">
+              <Flex direction="row" gap="small" align="start">
+                <Box flex={1}>
+                  <Card>
+                    <Flex direction="column" gap="medium">
+                      <Flex direction="column" gap="extra-small">
+                        <Heading>Send the right alerts to the right place</Heading>
                         <Text>
-                          Lead Source was archived in HubSpot, but the Lead
-                          Nurture workflow still references it in enrollment
-                          criteria. New contacts may skip the intended route
-                          until the property is restored or the workflow
-                          reference is replaced.
-                        </Text>
-                        <Flex direction="column" gap="small">
-                          <Text format={{ fontWeight: "bold" }}>
-                            Recommended action
-                          </Text>
-                          <Text>
-                            Open the workflow, replace the archived property
-                            reference, then rerun enrollment tests for recent
-                            leads.
-                          </Text>
-                        </Flex>
-                        <Divider />
-                        <Text>
-                          OpsLens • Portal {portalLabel} • Detected just now
+                          Choose where OpsLens should deliver workflow risk
+                          signals and how sensitive Slack should be for this
+                          portal.
                         </Text>
                       </Flex>
-                    </Box>
-                  </Flex>
-                </Tile>
 
-              </Flex>
-            </Box>
-            </Flex>
-          </Flex>
-        </Form>
-      </Accordion>
+                      <Input
+                        label="Slack webhook URL"
+                        name="slackWebhookUrl"
+                        value={slackWebhookUrl}
+                        type="text"
+                        onChange={(value) =>
+                          setSlackWebhookUrl(String(value ?? ""))
+                        }
+                        readOnly={formLocked}
+                        description="OpsLens posts Slack alerts to this incoming webhook when a monitored change meets the selected threshold."
+                      />
 
-      <Accordion title={coverageTitle} size="md">
-        <Tile>
-          <Flex direction="column" gap="medium">
-            <SectionHeader
-              eyebrow="Monitoring coverage"
-              title="Choose what OpsLens watches"
-              body="OpsLens alerts you when something changes in your portal that can break an active automation."
-            />
+                      <Select
+                        label="Slack alert threshold"
+                        name="alertThreshold"
+                        value={alertThreshold}
+                        onChange={(value) =>
+                          setAlertThreshold(String(value ?? "medium"))
+                        }
+                        readOnly={formLocked}
+                        description="Use a higher threshold for quiet client channels, or medium when consultants want earlier warning on schema edits."
+                        options={[
+                          { label: "Critical only", value: "critical" },
+                          { label: "High and critical", value: "high" },
+                          { label: "Medium, high, and critical", value: "medium" },
+                        ]}
+                      />
 
-            {coverageLoading ? <Text>Loading monitoring coverage...</Text> : null}
-            {coverageError ? (
-              <Flex align="center" gap="small" wrap>
-                <StatusTag variant="danger">Error</StatusTag>
-                <Text>{coverageError}</Text>
-              </Flex>
-            ) : null}
+                      <Divider />
 
-            <Flex direction="column" gap="medium">
-              {COVERAGE_CATEGORY_GROUPS.map((group) => {
-                const groupCategories = coverageCategories.filter((category) =>
-                  group.names.includes(category.name)
-                );
-                if (groupCategories.length === 0) {
-                  return null;
-                }
-
-                return (
-                  <Flex key={group.label} direction="column" gap="small">
-                    <Divider />
-                    <Text
-                      variant="microcopy"
-                      format={{
-                        fontWeight: "demibold",
-                        textTransform: "uppercase",
-                      }}
-                    >
-                      {group.label}
-                    </Text>
-                    {groupCategories.map((category) => (
-                      <Flex
-                        key={category.name}
-                        direction="row"
-                        align="center"
-                        gap="medium"
-                        wrap
-                      >
-                        <Box flex={2}>
+                      <Flex direction="row" gap="medium" wrap>
+                        <Box flex={1}>
                           <Flex direction="column" gap="extra-small">
-                            <Text format={{ fontWeight: "bold" }}>
-                              {categoryLabel(category.name)}
-                            </Text>
-                            <Text>
-                              Default severity:{" "}
-                              {severityLabel(category.defaultSeverity)}
+                            <Flex align="center" gap="small" wrap>
+                              <Tag variant={slackDeliveryEnabled ? "success" : "default"}>
+                                {slackDeliveryEnabled ? "On" : "Off"}
+                              </Tag>
+                              <DeliveryToggle
+                                label="Send Slack alerts"
+                                checked={slackDeliveryEnabled}
+                                disabled={formLocked}
+                                onChange={setSlackDeliveryEnabled}
+                                description="Slack delivery is best for fast triage by the consultant or operations team watching the portal."
+                              />
+                            </Flex>
+                            <Text variant="microcopy">
+                              Fast triage for the consultant or operations team
+                              watching the portal.
                             </Text>
                           </Flex>
                         </Box>
                         <Box flex={1}>
-                          <Toggle
-                            label="Enabled"
-                            checked={category.enabled}
-                            readonly={coverageLocked}
-                            onChange={(value) =>
-                              setCategoryEnabled(category.name, Boolean(value))
-                            }
-                          />
+                          <Flex direction="column" gap="extra-small">
+                            <Flex align="center" gap="small" wrap>
+                              <Tag variant={ticketDeliveryEnabled ? "success" : "default"}>
+                                {ticketDeliveryEnabled ? "On" : "Off"}
+                              </Tag>
+                              <DeliveryToggle
+                                label="Create HubSpot tickets"
+                                checked={ticketDeliveryEnabled}
+                                disabled={formLocked}
+                                onChange={setTicketDeliveryEnabled}
+                                description="Ticket delivery keeps a durable HubSpot record for issues that need owner assignment and follow-up."
+                              />
+                            </Flex>
+                            <Text variant="microcopy">
+                              A durable HubSpot record for issues that need owner
+                              assignment and follow-up.
+                            </Text>
+                          </Flex>
                         </Box>
-                        <Box flex={2}>
-                          <Select
-                            label="Severity override"
-                            name={`severity-${category.name}`}
-                            value={
-                              category.severityOverride ||
-                              DEFAULT_SEVERITY_VALUE
-                            }
-                            onChange={(value) =>
-                              setCategorySeverity(
-                                category.name,
-                                String(value ?? DEFAULT_SEVERITY_VALUE)
-                              )
-                            }
-                            readOnly={coverageLocked || !category.enabled}
-                            options={[
-                              {
-                                label: `Default (${severityLabel(
-                                  category.defaultSeverity
-                                )})`,
-                                value: DEFAULT_SEVERITY_VALUE,
-                              },
-                              { label: "Low", value: "low" },
-                              { label: "Medium", value: "medium" },
-                              { label: "High", value: "high" },
-                              { label: "Critical", value: "critical" },
-                            ]}
-                          />
-                        </Box>
+                      </Flex>
+
+                      <Flex direction="row" justify="end" gap="small">
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          disabled={formLocked}
+                          onClick={handleTestAlert}
+                        >
+                          Test alert
+                        </Button>
+                        <Button
+                          type="submit"
+                          variant="primary"
+                          disabled={formLocked}
+                        >
+                          {saving ? "Saving…" : "Save settings"}
+                        </Button>
+                      </Flex>
+
+                      {saveMessage ? (
+                        <Alert variant="success" title="Settings saved">
+                          {saveMessage}
+                        </Alert>
+                      ) : null}
+                      {testMessage ? (
+                        <Alert variant="warning" title="Test unavailable">
+                          {testMessage}
+                        </Alert>
+                      ) : null}
+                      {errorMessage ? (
+                        <Alert variant="error" title="Something went wrong">
+                          {errorMessage}
+                        </Alert>
+                      ) : null}
+                    </Flex>
+                  </Card>
+                </Box>
+
+                <Box flex={1}>
+                  <Card>
+                    <Flex direction="column" gap="medium">
+                      <Flex align="center" gap="small" wrap>
+                        <Heading>Slack preview</Heading>
+                        <Tag variant="info">{thresholdLabel(alertThreshold)}</Tag>
+                      </Flex>
+                      <Divider />
+                      <Box>
+                        <Flex direction="column" gap="small">
+                          <Flex align="center" gap="small" wrap>
+                            <Text>{thresholdEmoji(alertThreshold)}</Text>
+                            <Text format={{ fontWeight: "bold" }}>
+                              Property 'Lead Source' archived — 1 workflow(s)
+                              affected
+                            </Text>
+                          </Flex>
+                          <Text>
+                            Lead Source was archived in HubSpot, but the Lead
+                            Nurture workflow still references it in enrollment
+                            criteria. New contacts may skip the intended route
+                            until the property is restored or the workflow
+                            reference is replaced.
+                          </Text>
+                          <Flex direction="column" gap="small">
+                            <Text format={{ fontWeight: "bold" }}>
+                              Recommended action
+                            </Text>
+                            <Text>
+                              Open the workflow, replace the archived property
+                              reference, then rerun enrollment tests for recent
+                              leads.
+                            </Text>
+                          </Flex>
+                          <Divider />
+                          <Text variant="microcopy">
+                            OpsLens • Portal {portalLabel} • Detected just now
+                          </Text>
+                        </Flex>
+                      </Box>
+                    </Flex>
+                  </Card>
+                </Box>
+              </Flex>
+            </Flex>
+          </Form>
+        </Tab>
+
+        <Tab tabId="coverage" title="Coverage">
+          <Flex direction="column" gap="medium">
+            <Card>
+              <Flex direction="column" gap="medium">
+                <Flex direction="column" gap="extra-small">
+                  <Heading>Choose what OpsLens watches</Heading>
+                  <Text>
+                    OpsLens alerts you when something changes in your portal that
+                    can break an active automation.
+                  </Text>
+                </Flex>
+
+                <Statistics>
+                  <StatisticsItem
+                    label="Watched categories"
+                    number={`${enabledCategoryCount} / ${coverageCategoryCount}`}
+                  />
+                </Statistics>
+
+                {coverageLoading ? (
+                  <Text>Loading monitoring coverage...</Text>
+                ) : null}
+                {coverageError ? (
+                  <Alert variant="error" title="Coverage error">
+                    {coverageError}
+                  </Alert>
+                ) : null}
+
+                {!coverageLoading && coverageCategories.length === 0 ? (
+                  <Text>
+                    Monitoring coverage could not be loaded yet. The rest of this
+                    settings page remains available.
+                  </Text>
+                ) : null}
+
+                {coverageCategories.length > 0 ? (
+                  <Text variant="microcopy">
+                    Tip: To stop alerts for a specific workflow, list, email
+                    template, or property, use the Exclusions tab.
+                  </Text>
+                ) : null}
+
+                <Flex direction="row" justify="end" gap="small">
+                  <Button
+                    type="button"
+                    variant="primary"
+                    disabled={coverageLocked || !coverageDirty}
+                    onClick={saveMonitoringCoverage}
+                  >
+                    {coverageSaving ? "Saving..." : "Save monitoring coverage"}
+                  </Button>
+                </Flex>
+
+                {coverageMessage ? (
+                  <Alert variant="success" title="Coverage saved">
+                    {coverageMessage}
+                  </Alert>
+                ) : null}
+              </Flex>
+            </Card>
+
+            {COVERAGE_CATEGORY_GROUPS.map((group) => {
+              const groupCategories = coverageCategories.filter((category) =>
+                group.names.includes(category.name)
+              );
+              if (groupCategories.length === 0) {
+                return null;
+              }
+
+              return (
+                <Card key={group.label}>
+                  <Flex direction="column" gap="small">
+                    <Heading>{group.label}</Heading>
+                    {groupCategories.map((category, index) => (
+                      <Flex key={category.name} direction="column" gap="small">
+                        {index > 0 ? <Divider /> : null}
+                        <Flex
+                          direction="row"
+                          align="center"
+                          gap="medium"
+                          wrap
+                        >
+                          <Box flex={2}>
+                            <Flex direction="column" gap="extra-small">
+                              <Flex align="center" gap="small" wrap>
+                                <Tag
+                                  variant={category.enabled ? "success" : "default"}
+                                >
+                                  {category.enabled ? "On" : "Off"}
+                                </Tag>
+                                <Text format={{ fontWeight: "bold" }}>
+                                  {categoryLabel(category.name)}
+                                </Text>
+                              </Flex>
+                              <Text variant="microcopy">
+                                Default severity:{" "}
+                                {severityLabel(category.defaultSeverity)}
+                              </Text>
+                            </Flex>
+                          </Box>
+                          <Box flex={1}>
+                            <Toggle
+                              label="Enabled"
+                              checked={category.enabled}
+                              readonly={coverageLocked}
+                              onChange={(value) =>
+                                setCategoryEnabled(category.name, Boolean(value))
+                              }
+                            />
+                          </Box>
+                          <Box flex={2}>
+                            <Select
+                              label="Severity override"
+                              name={`severity-${category.name}`}
+                              value={
+                                category.severityOverride ||
+                                DEFAULT_SEVERITY_VALUE
+                              }
+                              onChange={(value) =>
+                                setCategorySeverity(
+                                  category.name,
+                                  String(value ?? DEFAULT_SEVERITY_VALUE)
+                                )
+                              }
+                              readOnly={coverageLocked || !category.enabled}
+                              options={[
+                                {
+                                  label: `Default (${severityLabel(
+                                    category.defaultSeverity
+                                  )})`,
+                                  value: DEFAULT_SEVERITY_VALUE,
+                                },
+                                { label: "Low", value: "low" },
+                                { label: "Medium", value: "medium" },
+                                { label: "High", value: "high" },
+                                { label: "Critical", value: "critical" },
+                              ]}
+                            />
+                          </Box>
+                        </Flex>
                       </Flex>
                     ))}
                   </Flex>
-                );
-              })}
-            </Flex>
-
-            {!coverageLoading && coverageCategories.length === 0 ? (
-              <Text>
-                Monitoring coverage could not be loaded yet. The rest of this
-                settings page remains available.
-              </Text>
-            ) : null}
-
-            {coverageCategories.length > 0 ? (
-              <Text variant="microcopy">
-                Tip: To stop alerts for a specific workflow, list, email
-                template, or property, use the Excluded sections below.
-              </Text>
-            ) : null}
-
-            <Flex direction="row" justify="end" gap="small">
-              <Button
-                type="button"
-                variant="primary"
-                disabled={coverageLocked || !coverageDirty}
-                onClick={saveMonitoringCoverage}
-              >
-                {coverageSaving ? "Saving..." : "Save monitoring coverage"}
-              </Button>
-            </Flex>
-
-            {coverageMessage ? (
-              <Flex align="center" gap="small" wrap>
-                <StatusTag variant="success">Saved</StatusTag>
-                <Text>{coverageMessage}</Text>
-              </Flex>
-            ) : null}
+                </Card>
+              );
+            })}
           </Flex>
-        </Tile>
-      </Accordion>
+        </Tab>
 
-      <Accordion title={exclusionsTitle} size="md">
-        <Flex direction="column" gap="medium">
-          <Tile>
-            <Flex direction="column" gap="medium">
-              <SectionHeader
-                eyebrow="Exclusions"
-                title="Excluded workflows"
-                body="Workflows in this list will not generate alerts when disabled, edited, or deleted."
-              />
-              <Divider />
+        <Tab tabId="exclusions" title="Exclusions">
+          <Flex direction="column" gap="medium">
+            {exclusionsError ? (
+              <Alert variant="error" title="Exclusions error">
+                {exclusionsError}
+              </Alert>
+            ) : null}
 
-              {exclusionsLoading ? <Text>Loading exclusions...</Text> : null}
+            <Card>
+              <Flex direction="column" gap="medium">
+                <Flex direction="column" gap="extra-small">
+                  <Heading>Excluded workflows</Heading>
+                  <Text>
+                    Workflows in this list will not generate alerts when
+                    disabled, edited, or deleted.
+                  </Text>
+                </Flex>
+                <Divider />
 
-              <Flex direction="column" gap="small">
-                {workflowExclusions.length === 0 ? (
-                  <Flex direction="column" gap="extra-small" align="center">
-                    <Text variant="microcopy">
-                      No excluded workflows yet.
-                    </Text>
-                    <Text variant="microcopy">
-                      Pick a monitored workflow below to suppress future workflow alerts.
-                    </Text>
-                  </Flex>
-                ) : (
-                  workflowExclusions.map((exclusion) => (
-                    <Flex
-                      key={exclusionKey(exclusion)}
-                      direction="row"
-                      justify="between"
-                      align="center"
-                      gap="small"
-                      wrap
-                    >
-                      <Box flex={1}>
-                        <Flex direction="column" gap="extra-small">
-                          <Text format={{ fontWeight: "bold" }}>
-                            {exclusion.exclusionId}
-                          </Text>
-                          {exclusion.reason ? (
-                            <Text>{exclusion.reason}</Text>
-                          ) : null}
-                        </Flex>
-                      </Box>
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        disabled={exclusionsSaving}
-                        onClick={() => removeExclusion(exclusion)}
-                      >
-                        Remove
-                      </Button>
+                {exclusionsLoading ? <Text>Loading exclusions...</Text> : null}
+
+                <Flex direction="column" gap="small">
+                  {workflowExclusions.length === 0 ? (
+                    <Flex direction="column" gap="extra-small" align="center">
+                      <Text variant="microcopy">
+                        No excluded workflows yet.
+                      </Text>
+                      <Text variant="microcopy">
+                        Pick a monitored workflow below to suppress future workflow alerts.
+                      </Text>
                     </Flex>
-                  ))
-                )}
-              </Flex>
+                  ) : (
+                    workflowExclusions.map((exclusion) => (
+                      <Flex
+                        key={exclusionKey(exclusion)}
+                        direction="row"
+                        justify="between"
+                        align="center"
+                        gap="small"
+                        wrap
+                      >
+                        <Box flex={1}>
+                          <Flex direction="column" gap="extra-small">
+                            <Text format={{ fontWeight: "bold" }}>
+                              {exclusion.exclusionId}
+                            </Text>
+                            {exclusion.reason ? (
+                              <Text>{exclusion.reason}</Text>
+                            ) : null}
+                          </Flex>
+                        </Box>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          disabled={exclusionsSaving}
+                          onClick={() => removeExclusion(exclusion)}
+                        >
+                          Remove
+                        </Button>
+                      </Flex>
+                    ))
+                  )}
+                </Flex>
 
-              <Divider />
+                <Divider />
 
-              <Flex direction="column" gap="small">
-                <Flex direction="row" gap="small" align="start" wrap>
-                  <Box flex={2}>
-                    <Select
-                      label="Workflow"
-                      name="workflowExclusionId"
-                      value={workflowExclusionId}
-                      onChange={(value) =>
-                        setWorkflowExclusionId(String(value ?? ""))
-                      }
-                      readOnly={
+                <Flex direction="column" gap="small">
+                  <Flex direction="row" gap="small" align="start" wrap>
+                    <Box flex={2}>
+                      <Select
+                        label="Workflow"
+                        name="workflowExclusionId"
+                        value={workflowExclusionId}
+                        onChange={(value) =>
+                          setWorkflowExclusionId(String(value ?? ""))
+                        }
+                        readOnly={
+                          exclusionsSaving ||
+                          workflowPickerLoading ||
+                          workflowPickerOptions.length === 0 ||
+                          !portalId
+                        }
+                        description="Choose from workflows OpsLens has already observed; the workflow ID is shown in the option text."
+                        error={Boolean(workflowPickerError)}
+                        validationMessage={workflowPickerError || undefined}
+                        options={workflowSelectOptions}
+                      />
+                    </Box>
+                    <Box flex={1}>
+                      <Input
+                        label="Reason"
+                        name="workflowExclusionReason"
+                        value={workflowExclusionReason}
+                        type="text"
+                        onChange={(value) =>
+                          setWorkflowExclusionReason(String(value ?? ""))
+                        }
+                        readOnly={exclusionsSaving || !portalId}
+                        description="Optional note for future admins."
+                      />
+                    </Box>
+                  </Flex>
+                  <Flex direction="row" justify="end" gap="small">
+                    <Button
+                      type="button"
+                      variant="primary"
+                      disabled={
                         exclusionsSaving ||
                         workflowPickerLoading ||
-                        workflowPickerOptions.length === 0 ||
-                        !portalId
+                        !portalId ||
+                        !workflowExclusionId.trim()
                       }
-                      description="Choose from workflows OpsLens has already observed; the workflow ID is shown in the option text."
-                      error={Boolean(workflowPickerError)}
-                      validationMessage={workflowPickerError || undefined}
-                      options={workflowSelectOptions}
-                    />
-                  </Box>
-                  <Box flex={1}>
-                    <Input
-                      label="Reason"
-                      name="workflowExclusionReason"
-                      value={workflowExclusionReason}
-                      type="text"
-                      onChange={(value) =>
-                        setWorkflowExclusionReason(String(value ?? ""))
-                      }
-                      readOnly={exclusionsSaving || !portalId}
-                      description="Optional note for future admins."
-                    />
-                  </Box>
-                </Flex>
-                <Flex direction="row" justify="end" gap="small">
-                  <Button
-                    type="button"
-                    variant="primary"
-                    disabled={
-                      exclusionsSaving ||
-                      workflowPickerLoading ||
-                      !portalId ||
-                      !workflowExclusionId.trim()
-                    }
-                    onClick={addWorkflowExclusion}
-                  >
-                    Add exclusion
-                  </Button>
-                </Flex>
-              </Flex>
-            </Flex>
-          </Tile>
-
-          <Tile>
-            <Flex direction="column" gap="medium">
-              <SectionHeader
-                eyebrow="Exclusions"
-                title="Excluded properties"
-                body="Properties in this list will not generate alerts when archived, deleted, renamed, or type-changed."
-              />
-              <Divider />
-
-              <Flex direction="column" gap="small">
-                {propertyExclusions.length === 0 ? (
-                  <Flex direction="column" gap="extra-small" align="center">
-                    <Text variant="microcopy">
-                      No excluded properties yet.
-                    </Text>
-                    <Text variant="microcopy">
-                      Choose an object type, then pick the HubSpot property to exclude.
-                    </Text>
-                  </Flex>
-                ) : (
-                  propertyExclusions.map((exclusion) => (
-                    <Flex
-                      key={exclusionKey(exclusion)}
-                      direction="row"
-                      justify="between"
-                      align="center"
-                      gap="small"
-                      wrap
+                      onClick={addWorkflowExclusion}
                     >
-                      <Box flex={1}>
-                        <Flex direction="column" gap="extra-small">
-                          <Text format={{ fontWeight: "bold" }}>
-                            {exclusion.exclusionId}
-                          </Text>
-                          <Text>{objectTypeLabel(exclusion.objectTypeId)}</Text>
-                          {exclusion.reason ? (
-                            <Text>{exclusion.reason}</Text>
-                          ) : null}
-                        </Flex>
-                      </Box>
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        disabled={exclusionsSaving}
-                        onClick={() => removeExclusion(exclusion)}
-                      >
-                        Remove
-                      </Button>
-                    </Flex>
-                  ))
-                )}
+                      Add exclusion
+                    </Button>
+                  </Flex>
+                </Flex>
               </Flex>
+            </Card>
 
-              <Divider />
+            <Card>
+              <Flex direction="column" gap="medium">
+                <Flex direction="column" gap="extra-small">
+                  <Heading>Excluded properties</Heading>
+                  <Text>
+                    Properties in this list will not generate alerts when
+                    archived, deleted, renamed, or type-changed.
+                  </Text>
+                </Flex>
+                <Divider />
 
-              <Flex direction="column" gap="small">
-                <Flex direction="row" gap="small" align="start" wrap>
-                  <Box flex={1}>
-                    <Select
-                      label="Object type"
-                      name="propertyExclusionObjectTypeId"
-                      value={propertyExclusionObjectTypeId}
-                      onChange={(value) => {
-                        setPropertyExclusionObjectTypeId(String(value ?? "0-1"));
-                        setPropertyExclusionId("");
-                        setPropertyPickerOptions([]);
-                      }}
-                      readOnly={exclusionsSaving || propertyPickerLoading || !portalId}
-                      description="Pick the HubSpot object before choosing a property."
-                      options={OBJECT_TYPE_OPTIONS}
-                    />
-                  </Box>
-                  <Box flex={2}>
-                    <Select
-                      label="Property"
-                      name="propertyExclusionId"
-                      value={propertyExclusionId}
-                      onChange={(value) =>
-                        setPropertyExclusionId(String(value ?? ""))
-                      }
-                      readOnly={
+                <Flex direction="column" gap="small">
+                  {propertyExclusions.length === 0 ? (
+                    <Flex direction="column" gap="extra-small" align="center">
+                      <Text variant="microcopy">
+                        No excluded properties yet.
+                      </Text>
+                      <Text variant="microcopy">
+                        Choose an object type, then pick the HubSpot property to exclude.
+                      </Text>
+                    </Flex>
+                  ) : (
+                    propertyExclusions.map((exclusion) => (
+                      <Flex
+                        key={exclusionKey(exclusion)}
+                        direction="row"
+                        justify="between"
+                        align="center"
+                        gap="small"
+                        wrap
+                      >
+                        <Box flex={1}>
+                          <Flex direction="column" gap="extra-small">
+                            <Text format={{ fontWeight: "bold" }}>
+                              {exclusion.exclusionId}
+                            </Text>
+                            <Text>{objectTypeLabel(exclusion.objectTypeId)}</Text>
+                            {exclusion.reason ? (
+                              <Text>{exclusion.reason}</Text>
+                            ) : null}
+                          </Flex>
+                        </Box>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          disabled={exclusionsSaving}
+                          onClick={() => removeExclusion(exclusion)}
+                        >
+                          Remove
+                        </Button>
+                      </Flex>
+                    ))
+                  )}
+                </Flex>
+
+                <Divider />
+
+                <Flex direction="column" gap="small">
+                  <Flex direction="row" gap="small" align="start" wrap>
+                    <Box flex={1}>
+                      <Select
+                        label="Object type"
+                        name="propertyExclusionObjectTypeId"
+                        value={propertyExclusionObjectTypeId}
+                        onChange={(value) => {
+                          setPropertyExclusionObjectTypeId(String(value ?? "0-1"));
+                          setPropertyExclusionId("");
+                          setPropertyPickerOptions([]);
+                        }}
+                        readOnly={exclusionsSaving || propertyPickerLoading || !portalId}
+                        description="Pick the HubSpot object before choosing a property."
+                        options={OBJECT_TYPE_OPTIONS}
+                      />
+                    </Box>
+                    <Box flex={2}>
+                      <Select
+                        label="Property"
+                        name="propertyExclusionId"
+                        value={propertyExclusionId}
+                        onChange={(value) =>
+                          setPropertyExclusionId(String(value ?? ""))
+                        }
+                        readOnly={
+                          exclusionsSaving ||
+                          propertyPickerLoading ||
+                          propertyPickerOptions.length === 0 ||
+                          !portalId
+                        }
+                        description="Choose by HubSpot label; the internal name is shown in the option text."
+                        error={Boolean(propertyPickerError)}
+                        validationMessage={propertyPickerError || undefined}
+                        options={propertySelectOptions}
+                      />
+                    </Box>
+                    <Box flex={1}>
+                      <Input
+                        label="Reason"
+                        name="propertyExclusionReason"
+                        value={propertyExclusionReason}
+                        type="text"
+                        onChange={(value) =>
+                          setPropertyExclusionReason(String(value ?? ""))
+                        }
+                        readOnly={exclusionsSaving || !portalId}
+                        description="Optional note for future admins."
+                      />
+                    </Box>
+                  </Flex>
+                  <Flex direction="row" justify="end" gap="small">
+                    <Button
+                      type="button"
+                      variant="primary"
+                      disabled={
                         exclusionsSaving ||
                         propertyPickerLoading ||
-                        propertyPickerOptions.length === 0 ||
-                        !portalId
+                        !portalId ||
+                        !propertyExclusionId.trim()
                       }
-                      description="Choose by HubSpot label; the internal name is shown in the option text."
-                      error={Boolean(propertyPickerError)}
-                      validationMessage={propertyPickerError || undefined}
-                      options={propertySelectOptions}
-                    />
-                  </Box>
-                  <Box flex={1}>
-                    <Input
-                      label="Reason"
-                      name="propertyExclusionReason"
-                      value={propertyExclusionReason}
-                      type="text"
-                      onChange={(value) =>
-                        setPropertyExclusionReason(String(value ?? ""))
-                      }
-                      readOnly={exclusionsSaving || !portalId}
-                      description="Optional note for future admins."
-                    />
-                  </Box>
-                </Flex>
-                <Flex direction="row" justify="end" gap="small">
-                  <Button
-                    type="button"
-                    variant="primary"
-                    disabled={
-                      exclusionsSaving ||
-                      propertyPickerLoading ||
-                      !portalId ||
-                      !propertyExclusionId.trim()
-                    }
-                    onClick={addPropertyExclusion}
-                  >
-                    Add exclusion
-                  </Button>
-                </Flex>
-              </Flex>
-
-              {exclusionsError ? (
-                <Flex align="center" gap="small" wrap>
-                  <StatusTag variant="danger">Error</StatusTag>
-                  <Text>{exclusionsError}</Text>
-                </Flex>
-              ) : null}
-            </Flex>
-          </Tile>
-
-          <Tile>
-            <Flex direction="column" gap="medium">
-              <SectionHeader
-                eyebrow="Exclusions"
-                title="Excluded lists"
-                body="Lists in this list will not generate alerts when archived, deleted, or criteria-changed."
-              />
-              <Divider />
-
-              {exclusionsLoading ? <Text>Loading exclusions...</Text> : null}
-
-              <Flex direction="column" gap="small">
-                {listExclusions.length === 0 ? (
-                  <Flex direction="column" gap="extra-small" align="center">
-                    <Text variant="microcopy">
-                      No excluded lists yet.
-                    </Text>
-                    <Text variant="microcopy">
-                      Pick a monitored list below to suppress future list alerts.
-                    </Text>
-                  </Flex>
-                ) : (
-                  listExclusions.map((exclusion) => (
-                    <Flex
-                      key={exclusionKey(exclusion)}
-                      direction="row"
-                      justify="between"
-                      align="center"
-                      gap="small"
-                      wrap
+                      onClick={addPropertyExclusion}
                     >
-                      <Box flex={1}>
-                        <Flex direction="column" gap="extra-small">
-                          <Text format={{ fontWeight: "bold" }}>
-                            {exclusion.exclusionId}
-                          </Text>
-                          {exclusion.reason ? (
-                            <Text>{exclusion.reason}</Text>
-                          ) : null}
-                        </Flex>
-                      </Box>
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        disabled={exclusionsSaving}
-                        onClick={() => removeExclusion(exclusion)}
-                      >
-                        Remove
-                      </Button>
-                    </Flex>
-                  ))
-                )}
+                      Add exclusion
+                    </Button>
+                  </Flex>
+                </Flex>
               </Flex>
+            </Card>
 
-              <Divider />
+            <Card>
+              <Flex direction="column" gap="medium">
+                <Flex direction="column" gap="extra-small">
+                  <Heading>Excluded lists</Heading>
+                  <Text>
+                    Lists in this list will not generate alerts when archived,
+                    deleted, or criteria-changed.
+                  </Text>
+                </Flex>
+                <Divider />
 
-              <Flex direction="column" gap="small">
-                <Flex direction="row" gap="small" align="start" wrap>
-                  <Box flex={2}>
-                    <Select
-                      label="List"
-                      name="listExclusionId"
-                      value={listExclusionId}
-                      onChange={(value) =>
-                        setListExclusionId(String(value ?? ""))
-                      }
-                      readOnly={
+                {exclusionsLoading ? <Text>Loading exclusions...</Text> : null}
+
+                <Flex direction="column" gap="small">
+                  {listExclusions.length === 0 ? (
+                    <Flex direction="column" gap="extra-small" align="center">
+                      <Text variant="microcopy">
+                        No excluded lists yet.
+                      </Text>
+                      <Text variant="microcopy">
+                        Pick a monitored list below to suppress future list alerts.
+                      </Text>
+                    </Flex>
+                  ) : (
+                    listExclusions.map((exclusion) => (
+                      <Flex
+                        key={exclusionKey(exclusion)}
+                        direction="row"
+                        justify="between"
+                        align="center"
+                        gap="small"
+                        wrap
+                      >
+                        <Box flex={1}>
+                          <Flex direction="column" gap="extra-small">
+                            <Text format={{ fontWeight: "bold" }}>
+                              {exclusion.exclusionId}
+                            </Text>
+                            {exclusion.reason ? (
+                              <Text>{exclusion.reason}</Text>
+                            ) : null}
+                          </Flex>
+                        </Box>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          disabled={exclusionsSaving}
+                          onClick={() => removeExclusion(exclusion)}
+                        >
+                          Remove
+                        </Button>
+                      </Flex>
+                    ))
+                  )}
+                </Flex>
+
+                <Divider />
+
+                <Flex direction="column" gap="small">
+                  <Flex direction="row" gap="small" align="start" wrap>
+                    <Box flex={2}>
+                      <Select
+                        label="List"
+                        name="listExclusionId"
+                        value={listExclusionId}
+                        onChange={(value) =>
+                          setListExclusionId(String(value ?? ""))
+                        }
+                        readOnly={
+                          exclusionsSaving ||
+                          listPickerLoading ||
+                          listPickerOptions.length === 0 ||
+                          !portalId
+                        }
+                        description="Choose from lists OpsLens has already observed; the list ID is shown in the option text."
+                        error={Boolean(listPickerError)}
+                        validationMessage={listPickerError || undefined}
+                        options={listSelectOptions}
+                      />
+                    </Box>
+                    <Box flex={1}>
+                      <Input
+                        label="Reason"
+                        name="listExclusionReason"
+                        value={listExclusionReason}
+                        type="text"
+                        onChange={(value) =>
+                          setListExclusionReason(String(value ?? ""))
+                        }
+                        readOnly={exclusionsSaving || !portalId}
+                        description="Optional note for future admins."
+                      />
+                    </Box>
+                  </Flex>
+                  <Flex direction="row" justify="end" gap="small">
+                    <Button
+                      type="button"
+                      variant="primary"
+                      disabled={
                         exclusionsSaving ||
                         listPickerLoading ||
-                        listPickerOptions.length === 0 ||
-                        !portalId
+                        !portalId ||
+                        !listExclusionId.trim()
                       }
-                      description="Choose from lists OpsLens has already observed; the list ID is shown in the option text."
-                      error={Boolean(listPickerError)}
-                      validationMessage={listPickerError || undefined}
-                      options={listSelectOptions}
-                    />
-                  </Box>
-                  <Box flex={1}>
-                    <Input
-                      label="Reason"
-                      name="listExclusionReason"
-                      value={listExclusionReason}
-                      type="text"
-                      onChange={(value) =>
-                        setListExclusionReason(String(value ?? ""))
-                      }
-                      readOnly={exclusionsSaving || !portalId}
-                      description="Optional note for future admins."
-                    />
-                  </Box>
-                </Flex>
-                <Flex direction="row" justify="end" gap="small">
-                  <Button
-                    type="button"
-                    variant="primary"
-                    disabled={
-                      exclusionsSaving ||
-                      listPickerLoading ||
-                      !portalId ||
-                      !listExclusionId.trim()
-                    }
-                    onClick={addListExclusion}
-                  >
-                    Add exclusion
-                  </Button>
-                </Flex>
-              </Flex>
-            </Flex>
-          </Tile>
-
-          <Tile>
-            <Flex direction="column" gap="medium">
-              <SectionHeader
-                eyebrow="Exclusions"
-                title="Excluded email templates"
-                body="Email templates in this list will not generate alerts when archived, deleted, or edited."
-              />
-              <Divider />
-
-              {exclusionsLoading ? <Text>Loading exclusions...</Text> : null}
-
-              <Flex direction="column" gap="small">
-                {templateExclusions.length === 0 ? (
-                  <Flex direction="column" gap="extra-small" align="center">
-                    <Text variant="microcopy">
-                      No excluded email templates yet.
-                    </Text>
-                    <Text variant="microcopy">
-                      Pick a monitored template below to suppress future template alerts.
-                    </Text>
-                  </Flex>
-                ) : (
-                  templateExclusions.map((exclusion) => (
-                    <Flex
-                      key={exclusionKey(exclusion)}
-                      direction="row"
-                      justify="between"
-                      align="center"
-                      gap="small"
-                      wrap
+                      onClick={addListExclusion}
                     >
-                      <Box flex={1}>
-                        <Flex direction="column" gap="extra-small">
-                          <Text format={{ fontWeight: "bold" }}>
-                            {exclusion.exclusionId}
-                          </Text>
-                          {exclusion.reason ? (
-                            <Text>{exclusion.reason}</Text>
-                          ) : null}
-                        </Flex>
-                      </Box>
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        disabled={exclusionsSaving}
-                        onClick={() => removeExclusion(exclusion)}
-                      >
-                        Remove
-                      </Button>
-                    </Flex>
-                  ))
-                )}
+                      Add exclusion
+                    </Button>
+                  </Flex>
+                </Flex>
               </Flex>
+            </Card>
 
-              <Divider />
+            <Card>
+              <Flex direction="column" gap="medium">
+                <Flex direction="column" gap="extra-small">
+                  <Heading>Excluded email templates</Heading>
+                  <Text>
+                    Email templates in this list will not generate alerts when
+                    archived, deleted, or edited.
+                  </Text>
+                </Flex>
+                <Divider />
 
-              <Flex direction="column" gap="small">
-                <Flex direction="row" gap="small" align="start" wrap>
-                  <Box flex={2}>
-                    <Select
-                      label="Email template"
-                      name="templateExclusionId"
-                      value={templateExclusionId}
-                      onChange={(value) =>
-                        setTemplateExclusionId(String(value ?? ""))
-                      }
-                      readOnly={
+                {exclusionsLoading ? <Text>Loading exclusions...</Text> : null}
+
+                <Flex direction="column" gap="small">
+                  {templateExclusions.length === 0 ? (
+                    <Flex direction="column" gap="extra-small" align="center">
+                      <Text variant="microcopy">
+                        No excluded email templates yet.
+                      </Text>
+                      <Text variant="microcopy">
+                        Pick a monitored template below to suppress future template alerts.
+                      </Text>
+                    </Flex>
+                  ) : (
+                    templateExclusions.map((exclusion) => (
+                      <Flex
+                        key={exclusionKey(exclusion)}
+                        direction="row"
+                        justify="between"
+                        align="center"
+                        gap="small"
+                        wrap
+                      >
+                        <Box flex={1}>
+                          <Flex direction="column" gap="extra-small">
+                            <Text format={{ fontWeight: "bold" }}>
+                              {exclusion.exclusionId}
+                            </Text>
+                            {exclusion.reason ? (
+                              <Text>{exclusion.reason}</Text>
+                            ) : null}
+                          </Flex>
+                        </Box>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          disabled={exclusionsSaving}
+                          onClick={() => removeExclusion(exclusion)}
+                        >
+                          Remove
+                        </Button>
+                      </Flex>
+                    ))
+                  )}
+                </Flex>
+
+                <Divider />
+
+                <Flex direction="column" gap="small">
+                  <Flex direction="row" gap="small" align="start" wrap>
+                    <Box flex={2}>
+                      <Select
+                        label="Email template"
+                        name="templateExclusionId"
+                        value={templateExclusionId}
+                        onChange={(value) =>
+                          setTemplateExclusionId(String(value ?? ""))
+                        }
+                        readOnly={
+                          exclusionsSaving ||
+                          templatePickerLoading ||
+                          templatePickerOptions.length === 0 ||
+                          !portalId
+                        }
+                        description="Choose from automated marketing emails OpsLens has already observed."
+                        error={Boolean(templatePickerError)}
+                        validationMessage={templatePickerError || undefined}
+                        options={templateSelectOptions}
+                      />
+                    </Box>
+                    <Box flex={1}>
+                      <Input
+                        label="Reason"
+                        name="templateExclusionReason"
+                        value={templateExclusionReason}
+                        type="text"
+                        onChange={(value) =>
+                          setTemplateExclusionReason(String(value ?? ""))
+                        }
+                        readOnly={exclusionsSaving || !portalId}
+                        description="Optional note for future admins."
+                      />
+                    </Box>
+                  </Flex>
+                  <Flex direction="row" justify="end" gap="small">
+                    <Button
+                      type="button"
+                      variant="primary"
+                      disabled={
                         exclusionsSaving ||
                         templatePickerLoading ||
-                        templatePickerOptions.length === 0 ||
-                        !portalId
+                        !portalId ||
+                        !templateExclusionId.trim()
                       }
-                      description="Choose from automated marketing emails OpsLens has already observed."
-                      error={Boolean(templatePickerError)}
-                      validationMessage={templatePickerError || undefined}
-                      options={templateSelectOptions}
-                    />
-                  </Box>
-                  <Box flex={1}>
-                    <Input
-                      label="Reason"
-                      name="templateExclusionReason"
-                      value={templateExclusionReason}
-                      type="text"
-                      onChange={(value) =>
-                        setTemplateExclusionReason(String(value ?? ""))
-                      }
-                      readOnly={exclusionsSaving || !portalId}
-                      description="Optional note for future admins."
-                    />
-                  </Box>
-                </Flex>
-                <Flex direction="row" justify="end" gap="small">
-                  <Button
-                    type="button"
-                    variant="primary"
-                    disabled={
-                      exclusionsSaving ||
-                      templatePickerLoading ||
-                      !portalId ||
-                      !templateExclusionId.trim()
-                    }
-                    onClick={addTemplateExclusion}
-                  >
-                    Add exclusion
-                  </Button>
+                      onClick={addTemplateExclusion}
+                    >
+                      Add exclusion
+                    </Button>
+                  </Flex>
                 </Flex>
               </Flex>
-            </Flex>
-          </Tile>
-        </Flex>
-      </Accordion>
+            </Card>
+          </Flex>
+        </Tab>
 
-      <Accordion title="Impact check" size="md">
-        <Flex direction="column" gap="small">
-          <Heading>See what depends on an asset before you change it</Heading>
-          <DependencyImpactCheck portalId={portalId} />
-        </Flex>
-      </Accordion>
+        <Tab tabId="impact-check" title="Impact check">
+          <Flex direction="column" gap="small">
+            <Heading>See what depends on an asset before you change it</Heading>
+            <DependencyImpactCheck portalId={portalId} />
+          </Flex>
+        </Tab>
+      </Tabs>
     </Flex>
   );
 }

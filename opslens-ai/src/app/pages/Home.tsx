@@ -1,13 +1,20 @@
 import * as React from "react";
 import { useEffect, useMemo, useState } from "react";
 import {
+  Alert,
   Box,
   Button,
+  ButtonRow,
+  Card,
+  Divider,
   EmptyState,
   Flex,
   Heading,
   Link,
+  Statistics,
+  StatisticsItem,
   StatusTag,
+  Tag,
   Text,
   Tile,
   hubspot,
@@ -163,6 +170,38 @@ function severityVariant(severity?: string | null): StatusVariant {
   const level = String(severity || "").toLowerCase();
   if (level === "critical") {
     return "danger";
+  }
+  if (level === "high") {
+    return "warning";
+  }
+  if (level === "medium") {
+    return "info";
+  }
+  return "default";
+}
+
+type AlertVariant = "info" | "warning" | "success" | "error" | "danger" | "tip";
+
+function alertVariantForStatus(status: StatusVariant): AlertVariant {
+  if (status === "danger") {
+    return "danger";
+  }
+  if (status === "warning") {
+    return "warning";
+  }
+  if (status === "success") {
+    return "success";
+  }
+  // "info" and "default" both map to the neutral informational banner.
+  return "info";
+}
+
+function severityTagVariant(
+  severity?: string | null
+): "default" | "warning" | "success" | "error" | "info" {
+  const level = String(severity || "").toLowerCase();
+  if (level === "critical") {
+    return "error";
   }
   if (level === "high") {
     return "warning";
@@ -446,21 +485,23 @@ function ActionAlertCard({
   const [confirmingReenable, setConfirmingReenable] = useState(false);
 
   return (
-    <Tile>
+    <Card>
       <Flex direction="column" gap="small">
         <Flex justify="between" align="start" gap="small" wrap>
           <Box flex={1}>
             <Flex direction="column" gap="extra-small">
-              <StatusTag variant={severityVariant(alert.severity)}>
-                {severity}
-              </StatusTag>
-              <Text format={{ fontWeight: "bold" }}>
-                {String(alert.title || "Untitled alert")}
-              </Text>
-              <Text>{formatTimeAgo(alert.createdAtUtc)}</Text>
+              <Box>
+                <Tag variant={severityTagVariant(alert.severity)} inline>
+                  {severity}
+                </Tag>
+              </Box>
+              <Heading>{String(alert.title || "Untitled alert")}</Heading>
+              <Text variant="microcopy">{formatTimeAgo(alert.createdAtUtc)}</Text>
             </Flex>
           </Box>
         </Flex>
+
+        <Divider />
 
         <BlastRadius alert={alert} />
         <RecommendedAction alert={alert} />
@@ -515,7 +556,7 @@ function ActionAlertCard({
           </Flex>
         </Flex>
       </Flex>
-    </Tile>
+    </Card>
   );
 }
 
@@ -930,58 +971,80 @@ function HomePage({ context }: HomePageProps) {
 
   return (
     <Flex direction="column" gap="medium">
-      <Tile>
-        <Flex direction="row" justify="between" align="center" gap="small" wrap>
-          <Box flex={1}>
-            <Flex direction="column" gap="extra-small">
-              <Heading>{greetingLine}</Heading>
-              <Text>{subtitle}</Text>
-              {overviewError ? <Text>Overview issue: {overviewError}</Text> : null}
+      <Card>
+        <Flex direction="column" gap="medium">
+          <Flex direction="row" justify="between" align="start" gap="small" wrap>
+            <Box flex={1}>
+              <Flex direction="column" gap="extra-small">
+                <Heading>{greetingLine}</Heading>
+                <Text>{subtitle}</Text>
+              </Flex>
+            </Box>
+            <Flex direction="column" align="end" gap="extra-small">
+              <ButtonRow>
+                <Button
+                  type="button"
+                  variant="primary"
+                  disabled={checkingNow || checkNowLocked || !portalId}
+                  onClick={checkNow}
+                >
+                  {checkingNow ? "Checking..." : "Check now"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={loading}
+                  onClick={() => refresh()}
+                >
+                  {loading ? "Refreshing..." : "Refresh"}
+                </Button>
+              </ButtonRow>
+              {settingsUrl ? (
+                <Link href={{ url: settingsUrl, external: true }} variant="light">
+                  Settings
+                </Link>
+              ) : null}
             </Flex>
-          </Box>
-          <Flex direction="column" align="end" gap="extra-small">
-            <Flex direction="row" align="center" gap="small" wrap>
-              <Button
-                type="button"
-                variant="primary"
-                disabled={checkingNow || checkNowLocked || !portalId}
-                onClick={checkNow}
-              >
-                {checkingNow ? "Checking..." : "Check now"}
-              </Button>
-              <Button
-                type="button"
-                variant="secondary"
-                disabled={loading}
-                onClick={() => refresh()}
-              >
-                {loading ? "Refreshing..." : "Refresh"}
-              </Button>
-            </Flex>
-            {settingsUrl ? (
-              <Link
-                href={{ url: settingsUrl, external: true }}
-                variant="light"
-              >
-                ⚙ Settings
-              </Link>
-            ) : null}
-            <Text variant="microcopy">Last updated {lastUpdatedLabel}</Text>
-            {checkNowMessage ? (
-              <Text variant="microcopy">{checkNowMessage}</Text>
-            ) : null}
           </Flex>
-        </Flex>
-      </Tile>
 
-      <Tile>
+          {overviewError ? (
+            <Alert title="Overview issue" variant="error">
+              {overviewError}
+            </Alert>
+          ) : null}
+
+          <Divider />
+
+          <Statistics>
+            <StatisticsItem label="Needs action" number={actionRequiredCount}>
+              <Text variant="microcopy">Open critical and high</Text>
+            </StatisticsItem>
+            <StatisticsItem label="Watching" number={watchingCount}>
+              <Text variant="microcopy">Open medium alerts</Text>
+            </StatisticsItem>
+            <StatisticsItem
+              label="Resolved this week"
+              number={resolvedThisWeekCount}
+            >
+              <Text variant="microcopy">Closed in last 7 days</Text>
+            </StatisticsItem>
+            <StatisticsItem label="Last checked" number={lastUpdatedLabel}>
+              <Text variant="microcopy">
+                {checkNowMessage ? checkNowMessage : "Auto-refreshes"}
+              </Text>
+            </StatisticsItem>
+          </Statistics>
+        </Flex>
+      </Card>
+
+      <Alert
+        title={diagnosticBannerText}
+        variant={alertVariantForStatus(diagnosticBannerVariant)}
+      >
         <Flex direction="row" justify="between" align="center" gap="small" wrap>
-          <Flex direction="row" align="center" gap="small" wrap>
-            <Text format={{ fontWeight: "bold" }}>{diagnosticBannerText}</Text>
-            <StatusTag variant={diagnosticBannerVariant}>
-              {diagnosticBannerTag}
-            </StatusTag>
-          </Flex>
+          <StatusTag variant={diagnosticBannerVariant}>
+            {diagnosticBannerTag}
+          </StatusTag>
           <Button
             type="button"
             variant="secondary"
@@ -991,33 +1054,9 @@ function HomePage({ context }: HomePageProps) {
             {scanningDiagnostic ? "Scanning..." : scanButtonLabel}
           </Button>
         </Flex>
-      </Tile>
+      </Alert>
 
-      <Flex direction="row" gap="small">
-        <Box flex={1}>
-          <StatusMetric
-            label="Needs action"
-            value={actionRequiredCount}
-            detail="Open critical and high alerts"
-          />
-        </Box>
-        <Box flex={1}>
-          <StatusMetric
-            label="Watching"
-            value={watchingCount}
-            detail="Open medium alerts"
-          />
-        </Box>
-        <Box flex={1}>
-          <StatusMetric
-            label="Resolved this week"
-            value={resolvedThisWeekCount}
-            detail="Closed in the last 7 days"
-          />
-        </Box>
-      </Flex>
-
-      <Tile>
+      <Card>
         <Flex direction="column" gap="medium">
           <Flex justify="between" align="center" gap="small" wrap>
             <Box flex={1}>
@@ -1103,7 +1142,7 @@ function HomePage({ context }: HomePageProps) {
             </Flex>
           ) : null}
         </Flex>
-      </Tile>
+      </Card>
 
       {/*
         Watching + System health share a single Tile so they render at
@@ -1113,7 +1152,7 @@ function HomePage({ context }: HomePageProps) {
         and HubSpot UI Extensions exposes no minHeight / style props on
         Box or Tile to force equality from the outside.
       */}
-      <Tile>
+      <Card>
         <Flex direction="row" gap="medium" align="stretch">
           <Box flex={1} alignSelf="stretch">
             <Flex direction="column" gap="medium">
@@ -1126,10 +1165,21 @@ function HomePage({ context }: HomePageProps) {
               ) : (
                 <Flex direction="column" gap="small">
                   {watchingPreview.map((alert) => (
-                    <Text key={String(alert.id)}>
-                      {String(alert.title || "Untitled alert")} ·{" "}
-                      {formatTimeAgo(alert.createdAtUtc)}
-                    </Text>
+                    <Flex
+                      key={String(alert.id)}
+                      direction="row"
+                      align="center"
+                      gap="small"
+                      wrap
+                    >
+                      <Tag variant="info" inline>
+                        MEDIUM
+                      </Tag>
+                      <Text>
+                        {String(alert.title || "Untitled alert")} ·{" "}
+                        {formatTimeAgo(alert.createdAtUtc)}
+                      </Text>
+                    </Flex>
                   ))}
                   {watchingCount > watchingPreview.length ? (
                     <Text>
@@ -1165,7 +1215,7 @@ function HomePage({ context }: HomePageProps) {
             </Flex>
           </Box>
         </Flex>
-      </Tile>
+      </Card>
     </Flex>
   );
 }
