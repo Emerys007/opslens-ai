@@ -344,7 +344,7 @@ function HubSpotLinks({
   } else if (isListAlert(alert.sourceEventType)) {
     if (alert.sourceDependencyId) {
       links.push({
-        label: "Open list",
+        label: "Open segment",
         url: listUrl(portalId, alert.sourceDependencyId),
       });
     }

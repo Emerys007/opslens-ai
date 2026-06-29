@@ -112,9 +112,9 @@ const CATEGORY_LABELS: Record<string, string> = {
   property_type_changed: "Property type changes",
   workflow_disabled: "Disabled workflows",
   workflow_edited: "Edited workflows",
-  list_archived: "Archived lists",
-  list_deleted: "Deleted lists",
-  list_criteria_changed: "List criteria changes",
+  list_archived: "Archived segments",
+  list_deleted: "Deleted segments",
+  list_criteria_changed: "Segment criteria changes",
   template_archived: "Archived email templates",
   template_deleted: "Deleted email templates",
   template_edited: "Edited email templates",
@@ -137,7 +137,7 @@ const COVERAGE_CATEGORY_GROUPS: Array<{ label: string; names: string[] }> = [
     names: ["workflow_disabled", "workflow_edited"],
   },
   {
-    label: "List changes",
+    label: "Segment changes",
     names: ["list_archived", "list_deleted", "list_criteria_changed"],
   },
   {
@@ -502,7 +502,11 @@ function SettingsPage({ context }: { context: any }) {
   ];
   const listSelectOptions = [
     {
-      label: listPickerLoading ? "Loading monitored lists..." : "Select a list",
+      label: listPickerLoading
+        ? "Loading monitored segments..."
+        : listPickerOptions.length === 0
+        ? "No segments found — reconnect OpsLens to grant Segments access"
+        : "Select a segment",
       value: "",
     },
     ...listPickerOptions.map((list) => ({
@@ -514,6 +518,8 @@ function SettingsPage({ context }: { context: any }) {
     {
       label: templatePickerLoading
         ? "Loading monitored email templates..."
+        : templatePickerOptions.length === 0
+        ? "No email templates found — reconnect OpsLens to grant content access"
         : "Select an email template",
       value: "",
     },
@@ -960,7 +966,7 @@ function SettingsPage({ context }: { context: any }) {
         timeout: 15000,
       });
       if (response.status === 409) {
-        throw new Error("This list is already excluded.");
+        throw new Error("This segment is already excluded.");
       }
       if (!response.ok) {
         throw new Error(`Backend returned status ${response.status}`);
@@ -1415,7 +1421,7 @@ function SettingsPage({ context }: { context: any }) {
 
                 {coverageCategories.length > 0 ? (
                   <Text variant="microcopy">
-                    Tip: To stop alerts for a specific workflow, list, email
+                    Tip: To stop alerts for a specific workflow, segment, email
                     template, or property, use the Exclusions tab.
                   </Text>
                 ) : null}
@@ -1778,10 +1784,10 @@ function SettingsPage({ context }: { context: any }) {
             <Card>
               <Flex direction="column" gap="medium">
                 <Flex direction="column" gap="extra-small">
-                  <Heading>Excluded lists</Heading>
+                  <Heading>Excluded segments</Heading>
                   <Text>
-                    Lists in this list will not generate alerts when archived,
-                    deleted, or criteria-changed.
+                    Segments (formerly lists) here won't generate alerts when
+                    archived, deleted, or criteria-changed.
                   </Text>
                 </Flex>
                 <Divider />
@@ -1792,10 +1798,10 @@ function SettingsPage({ context }: { context: any }) {
                   {listExclusions.length === 0 ? (
                     <Flex direction="column" gap="extra-small" align="center">
                       <Text variant="microcopy">
-                        No excluded lists yet.
+                        No excluded segments yet.
                       </Text>
                       <Text variant="microcopy">
-                        Pick a monitored list below to suppress future list alerts.
+                        Pick a monitored segment below to suppress future segment alerts.
                       </Text>
                     </Flex>
                   ) : (
@@ -1849,7 +1855,7 @@ function SettingsPage({ context }: { context: any }) {
                           listPickerOptions.length === 0 ||
                           !portalId
                         }
-                        description="Choose from lists OpsLens has already observed; the list ID is shown in the option text."
+                        description="Choose from segments OpsLens has already observed; the segment ID is shown in the option text."
                         error={Boolean(listPickerError)}
                         validationMessage={listPickerError || undefined}
                         options={listSelectOptions}
@@ -2148,7 +2154,7 @@ function DependencyImpactCheck({ portalId }: { portalId: string }) {
       <Flex direction="column" gap="small">
         <Text>
           HubSpot blocks deleting an asset that's still in use but won't show
-          you where — pick a property, list, email template, or owner to see
+          you where — pick a property, segment, email template, or owner to see
           every workflow that references it before you change it.
         </Text>
 
@@ -2162,7 +2168,7 @@ function DependencyImpactCheck({ portalId }: { portalId: string }) {
             }
             options={[
               { label: "Property", value: "property" },
-              { label: "List", value: "list" },
+              { label: "Segment", value: "list" },
               { label: "Email template", value: "template" },
               { label: "Owner", value: "owner" },
             ]}
@@ -2196,6 +2202,22 @@ function DependencyImpactCheck({ portalId }: { portalId: string }) {
             options={pickerOptions}
           />
         )}
+
+        {pickerLoading ? (
+          <Text variant="microcopy">Loading options...</Text>
+        ) : null}
+
+        {assetType !== "owner" &&
+        !pickerLoading &&
+        pickerOptions.length === 0 ? (
+          <Text variant="microcopy">
+            {assetType === "list"
+              ? "No segments found yet. If you recently added Segments access, reconnect OpsLens; otherwise OpsLens will list them after the next scan."
+              : assetType === "template"
+              ? "No email templates found yet. If you recently added content access, reconnect OpsLens; otherwise OpsLens will list them after the next scan."
+              : "No properties found for this object type yet."}
+          </Text>
+        ) : null}
 
         {pickerError ? (
           <Text>{`Could not load options: ${pickerError}`}</Text>
