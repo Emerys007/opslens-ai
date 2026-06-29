@@ -4,6 +4,7 @@
   "config": {
     "description": "OpsLens AI watches your HubSpot portal for workflow-breaking changes — archived properties, disabled workflows, schema edits — and alerts your team in Slack and HubSpot tickets with plain-English explanations of what broke and how to fix it.",
     "name": "OpsLens AI",
+    "logo": "/app/app-logo.png",
     "distribution": "marketplace",
     "auth": {
       "type": "oauth",
