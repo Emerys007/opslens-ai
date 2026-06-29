@@ -20,6 +20,7 @@ from app.services.dependency_mapping import (
     find_workflows_affected_by_property,
     list_workflow_dependencies,
 )
+from app.services.portal_purge import purge_portal_data
 from app.services.property_polling import poll_portal_properties
 from app.services.workflow_polling import poll_portal_workflows
 from app.services.workflow_polling_scheduler import run_polling_cycle
@@ -64,6 +65,41 @@ def trigger_workflow_poll(
         except Exception:  # noqa: BLE001
             session.rollback()
             raise
+    finally:
+        session.close()
+
+
+@router.post("/admin/portals/{portal_id}/purge")
+def purge_portal(
+    portal_id: str = Path(..., min_length=1),
+    include_billing: bool = Query(default=False),
+    x_opslens_admin_key: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Delete a portal's stored data (uninstall / GDPR deletion request).
+
+    Operational data (snapshots, change events, alerts, dependencies, settings,
+    exclusions, webhook events) is always purged; identity/billing rows
+    (installation, entitlement, install sessions) only when
+    ``include_billing=true``. Authenticated via the `X-OpsLens-Admin-Key`
+    header against `settings.maintenance_api_key`.
+    """
+    _require_admin_key(x_opslens_admin_key)
+
+    portal_key = str(portal_id or "").strip()
+    if not portal_key:
+        raise HTTPException(status_code=400, detail="portal_id is required.")
+
+    session = get_session()
+    if session is None:
+        raise HTTPException(status_code=503, detail="Database is not configured.")
+    try:
+        deleted = purge_portal_data(session, portal_key, include_billing=include_billing)
+        return {
+            "status": "ok",
+            "portalId": portal_key,
+            "includeBilling": include_billing,
+            "deleted": deleted,
+        }
     finally:
         session.close()
 

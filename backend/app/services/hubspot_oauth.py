@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import secrets
 import urllib.error
 import urllib.parse
@@ -344,6 +345,35 @@ def upsert_installation(
     return row
 
 
+logger = logging.getLogger(__name__)
+
+
+class HubSpotDeauthorizedError(RuntimeError):
+    """Raised when HubSpot rejects the refresh token — the app was uninstalled
+    or its access was revoked. The installation is marked inactive and its
+    stored tokens are cleared before this is raised."""
+
+
+def _looks_like_deauthorization(message: str) -> bool:
+    """HubSpot returns BAD_REFRESH_TOKEN (or OAuth invalid_grant) once a public
+    app is uninstalled or the user revokes access. Match conservatively so a
+    transient 5xx / network error does NOT deauthorize a still-valid portal."""
+    text = str(message or "").lower()
+    return "bad_refresh_token" in text or "invalid_grant" in text
+
+
+def deauthorize_installation(session: Session, row: HubSpotInstallation) -> None:
+    """Sever stored access for a portal: clear tokens and mark it inactive.
+    Called when HubSpot revokes the refresh token (uninstall) so OpsLens stops
+    polling and no longer holds usable credentials for that portal."""
+    row.access_token = ""
+    row.refresh_token = ""
+    row.access_token_expires_at = None
+    row.is_active = False
+    session.commit()
+    logger.info("hubspot_oauth.deauthorized", extra={"portal_id": row.portal_id})
+
+
 def refresh_access_token(session: Session, row: HubSpotInstallation) -> HubSpotInstallation:
     _require_oauth_config()
 
@@ -351,16 +381,25 @@ def refresh_access_token(session: Session, row: HubSpotInstallation) -> HubSpotI
     if not refresh_token:
         raise RuntimeError("No refresh token is stored for this HubSpot installation.")
 
-    token_payload = _post_form(
-        HUBSPOT_TOKEN_URL,
-        {
-            "grant_type": "refresh_token",
-            "client_id": settings.hubspot_client_id,
-            "client_secret": settings.hubspot_client_secret,
-            "redirect_uri": settings.hubspot_redirect_uri,
-            "refresh_token": refresh_token,
-        },
-    )
+    try:
+        token_payload = _post_form(
+            HUBSPOT_TOKEN_URL,
+            {
+                "grant_type": "refresh_token",
+                "client_id": settings.hubspot_client_id,
+                "client_secret": settings.hubspot_client_secret,
+                "redirect_uri": settings.hubspot_redirect_uri,
+                "refresh_token": refresh_token,
+            },
+        )
+    except RuntimeError as exc:
+        if _looks_like_deauthorization(str(exc)):
+            deauthorize_installation(session, row)
+            raise HubSpotDeauthorizedError(
+                f"HubSpot installation for portal {row.portal_id} was deauthorized "
+                "(app uninstalled or access revoked); marked inactive."
+            ) from exc
+        raise
 
     access_token = str(
         token_payload.get("access_token")
