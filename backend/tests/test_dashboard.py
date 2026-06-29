@@ -1329,6 +1329,29 @@ class DashboardEndpointTests(unittest.TestCase):
         )
         session.commit()
 
+    def test_overview_topline_counts_come_from_v2_alert_table(self) -> None:
+        session = self._session()
+        try:
+            self._seed_alert(
+                session, severity=SEVERITY_CRITICAL, status=STATUS_OPEN, title="Crit"
+            )
+            self._seed_alert(
+                session, severity=SEVERITY_HIGH, status=STATUS_OPEN, title="High"
+            )
+            self._seed_alert(
+                session, severity=SEVERITY_MEDIUM, status=STATUS_OPEN, title="Med"
+            )
+            self._seed_workflow(session, workflow_id="w1", name="WF1")
+            self._seed_workflow(session, workflow_id="w2", name="WF2")
+        finally:
+            session.close()
+
+        summary = self._overview_summary()
+        self.assertEqual(3, summary["openIncidents"])
+        self.assertEqual(1, summary["criticalIssues"])
+        self.assertEqual(2, summary["monitoredWorkflows"])
+        self.assertEqual([], summary["activeIncidents"])
+
     def test_portfolio_non_agency_returns_only_current_portal(self) -> None:
         session = self._session()
         try:

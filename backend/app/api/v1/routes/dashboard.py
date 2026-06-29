@@ -557,44 +557,32 @@ def dashboard_overview(request: Request):
     try:
         settings = load_portal_settings(session, portal_id)
         entitlement = get_portal_entitlement(session, portal_id)
-        threshold = normalize_severity(settings.get("alertThreshold"), "high")
-
-        stmt = select(AlertEvent).where(AlertEvent.result == "accepted")
-        if portal_id:
-            stmt = stmt.where(AlertEvent.portal_id == portal_id)
-
-        stmt = stmt.order_by(desc(AlertEvent.received_at_utc))
-        rows = session.execute(stmt).scalars().all()
-
-        monitored_workflows = len(
-            {str(row.workflow_id) for row in rows if str(row.workflow_id or "").strip()}
+        action = _action_summary(
+            session,
+            portal_id,
+            settings,
+            action_page_size=action_page_size,
+            action_page=action_page,
         )
 
-        visible_rows = []
-        for row in rows:
-            level = _resolved_level(row, threshold)
-            if _visible(level, threshold):
-                visible_rows.append((row, level))
-
-        critical_issues = sum(1 for _, level in visible_rows if level == "critical")
-
-        active_incidents = []
-        for row, level in visible_rows[:5]:
-            workflow_id_text = str(row.workflow_id).strip() if row.workflow_id is not None else "unknown"
-            object_label = str(row.object_type or "record").strip()
-            object_id = str(row.object_id or "").strip()
-
-            active_incidents.append(
-                {
-                    "id": row.callback_id or f"alert-{row.id}",
-                    "severity": level,
-                    "title": f"Workflow {workflow_id_text} alert",
-                    "affectedRecords": 1,
-                    "recommendation": row.analyst_note or f"Review the latest saved alert for {object_label} {object_id}.",
-                }
-            )
-
-        last_checked = rows[0].received_at_utc.isoformat() if rows and rows[0].received_at_utc else None
+        # Top-line counts are sourced from the v2 Alert table (these fields
+        # previously read the dead v1 AlertEvent table and read zero for a
+        # pure v2 install). activeIncidents is superseded by `actionRequired`.
+        open_filter = Alert.status == STATUS_OPEN
+        open_incidents = _count_alerts(session, portal_id, open_filter)
+        critical_issues = _count_alerts(
+            session, portal_id, open_filter, func.lower(Alert.severity) == "critical"
+        )
+        monitored_workflows = int(
+            session.execute(
+                _portal_filtered(
+                    select(func.count()).select_from(WorkflowSnapshot),
+                    WorkflowSnapshot,
+                    portal_id,
+                )
+            ).scalar()
+            or 0
+        )
 
         return {
             "status": "ok",
@@ -603,18 +591,12 @@ def dashboard_overview(request: Request):
             "settings": settings,
             "entitlement": entitlement,
             "summary": {
-                "openIncidents": len(visible_rows),
+                "openIncidents": open_incidents,
                 "criticalIssues": critical_issues,
                 "monitoredWorkflows": monitored_workflows,
-                "lastCheckedUtc": last_checked,
-                "activeIncidents": active_incidents,
-                **_action_summary(
-                    session,
-                    portal_id,
-                    settings,
-                    action_page_size=action_page_size,
-                    action_page=action_page,
-                ),
+                "lastCheckedUtc": action.get("lastPollUtc"),
+                "activeIncidents": [],
+                **action,
             },
             "debug": {
                 "portalId": portal_id or "not-provided",
@@ -622,8 +604,7 @@ def dashboard_overview(request: Request):
                 "userEmail": user_email or "not-provided",
                 "appId": app_id or "not-provided",
                 "dbConfigured": True,
-                "savedAlertRows": len(rows),
-                "visibleRowsAtThreshold": len(visible_rows),
+                "openAlerts": open_incidents,
                 "settingsStorage": settings.get("storage", "unknown"),
             },
         }

@@ -1649,8 +1649,13 @@ function SettingsPage({ context }: { context: any }) {
                     <Flex direction="column" gap="medium">
                       <Flex align="center" gap="small" wrap>
                         <Heading>Slack preview</Heading>
+                        <Tag variant="default">Example</Tag>
                         <Tag variant="info">{thresholdLabel(alertThreshold)}</Tag>
                       </Flex>
+                      <Text variant="microcopy">
+                        A sample of how OpsLens formats Slack alerts — not a real
+                        alert from this portal.
+                      </Text>
                       <Divider />
                       <Box>
                         <Flex direction="column" gap="small">
@@ -1677,7 +1682,7 @@ function SettingsPage({ context }: { context: any }) {
                           </Flex>
                           <Divider />
                           <Text variant="microcopy">
-                            OpsLens • Portal {portalLabel} • Detected just now
+                            {`${whiteLabelName.trim() || "OpsLens"} • Portal ${portalLabel} • Detected just now`}
                           </Text>
                         </Flex>
                       </Box>
