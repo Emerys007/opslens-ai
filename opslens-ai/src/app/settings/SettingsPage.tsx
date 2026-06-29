@@ -12,6 +12,7 @@ import {
   Form,
   Heading,
   Input,
+  Link,
   Select,
   Statistics,
   StatisticsItem,
@@ -1203,6 +1204,22 @@ function SettingsPage({ context }: { context: any }) {
             </DescriptionListItem>
           </DescriptionList>
           <Text variant="microcopy">{relativeTime(monitoringTimestamp)}</Text>
+          <Divider />
+          <Flex direction="column" gap="extra-small">
+            <Text variant="microcopy">
+              Segment or email-template options empty, or recently changed what
+              OpsLens can access? Reconnect to grant the latest permissions —
+              you'll re-approve OpsLens in HubSpot, then run a scan.
+            </Text>
+            <Link
+              href={{
+                url: "https://api.app-sync.com/oauth/start",
+                external: true,
+              }}
+            >
+              Reconnect / grant new permissions
+            </Link>
+          </Flex>
         </Flex>
       </Alert>
 

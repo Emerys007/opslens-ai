@@ -1,0 +1,21 @@
+<svg width="800" height="800" viewBox="0 0 800 800" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="OpsLens">
+  <defs>
+    <linearGradient id="opslensBg" x1="0" y1="0" x2="800" y2="800" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#4F46E5"/>
+      <stop offset="1" stop-color="#7C3AED"/>
+    </linearGradient>
+    <radialGradient id="opslensPupil" cx="0.38" cy="0.34" r="0.85">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#C7D2FE"/>
+    </radialGradient>
+  </defs>
+
+  <rect x="0" y="0" width="800" height="800" fill="url(#opslensBg)"/>
+
+  <circle cx="376" cy="424" r="206" fill="none" stroke="#FFFFFF" stroke-width="56"/>
+  <circle cx="376" cy="424" r="110" fill="url(#opslensPupil)"/>
+  <circle cx="332" cy="380" r="30" fill="#FFFFFF" fill-opacity="0.85"/>
+
+  <circle cx="560" cy="248" r="92" fill="url(#opslensBg)"/>
+  <circle cx="560" cy="248" r="64" fill="#F59E0B" stroke="#FFFFFF" stroke-width="14"/>
+</svg>
