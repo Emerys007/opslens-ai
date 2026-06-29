@@ -18,6 +18,7 @@ DEFAULT_SETTINGS = {
     "slackDeliveryEnabled": True,
     "ticketDeliveryEnabled": True,
     "whiteLabelName": "",
+    "digestEnabled": True,
 }
 
 SEVERITY_ORDER = {
@@ -51,6 +52,7 @@ def _settings_dict(
     slack_delivery_enabled: bool = True,
     ticket_delivery_enabled: bool = True,
     white_label_name: str = "",
+    digest_enabled: bool = True,
     updated_at=None,
     storage: str = "postgres",
 ):
@@ -62,6 +64,7 @@ def _settings_dict(
         "slackDeliveryEnabled": bool(slack_delivery_enabled),
         "ticketDeliveryEnabled": bool(ticket_delivery_enabled),
         "whiteLabelName": white_label_name or "",
+        "digestEnabled": bool(digest_enabled),
         "updatedAtUtc": updated_at.isoformat() if updated_at else None,
         "storage": storage,
     }
@@ -112,6 +115,7 @@ def load_portal_settings(session: Optional[Session], portal_id: Optional[str]):
             slack_delivery_enabled=getattr(row, "slack_delivery_enabled", True),
             ticket_delivery_enabled=getattr(row, "ticket_delivery_enabled", True),
             white_label_name=getattr(row, "white_label_name", ""),
+            digest_enabled=getattr(row, "digest_enabled", True),
             updated_at=row.updated_at,
             storage="postgres",
         )
@@ -138,6 +142,7 @@ def load_portal_settings(session: Optional[Session], portal_id: Optional[str]):
             slack_delivery_enabled=getattr(row, "slack_delivery_enabled", True),
             ticket_delivery_enabled=getattr(row, "ticket_delivery_enabled", True),
             white_label_name=getattr(row, "white_label_name", ""),
+            digest_enabled=getattr(row, "digest_enabled", True),
             updated_at=row.updated_at,
             storage="postgres-migrated-from-file",
         )
@@ -225,6 +230,8 @@ def save_portal_settings(session: Session, portal_id: str, payload: dict):
         row.ticket_delivery_enabled = _coerce_bool(payload.get("ticketDeliveryEnabled"), True)
     if "whiteLabelName" in payload:
         row.white_label_name = str(payload.get("whiteLabelName", "") or "").strip()[:80]
+    if "digestEnabled" in payload:
+        row.digest_enabled = _coerce_bool(payload.get("digestEnabled"), True)
 
     session.commit()
     session.refresh(row)
@@ -237,6 +244,7 @@ def save_portal_settings(session: Session, portal_id: str, payload: dict):
         slack_delivery_enabled=getattr(row, "slack_delivery_enabled", True),
         ticket_delivery_enabled=getattr(row, "ticket_delivery_enabled", True),
         white_label_name=getattr(row, "white_label_name", ""),
+        digest_enabled=getattr(row, "digest_enabled", True),
         updated_at=row.updated_at,
         storage="postgres",
     )

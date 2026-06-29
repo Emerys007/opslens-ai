@@ -19,6 +19,7 @@ from app.services.owner_polling import poll_portal_owners
 from app.services.property_polling import poll_portal_properties
 from app.services.slack_delivery import deliver_pending_alerts
 from app.services.ticket_delivery import deliver_pending_tickets
+from app.services.weekly_digest import send_due_digests
 from app.services.workflow_polling import poll_portal_workflows
 
 logger = logging.getLogger(__name__)
@@ -367,6 +368,31 @@ def run_polling_cycle_sync(session_factory: SessionFactory) -> dict[str, Any]:
     summary["ticketsFailed"] = int(ticket_summary.get("failed") or 0)
     summary["slack"] = slack_summary
     summary["tickets"] = ticket_summary
+
+    # Weekly digest — send the once-a-week summary to any portal whose 7-day
+    # window has elapsed. Own session, best-effort: the internal cadence gate
+    # makes this safe to call every cycle (it only sends when due), and a
+    # failure here never aborts the cycle.
+    digest_summary: dict[str, Any] = {"sent": 0, "failed": 0, "skipped": 0, "seeded": 0}
+    digest_session = session_factory()
+    if digest_session is not None:
+        try:
+            try:
+                digest_summary = send_due_digests(digest_session)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "weekly_digest_scheduler.cycle_failed",
+                    extra={"error": repr(exc)},
+                )
+                try:
+                    digest_session.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
+        finally:
+            digest_session.close()
+
+    summary["digestsSent"] = int(digest_summary.get("sent") or 0)
+    summary["digests"] = digest_summary
 
     summary["status"] = summary.get("status") or "ok"
     return summary

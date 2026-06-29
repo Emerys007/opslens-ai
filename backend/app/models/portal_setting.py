@@ -27,6 +27,14 @@ class PortalSetting(Base):
     slack_channel_name: Mapped[str] = mapped_column(Text, default="")
     # Agency-tier white-label: brand name shown on alerts instead of "OpsLens".
     white_label_name: Mapped[str] = mapped_column(Text, default="")
+    # Weekly digest: a recurring "what OpsLens caught this week" summary posted
+    # to the portal's Slack channel. ``digest_enabled`` defaults True so the
+    # app keeps proving its value even in quiet weeks; ``last_digest_sent_at``
+    # drives the 7-day cadence gate so a digest is sent at most once per week.
+    digest_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_digest_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     monitoring_coverage: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     install_diagnostic_summary: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 

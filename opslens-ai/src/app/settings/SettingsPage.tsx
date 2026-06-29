@@ -33,6 +33,7 @@ type PortalSettings = {
   slackDeliveryEnabled?: boolean;
   ticketDeliveryEnabled?: boolean;
   whiteLabelName?: string;
+  digestEnabled?: boolean;
   updatedAtUtc?: string | null;
   loadedAtUtc?: string | null;
   lastPolledAt?: string | null;
@@ -398,6 +399,8 @@ function SettingsPage({ context }: { context: any }) {
   const [slackDeliveryEnabled, setSlackDeliveryEnabled] = useState(true);
   const [ticketDeliveryEnabled, setTicketDeliveryEnabled] = useState(true);
   const [whiteLabelName, setWhiteLabelName] = useState("");
+  const [digestEnabled, setDigestEnabled] = useState(true);
+  const [sendingDigest, setSendingDigest] = useState(false);
   const [lastSavedAt, setLastSavedAt] = useState("");
   const [settingsStorage, setSettingsStorage] = useState("");
   const [slackConnected, setSlackConnected] = useState(false);
@@ -589,6 +592,7 @@ function SettingsPage({ context }: { context: any }) {
         setSlackDeliveryEnabled(settings.slackDeliveryEnabled !== false);
         setTicketDeliveryEnabled(settings.ticketDeliveryEnabled !== false);
         setWhiteLabelName(String(settings.whiteLabelName ?? ""));
+        setDigestEnabled(settings.digestEnabled !== false);
         setLastSavedAt(
           String(
             settings.lastPolledAtUtc ??
@@ -1242,6 +1246,7 @@ function SettingsPage({ context }: { context: any }) {
         slackDeliveryEnabled,
         ticketDeliveryEnabled,
         whiteLabelName,
+        digestEnabled,
       };
       const response = await hubspot.fetch(settingsUrl, {
         method: "POST",
@@ -1266,6 +1271,7 @@ function SettingsPage({ context }: { context: any }) {
         settings.ticketDeliveryEnabled ?? ticketDeliveryEnabled
       );
       setWhiteLabelName(String(settings.whiteLabelName ?? whiteLabelName));
+      setDigestEnabled(settings.digestEnabled ?? digestEnabled);
       setLastSavedAt(
         String(
           settings.updatedAtUtc ??
@@ -1317,6 +1323,42 @@ function SettingsPage({ context }: { context: any }) {
       );
     } finally {
       setSendingTest(false);
+    }
+  }
+
+  async function handleSampleDigest() {
+    if (!portalId || sendingDigest) {
+      return;
+    }
+    setSaveMessage("");
+    setTestMessage("");
+    setTestOk(false);
+    setSendingDigest(true);
+    try {
+      const response = await hubspot.fetch(
+        buildUrl(`${DASHBOARD_API_BASE}/digest/test`, { portalId }),
+        { method: "POST", timeout: 15000 }
+      );
+      const data = (await response.json().catch(() => ({}))) as {
+        message?: string;
+        detail?: string;
+      };
+      if (!response.ok) {
+        throw new Error(
+          data?.detail || `Could not send the digest (status ${response.status}).`
+        );
+      }
+      setTestOk(true);
+      setTestMessage(
+        data?.message || "Weekly digest sent — check your Slack channel."
+      );
+    } catch (error) {
+      setTestOk(false);
+      setTestMessage(
+        error instanceof Error ? error.message : "Could not send the sample digest."
+      );
+    } finally {
+      setSendingDigest(false);
     }
   }
 
@@ -1601,6 +1643,48 @@ function SettingsPage({ context }: { context: any }) {
                               assignment and follow-up.
                             </Text>
                           </Flex>
+                        </Box>
+                      </Flex>
+
+                      <Divider />
+
+                      <Flex
+                        direction="row"
+                        gap="medium"
+                        align="end"
+                        wrap
+                        justify="space-between"
+                      >
+                        <Box flex={1}>
+                          <Flex direction="column" gap="extra-small">
+                            <Flex align="center" gap="small" wrap>
+                              <Tag variant={digestEnabled ? "success" : "default"}>
+                                {digestEnabled ? "On" : "Off"}
+                              </Tag>
+                              <DeliveryToggle
+                                label="Weekly digest"
+                                checked={digestEnabled}
+                                disabled={formLocked}
+                                onChange={setDigestEnabled}
+                                description="A once-a-week recap of what OpsLens caught, posted to your Slack channel — even on quiet weeks, so the value stays visible. Agency plans send it under your white-label name."
+                              />
+                            </Flex>
+                            <Text variant="microcopy">
+                              A short weekly recap to Slack — issues caught,
+                              resolved, and still open. Great for forwarding to
+                              clients.
+                            </Text>
+                          </Flex>
+                        </Box>
+                        <Box>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            disabled={formLocked || sendingDigest}
+                            onClick={handleSampleDigest}
+                          >
+                            {sendingDigest ? "Sending…" : "Send sample digest"}
+                          </Button>
                         </Box>
                       </Flex>
 

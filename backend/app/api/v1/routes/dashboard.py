@@ -67,6 +67,7 @@ from app.services.install_diagnostic import (
 )
 from app.services.remediation_guidance import fix_guidance_for
 from app.services.slack_delivery import send_test_slack_message
+from app.services.weekly_digest import send_portal_digest
 from app.services.slack_oauth import SlackOAuthError, build_slack_authorize_url
 from app.services.workflow_remediation import (
     WorkflowRemediationError,
@@ -820,6 +821,30 @@ def dashboard_slack_test(request: Request):
         raise HTTPException(status_code=503, detail="Database is not configured.")
     try:
         ok, message = send_test_slack_message(session, portal_id)
+        if not ok:
+            raise HTTPException(status_code=400, detail=message)
+        return {"status": "ok", "message": message}
+    finally:
+        session.close()
+
+
+@router.post("/digest/test")
+def dashboard_digest_test(request: Request):
+    """Send a sample weekly digest to the portal's Slack channel right now.
+
+    ``force=True`` bypasses the enabled/entitlement gates so a user can preview
+    the digest before turning it on, and does not advance the weekly cadence.
+    """
+    portal_id = str(request.query_params.get("portalId", "")).strip()
+    if not portal_id:
+        raise HTTPException(status_code=400, detail="portalId is required.")
+
+    db_ready = init_db()
+    session = get_session()
+    if not db_ready or session is None:
+        raise HTTPException(status_code=503, detail="Database is not configured.")
+    try:
+        ok, message = send_portal_digest(session, portal_id, force=True)
         if not ok:
             raise HTTPException(status_code=400, detail=message)
         return {"status": "ok", "message": message}
