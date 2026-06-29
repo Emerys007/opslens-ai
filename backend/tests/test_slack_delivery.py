@@ -33,6 +33,7 @@ from app.models.alert import (
     STATUS_OPEN,
     Alert,
 )
+from app.models.portal_entitlement import PortalEntitlement
 from app.models.portal_setting import PortalSetting
 from app.services import slack_delivery
 
@@ -333,6 +334,56 @@ class DeliverPendingAlertsTests(_BaseSlackCase):
 
         self.assertEqual(0, summary["attempted"])
         self.assertGreaterEqual(summary["skipped_disabled_or_unconfigured"], 1)
+
+    def test_expired_entitlement_blocks_delivery(self) -> None:
+        session = self._session()
+        try:
+            self._seed_settings(session)
+            self._seed_alert(session, severity=SEVERITY_HIGH, title="Should not send")
+            # A canceled subscription = not entitled -> no delivery.
+            session.add(
+                PortalEntitlement(
+                    portal_id=self.PORTAL_ID,
+                    plan="professional",
+                    billing_interval="monthly",
+                    subscription_status="canceled",
+                    trial_approved=False,
+                )
+            )
+            session.commit()
+
+            with patch("urllib.request.urlopen") as mock_urlopen:
+                summary = slack_delivery.deliver_pending_alerts(session)
+                mock_urlopen.assert_not_called()
+        finally:
+            session.close()
+
+        self.assertEqual(0, summary["attempted"])
+        self.assertGreaterEqual(summary["skipped_not_entitled"], 1)
+
+    def test_active_entitlement_allows_delivery(self) -> None:
+        session = self._session()
+        try:
+            self._seed_settings(session)
+            self._seed_alert(session, severity=SEVERITY_HIGH, title="Should send")
+            session.add(
+                PortalEntitlement(
+                    portal_id=self.PORTAL_ID,
+                    plan="professional",
+                    billing_interval="monthly",
+                    subscription_status="active",
+                    trial_approved=False,
+                )
+            )
+            session.commit()
+
+            with patch("urllib.request.urlopen", return_value=_FakeResponse()):
+                summary = slack_delivery.deliver_pending_alerts(session)
+        finally:
+            session.close()
+
+        self.assertEqual(1, summary["succeeded"])
+        self.assertEqual(0, summary["skipped_not_entitled"])
 
 
 if __name__ == "__main__":  # pragma: no cover

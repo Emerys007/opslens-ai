@@ -248,6 +248,21 @@ def portal_is_entitled(payload: dict) -> bool:
     return bool(payload.get("active"))
 
 
+def portal_delivery_blocked(session: Session | None, portal_id: str) -> bool:
+    """True only when a billing record EXISTS for the portal and is NOT
+    entitled (expired / canceled / unpaid / trial lapsed). When there is no
+    record at all we fail OPEN (return False) so fresh/dev/not-yet-billed
+    portals keep working — only a definitively-inactive subscription blocks
+    alert delivery."""
+    cleaned_portal_id = str(portal_id or "").strip()
+    if not cleaned_portal_id or session is None:
+        return False
+    row = session.get(PortalEntitlement, cleaned_portal_id)
+    if row is None:
+        return False
+    return not portal_is_entitled(entitlement_payload(row, cleaned_portal_id))
+
+
 def upsert_portal_entitlement_from_install_session(
     session: Session,
     *,

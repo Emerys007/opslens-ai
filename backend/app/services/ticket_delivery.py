@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 from app.models.alert import STATUS_OPEN, Alert
 from app.models.portal_setting import PortalSetting
 from app.services.hubspot_oauth import get_portal_access_token
+from app.services.portal_entitlements import portal_delivery_blocked
 from app.services.hubspot_ticket_pipeline import (
     PortalProvisioningRequiredError,
     TicketPipelineConfig,
@@ -207,6 +208,7 @@ def deliver_pending_tickets(session: Session) -> dict[str, Any]:
         "failed": 0,
         "skipped_below_threshold": 0,
         "skipped_disabled_or_unconfigured": 0,
+        "skipped_not_entitled": 0,
     }
 
     pending = (
@@ -220,11 +222,19 @@ def deliver_pending_tickets(session: Session) -> dict[str, Any]:
     )
 
     settings_cache: dict[str, PortalSetting | None] = {}
+    entitlement_cache: dict[str, bool] = {}
 
     for alert in pending:
         portal_id = str(alert.portal_id or "").strip()
         if not portal_id:
             summary["failed"] += 1
+            continue
+
+        # Expired / unpaid / blocked portals receive no tickets.
+        if portal_id not in entitlement_cache:
+            entitlement_cache[portal_id] = portal_delivery_blocked(session, portal_id)
+        if entitlement_cache[portal_id]:
+            summary["skipped_not_entitled"] += 1
             continue
 
         if portal_id not in settings_cache:

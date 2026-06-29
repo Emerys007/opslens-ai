@@ -64,6 +64,7 @@ from app.models.monitoring_exclusion import (
     EXCLUSION_TYPE_WORKFLOW,
     MonitoringExclusion,
 )
+from app.models.portal_entitlement import PortalEntitlement
 from app.models.portal_setting import PortalSetting
 from app.models.property_change_event import (
     PROPERTY_EVENT_ARCHIVED,
@@ -866,6 +867,84 @@ class ListCorrelationTests(_BaseDbCase):
             summary_obj = json.loads(alerts[0].summary)
             self.assertEqual("list_archived", summary_obj["kind"])
             self.assertIn("dependency_locations", summary_obj["impact"])
+        finally:
+            session.close()
+
+    def _seed_entitlement(self, session, plan: str) -> None:
+        session.add(
+            PortalEntitlement(
+                portal_id=self.PORTAL_ID,
+                plan=plan,
+                billing_interval="monthly",
+                subscription_status="active",
+                trial_approved=False,
+            )
+        )
+
+    def _setup_list_archived_with_dependency(self, session) -> ListChangeEvent:
+        self._seed_list_snapshot(
+            session, list_id="77", list_name="Lifecycle segment", is_archived=True
+        )
+        self._seed_workflow_snapshot(session, workflow_id="100", name="Lead Nurture")
+        self._seed_list_dependency(session, workflow_id="100", list_id="77")
+        return self._seed_list_event(
+            session,
+            list_id="77",
+            event_type=LIST_EVENT_ARCHIVED,
+            payload={"list_id": "77", "list_name": "Lifecycle segment"},
+        )
+
+    def test_list_alert_gated_out_for_starter_plan(self) -> None:
+        # List detection is a Professional+ feature; a Starter portal must not
+        # get list alerts even though the change + dependency exist.
+        session = self._session()
+        try:
+            self._seed_entitlement(session, "starter")
+            event = self._setup_list_archived_with_dependency(session)
+            session.commit()
+
+            alerts = correlate_list_change_event(session, event)
+            session.commit()
+
+            self.assertEqual([], alerts)
+            self.assertIsNotNone(event.processed_at)
+        finally:
+            session.close()
+
+    def test_list_alert_emitted_for_professional_plan(self) -> None:
+        session = self._session()
+        try:
+            self._seed_entitlement(session, "professional")
+            event = self._setup_list_archived_with_dependency(session)
+            session.commit()
+
+            alerts = correlate_list_change_event(session, event)
+            session.commit()
+
+            self.assertEqual(1, len(alerts))
+            self.assertEqual("100", alerts[0].impacted_workflow_id)
+        finally:
+            session.close()
+
+    def test_owner_alert_gated_out_below_agency_plan(self) -> None:
+        # Owner detection is Agency-only; a Professional portal must not get it.
+        session = self._session()
+        try:
+            self._seed_entitlement(session, "professional")
+            self._seed_owner_snapshot(
+                session, owner_id="9", email="rep@acme.test", is_active=False
+            )
+            self._seed_owner_dependency(session, workflow_id="100", owner_id="9")
+            self._seed_workflow_snapshot(session, workflow_id="100", name="Round Robin")
+            event = self._seed_owner_event(
+                session, owner_id="9", event_type=OWNER_EVENT_DEACTIVATED
+            )
+            session.commit()
+
+            alerts = correlate_owner_change_event(session, event)
+            session.commit()
+
+            self.assertEqual([], alerts)
         finally:
             session.close()
 

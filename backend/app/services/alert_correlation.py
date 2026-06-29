@@ -116,8 +116,20 @@ from app.services.monitoring_config import (
     is_workflow_excluded,
     load_monitoring_coverage,
 )
+from app.services.plan_capabilities import plan_allows_category
+from app.services.portal_entitlements import get_portal_entitlement
 
 logger = logging.getLogger(__name__)
+
+
+def _plan_allows_category(
+    session: Session, portal_id: str, source_event_type: str
+) -> bool:
+    """Plan-tier gate: only emit alerts for detection categories the portal's
+    plan includes (list/template need Professional; owner needs Agency).
+    Unknown/empty plans fail OPEN to full coverage — see plan_capabilities."""
+    plan = str(get_portal_entitlement(session, portal_id).get("plan") or "")
+    return plan_allows_category(plan, source_event_type)
 
 
 DEDUP_WINDOW = timedelta(days=7)
@@ -546,7 +558,9 @@ def correlate_property_change_event(
     object_type_id = event.object_type_id or ""
     coverage = load_monitoring_coverage(session, portal_id)
 
-    if not is_category_enabled(coverage, source_event_type):
+    if not is_category_enabled(coverage, source_event_type) or not _plan_allows_category(
+        session, portal_id, source_event_type
+    ):
         _mark_processed(event)
         return []
 
@@ -694,7 +708,9 @@ def correlate_list_change_event(
     list_id = event.list_id
     coverage = load_monitoring_coverage(session, portal_id)
 
-    if not is_category_enabled(coverage, source_event_type):
+    if not is_category_enabled(coverage, source_event_type) or not _plan_allows_category(
+        session, portal_id, source_event_type
+    ):
         _mark_processed(event)
         return []
 
@@ -815,7 +831,9 @@ def correlate_email_template_change_event(
     template_id = event.template_id
     coverage = load_monitoring_coverage(session, portal_id)
 
-    if not is_category_enabled(coverage, source_event_type):
+    if not is_category_enabled(coverage, source_event_type) or not _plan_allows_category(
+        session, portal_id, source_event_type
+    ):
         _mark_processed(event)
         return []
 
@@ -939,7 +957,9 @@ def correlate_owner_change_event(
     owner_id = event.owner_id
     coverage = load_monitoring_coverage(session, portal_id)
 
-    if not is_category_enabled(coverage, source_event_type):
+    if not is_category_enabled(coverage, source_event_type) or not _plan_allows_category(
+        session, portal_id, source_event_type
+    ):
         _mark_processed(event)
         return []
 
@@ -1066,7 +1086,9 @@ def correlate_workflow_change_event(
     workflow_id = event.workflow_id
     if source_event_type in MONITORING_CATEGORIES:
         coverage = load_monitoring_coverage(session, portal_id)
-        if not is_category_enabled(coverage, source_event_type):
+        if not is_category_enabled(coverage, source_event_type) or not _plan_allows_category(
+            session, portal_id, source_event_type
+        ):
             _mark_processed(event)
             return []
         if is_workflow_excluded(session, portal_id, workflow_id):
