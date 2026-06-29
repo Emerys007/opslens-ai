@@ -20,6 +20,28 @@ def default_external_install_complete_url() -> str:
     return f"{_app_public_base_url()}/opslens/install/complete/"
 
 
+def _opslens_marketing_url() -> str:
+    return f"{_app_public_base_url()}/opslens"
+
+
+def hubspot_app_settings_url(portal_id: str) -> str:
+    """Deep link to the OpsLens Settings tab inside a HubSpot portal.
+
+    Falls back to the connected-apps list (still a valid page, never a 404)
+    when the numeric HubSpot app id (HUBSPOT_APP_ID) is not configured.
+    """
+    pid = str(portal_id or "").strip()
+    if not pid:
+        return ""
+    app_id = str(settings.hubspot_app_id or "").strip()
+    if app_id:
+        return (
+            f"https://app.hubspot.com/connected-apps/{pid}/installed/"
+            f"framework/{app_id}/settings/general-settings"
+        )
+    return f"https://app.hubspot.com/connected-apps/{pid}"
+
+
 def is_hubspot_return_url(value: str | None) -> bool:
     text = str(value or "").strip()
     if not text:
@@ -104,6 +126,8 @@ def final_install_redirect_url(
     normalized_status = str(status or "").strip().lower()
     success_statuses = {"", "ok", "success"}
 
+    # A genuine marketplace install handed us a HubSpot return URL -> honor it
+    # so HubSpot can complete its own install flow.
     if (
         normalized_status in success_statuses
         and str(install_origin_value or "").strip().lower() == INSTALL_ORIGIN_MARKETPLACE
@@ -111,13 +135,13 @@ def final_install_redirect_url(
     ):
         return str(hubspot_return_url).strip()
 
-    return external_install_complete_url(
-        portal_id=portal_id,
-        plan=plan,
-        billing_interval=billing_interval,
-        bootstrap_status=bootstrap_status,
-        status=status,
-        message=message,
-        trial=trial,
-        trial_expires_at=trial_expires_at,
-    )
+    # Direct install / reconnect / non-fatal error: land the user on the
+    # OpsLens Settings tab inside their HubSpot portal when we know the portal
+    # id. This replaces the former app-sync.com/opslens/install/complete page
+    # (which did not exist and 404'd).
+    settings_url = hubspot_app_settings_url(portal_id)
+    if settings_url:
+        return settings_url
+
+    # Portal unknown (hard failure before token exchange): a valid product page.
+    return _opslens_marketing_url()

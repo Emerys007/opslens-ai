@@ -170,15 +170,12 @@ class AutoTrialFlowTests(unittest.TestCase):
 
         self.assertEqual(302, callback.status_code)
         location = callback.headers["location"]
+        # Installs now land on the OpsLens Settings tab inside the HubSpot
+        # portal; the granted trial is verified via the persisted entitlement
+        # below, not via redirect query params.
         self.assertTrue(
-            location.startswith("https://app-sync.com/opslens/install/complete/?")
+            location.startswith("https://app.hubspot.com/connected-apps/1111111")
         )
-        self.assertIn("portalId=1111111", location)
-        self.assertIn("bootstrapStatus=success", location)
-        self.assertIn("trial=1", location)
-        # ISO 8601 UTC ``Z`` timestamp must be present.
-        self.assertIn("trial_expires_at=", location)
-        self.assertIn("Z", location.split("trial_expires_at=", 1)[1])
 
         # Inspect the persisted entitlement: trial windows must be set on it.
         session = self._session()
@@ -202,7 +199,7 @@ class AutoTrialFlowTests(unittest.TestCase):
         self.assertTrue(success_payload["trialApproved"])
         self.assertTrue(success_payload["active"])
         self.assertTrue(str(success_payload["trialExpiresAt"]).endswith("Z"))
-        self.assertIn("trial=1", success_payload["returnUrl"])
+        self.assertIn("connected-apps/1111111", success_payload["returnUrl"])
 
     # ------------------------------------------------------------------
     # 2. Re-install: portal that already used a trial does not get another.
@@ -320,13 +317,11 @@ class AutoTrialFlowTests(unittest.TestCase):
 
         self.assertEqual(302, callback.status_code)
         location = callback.headers["location"]
-        # Re-install must NOT advertise a fresh trial in the redirect.
-        self.assertNotIn("trial=1", location)
-        # Install still completes successfully even though the portal has
-        # exhausted its trial; billing is handled out-of-band.
-        self.assertIn("bootstrapStatus=success", location)
-        self.assertIn("status=ok", location)
-        self.assertNotIn("bootstrapStatus=payment_required", location)
+        # Re-install completes and lands on the OpsLens Settings tab; the
+        # exhausted-trial state is verified via the persisted entitlement below.
+        self.assertTrue(
+            location.startswith("https://app.hubspot.com/connected-apps/")
+        )
 
         # The portal entitlement must still carry the original trial windows;
         # the auto-trial code must not have overwritten them.

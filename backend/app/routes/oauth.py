@@ -238,18 +238,13 @@ def oauth_callback(
             ),
             status_code=302,
         )
-    if not signed_state:
-        return RedirectResponse(
-            _callback_redirect_target(
-                bootstrap_status="failed",
-                status="error",
-                message="Missing OAuth state.",
-            ),
-            status_code=302,
-        )
-
     try:
-        state_payload = parse_signed_state(signed_state)
+        # State is optional. HubSpot marketplace/direct installs and the in-app
+        # "reconnect" flow arrive WITHOUT a signed state; only the
+        # /oauth/start-initiated flow carries one. When present we verify it
+        # (CSRF + installSessionId/returnTo); when absent we proceed on the
+        # authorization code alone (the code exchange is itself the auth).
+        state_payload = parse_signed_state(signed_state) if signed_state else {}
         token_payload = exchange_code_for_tokens(auth_code)
 
         access_token = str(

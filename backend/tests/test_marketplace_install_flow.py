@@ -142,9 +142,9 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
         )
 
         self.assertEqual(302, response.status_code)
-        self.assertIn("/opslens/install/complete/?", response.headers["location"])
-        self.assertIn("bootstrapStatus=failed", response.headers["location"])
-        self.assertIn("status=error", response.headers["location"])
+        # A not-yet-billable authorize attempt has no portal yet, so it lands on
+        # the public OpsLens page rather than a (nonexistent) install-complete page.
+        self.assertIn("app-sync.com/opslens", response.headers["location"])
 
     def test_marketplace_origin_oauth_callback_redirects_to_hubspot_return_url(self) -> None:
         hubspot_return_url = (
@@ -322,11 +322,9 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
 
         self.assertEqual(302, callback.status_code)
         location = callback.headers["location"]
-        self.assertTrue(location.startswith("https://app-sync.com/opslens/install/complete/?"))
-        self.assertIn("portalId=8886743", location)
-        self.assertIn("plan=business", location)
-        self.assertIn("billingInterval=yearly", location)
-        self.assertIn("bootstrapStatus=success", location)
+        self.assertTrue(
+            location.startswith("https://app.hubspot.com/connected-apps/8886743")
+        )
 
         success = self.client.get(
             "/api/v1/marketplace/install/success?installSessionId=external-trial-session"
@@ -336,7 +334,7 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
         self.assertEqual("ok", success_payload["status"])
         self.assertEqual("8886743", success_payload["portalId"])
         self.assertEqual("success", success_payload["bootstrapStatus"])
-        self.assertIn("/opslens/install/complete/?portalId=8886743", success_payload["returnUrl"])
+        self.assertIn("connected-apps/8886743", success_payload["returnUrl"])
         self.assertTrue(success_payload["active"])
 
     def test_paid_install_start_authorize_and_oauth_callback_complete_after_checkout(self) -> None:
@@ -461,11 +459,9 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
 
         self.assertEqual(302, callback.status_code)
         callback_location = callback.headers["location"]
-        self.assertTrue(callback_location.startswith("https://app-sync.com/opslens/install/complete/?"))
-        self.assertIn("portalId=9999999", callback_location)
-        self.assertIn("plan=professional", callback_location)
-        self.assertIn("billingInterval=monthly", callback_location)
-        self.assertIn("bootstrapStatus=success", callback_location)
+        self.assertTrue(
+            callback_location.startswith("https://app.hubspot.com/connected-apps/9999999")
+        )
 
         success = self.client.get(
             f"/api/v1/marketplace/install/success?installSessionId={install_session_id}"
@@ -475,7 +471,7 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
         self.assertEqual("ok", success_payload["status"])
         self.assertEqual("9999999", success_payload["portalId"])
         self.assertEqual("success", success_payload["bootstrapStatus"])
-        self.assertIn("/opslens/install/complete/?portalId=9999999", success_payload["returnUrl"])
+        self.assertIn("connected-apps/9999999", success_payload["returnUrl"])
         self.assertTrue(success_payload["active"])
 
         overview = self.client.get("/api/v1/dashboard/overview?portalId=9999999")
@@ -542,15 +538,11 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
 
         self.assertEqual(302, callback.status_code)
         location = callback.headers["location"]
-        self.assertTrue(location.startswith("https://app-sync.com/opslens/install/complete/?"))
-        self.assertIn("portalId=7777777", location)
-        self.assertIn("plan=business", location)
-        self.assertIn("billingInterval=yearly", location)
-        # Non-fatal bootstrap: install lands on the success page with a
-        # bootstrapStatus=failed signal so the UI can offer a retry.
-        self.assertIn("bootstrapStatus=failed", location)
-        self.assertIn("status=ok", location)
-        self.assertNotIn("status=error", location)
+        # Non-fatal bootstrap: the install still lands on the OpsLens Settings
+        # tab; the failed-bootstrap signal is verified via the success payload.
+        self.assertTrue(
+            location.startswith("https://app.hubspot.com/connected-apps/7777777")
+        )
 
         success = self.client.get(
             "/api/v1/marketplace/install/success?installSessionId=failed-bootstrap-session"
@@ -558,8 +550,53 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
         self.assertEqual(200, success.status_code)
         success_payload = success.json()
         self.assertEqual("failed", success_payload["bootstrapStatus"])
-        self.assertIn("/opslens/install/complete/?portalId=7777777", success_payload["returnUrl"])
-        self.assertIn("status=ok", success_payload["returnUrl"])
+        self.assertIn("connected-apps/7777777", success_payload["returnUrl"])
+
+    def test_oauth_callback_without_state_completes_stateless_install(self) -> None:
+        # HubSpot marketplace / direct installs and the in-app "reconnect" flow
+        # arrive with NO signed state. The callback must complete the install
+        # (not reject with "Missing OAuth state") and land the user on the
+        # OpsLens Settings deep link inside their portal.
+        with patch(
+            "app.routes.oauth.exchange_code_for_tokens",
+            return_value={
+                "access_token": "access-token",
+                "refresh_token": "refresh-token",
+                "expires_in": 3600,
+                "token_type": "Bearer",
+            },
+        ), patch(
+            "app.routes.oauth.introspect_access_token",
+            return_value={
+                "hub_id": "8886743",
+                "hub_domain": "portal-8886743.test",
+                "user": "owner@example.com",
+                "user_id": "user-123",
+                "app_id": "app-123",
+                "scopes": ["oauth", "tickets", "crm.lists.read", "content"],
+            },
+        ), patch(
+            "app.services.portal_entitlements.ensure_portal_bootstrap",
+            return_value={"portalId": "8886743"},
+        ), patch(
+            "app.services.portal_entitlements.run_install_diagnostic",
+            return_value={
+                "status": "completed",
+                "portalId": "8886743",
+                "issuesFound": 0,
+            },
+        ):
+            callback = self.client.get(
+                "/oauth-callback?code=auth-code",
+                follow_redirects=False,
+            )
+
+        self.assertEqual(302, callback.status_code)
+        location = callback.headers["location"]
+        self.assertNotIn("Missing", location)
+        self.assertTrue(
+            location.startswith("https://app.hubspot.com/connected-apps/8886743")
+        )
 
     def test_install_success_contract_reports_bootstrap_summary(self) -> None:
         session = self._session()
@@ -594,7 +631,7 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
         self.assertEqual("8886743", payload["portalId"])
         self.assertEqual("professional", payload["plan"])
         self.assertEqual("success", payload["bootstrapStatus"])
-        self.assertIn("/opslens/install/complete/?portalId=8886743", payload["returnUrl"])
+        self.assertIn("connected-apps/8886743", payload["returnUrl"])
         self.assertTrue(payload["active"])
         self.assertEqual("892158537", payload["createdAssetsSummary"]["pipelineId"])
         self.assertEqual(3, len(payload["nextStepChecklist"]))
