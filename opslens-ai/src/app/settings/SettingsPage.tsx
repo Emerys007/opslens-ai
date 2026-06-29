@@ -389,6 +389,8 @@ function SettingsPage({ context }: { context: any }) {
   const [hasLoadedSettings, setHasLoadedSettings] = useState(false);
   const [saveMessage, setSaveMessage] = useState("");
   const [testMessage, setTestMessage] = useState("");
+  const [sendingTest, setSendingTest] = useState(false);
+  const [testOk, setTestOk] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [slackWebhookUrl, setSlackWebhookUrl] = useState("");
   const [alertThreshold, setAlertThreshold] = useState("medium");
@@ -1279,17 +1281,38 @@ function SettingsPage({ context }: { context: any }) {
     }
   }
 
-  function handleTestAlert() {
-    setSaveMessage("");
-
-    if (!slackWebhookUrl.trim()) {
-      setTestMessage("Add a Slack webhook URL before sending a test alert.");
+  async function handleTestAlert() {
+    if (!portalId || sendingTest) {
       return;
     }
-
-    setTestMessage(
-      "Test delivery is not connected from this iframe yet. Save this webhook and OpsLens will post the next matching alert automatically."
-    );
+    setSaveMessage("");
+    setTestMessage("");
+    setTestOk(false);
+    setSendingTest(true);
+    try {
+      const response = await hubspot.fetch(
+        buildUrl(`${DASHBOARD_API_BASE}/slack/test`, { portalId }),
+        { method: "POST", timeout: 15000 }
+      );
+      const data = (await response.json().catch(() => ({}))) as {
+        message?: string;
+        detail?: string;
+      };
+      if (!response.ok) {
+        throw new Error(data?.detail || `Test failed (status ${response.status}).`);
+      }
+      setTestOk(true);
+      setTestMessage(
+        data?.message || "Test alert sent — check your Slack channel."
+      );
+    } catch (error) {
+      setTestOk(false);
+      setTestMessage(
+        error instanceof Error ? error.message : "Could not send the test alert."
+      );
+    } finally {
+      setSendingTest(false);
+    }
   }
 
   return (
@@ -1568,10 +1591,10 @@ function SettingsPage({ context }: { context: any }) {
                         <Button
                           type="button"
                           variant="secondary"
-                          disabled={formLocked}
+                          disabled={formLocked || sendingTest}
                           onClick={handleTestAlert}
                         >
-                          Test alert
+                          {sendingTest ? "Sending…" : "Test alert"}
                         </Button>
                         <Button
                           type="submit"
@@ -1588,7 +1611,10 @@ function SettingsPage({ context }: { context: any }) {
                         </Alert>
                       ) : null}
                       {testMessage ? (
-                        <Alert variant="warning" title="Test unavailable">
+                        <Alert
+                          variant={testOk ? "success" : "warning"}
+                          title={testOk ? "Test alert sent" : "Test alert"}
+                        >
                           {testMessage}
                         </Alert>
                       ) : null}

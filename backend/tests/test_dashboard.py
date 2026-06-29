@@ -1266,6 +1266,42 @@ class DashboardEndpointTests(unittest.TestCase):
         finally:
             session.close()
 
+    def test_slack_test_sends_message_when_connected(self) -> None:
+        session = self._session()
+        try:
+            session.add(
+                PortalSetting(
+                    portal_id=self.PORTAL_ID,
+                    slack_webhook_url="https://hooks.slack.com/services/T/B/x",
+                )
+            )
+            session.commit()
+        finally:
+            session.close()
+
+        with patch(
+            "app.services.slack_delivery._post_to_slack",
+            return_value=(True, 200, "ok"),
+        ) as post_mock:
+            response = self.client.post(
+                f"/api/v1/dashboard/slack/test?portalId={self.PORTAL_ID}"
+            )
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual("ok", response.json()["status"])
+        post_mock.assert_called_once()
+        called_webhook = post_mock.call_args.args[0]
+        self.assertEqual("https://hooks.slack.com/services/T/B/x", called_webhook)
+
+    def test_slack_test_returns_400_when_not_connected(self) -> None:
+        with patch("app.services.slack_delivery._post_to_slack") as post_mock:
+            response = self.client.post(
+                f"/api/v1/dashboard/slack/test?portalId={self.PORTAL_ID}"
+            )
+
+        self.assertEqual(400, response.status_code)
+        post_mock.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

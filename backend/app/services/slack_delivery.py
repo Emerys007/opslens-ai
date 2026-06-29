@@ -370,6 +370,62 @@ def deliver_pending_alerts(session: Session) -> dict[str, Any]:
     return summary
 
 
+def send_test_slack_message(session: Session, portal_id: str) -> tuple[bool, str]:
+    """Post a clearly-labelled test message to the portal's connected Slack
+    channel so a user can confirm delivery works. Returns ``(ok, message)``
+    with a user-safe message. Never raises."""
+    portal_id = str(portal_id or "").strip()
+    if not portal_id:
+        return False, "Missing portal id."
+
+    portal_setting = session.get(PortalSetting, portal_id)
+    if portal_setting is None:
+        return False, "No settings found for this portal yet."
+
+    webhook_url = (getattr(portal_setting, "slack_webhook_url", "") or "").strip()
+    if not webhook_url:
+        return False, "No Slack channel is connected. Connect Slack first."
+
+    payload = {
+        "blocks": [
+            {
+                "type": "header",
+                "text": {"type": "plain_text", "text": "✅ OpsLens test alert", "emoji": True},
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        "This is a test from OpsLens. Your Slack channel is connected "
+                        "correctly — real alerts about workflow-breaking changes "
+                        "(disabled workflows, archived properties, schema edits) will "
+                        "arrive here with plain-English explanations and fixes."
+                    ),
+                },
+            },
+            {
+                "type": "context",
+                "elements": [
+                    {"type": "mrkdwn", "text": f"OpsLens • Portal {portal_id} • Test message"}
+                ],
+            },
+        ]
+    }
+
+    ok, status, body = _post_to_slack(webhook_url, payload)
+    if not ok:
+        logger.warning(
+            "slack_delivery.test_failed",
+            extra={"portal_id": portal_id, "status": status, "body": body[:300]},
+        )
+        return False, (
+            "Slack rejected the test message. Try reconnecting Slack "
+            f"(status {status})."
+        )
+    return True, "Test alert sent — check your Slack channel."
+
+
 # Re-export for tests / callers that don't want to import app.config directly.
 def _is_slack_globally_disabled() -> bool:  # pragma: no cover — placeholder hook
     return bool(getattr(app_settings, "disable_slack_delivery", False))

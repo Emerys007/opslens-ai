@@ -64,6 +64,7 @@ from app.services.install_diagnostic import (
     run_install_diagnostic,
 )
 from app.services.remediation_guidance import fix_guidance_for
+from app.services.slack_delivery import send_test_slack_message
 from app.services.slack_oauth import SlackOAuthError, build_slack_authorize_url
 from app.services.workflow_remediation import (
     WorkflowRemediationError,
@@ -683,6 +684,26 @@ def dashboard_slack_disconnect(request: Request):
             row.slack_team_name = ""
             session.commit()
         return {"status": "ok", "connected": False}
+    finally:
+        session.close()
+
+
+@router.post("/slack/test")
+def dashboard_slack_test(request: Request):
+    """Send a test message to the portal's connected Slack channel."""
+    portal_id = str(request.query_params.get("portalId", "")).strip()
+    if not portal_id:
+        raise HTTPException(status_code=400, detail="portalId is required.")
+
+    db_ready = init_db()
+    session = get_session()
+    if not db_ready or session is None:
+        raise HTTPException(status_code=503, detail="Database is not configured.")
+    try:
+        ok, message = send_test_slack_message(session, portal_id)
+        if not ok:
+            raise HTTPException(status_code=400, detail=message)
+        return {"status": "ok", "message": message}
     finally:
         session.close()
 
