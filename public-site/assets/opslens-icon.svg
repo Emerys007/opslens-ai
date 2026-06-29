@@ -1,21 +1,33 @@
-<svg width="800" height="800" viewBox="0 0 800 800" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="OpsLens">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" fill="none" role="img" aria-label="OpsLens AI">
   <defs>
-    <linearGradient id="opslensBg" x1="0" y1="0" x2="800" y2="800" gradientUnits="userSpaceOnUse">
+    <linearGradient id="opslensTile" x1="0" y1="0" x2="1024" y2="1024" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#4F46E5"/>
       <stop offset="1" stop-color="#7C3AED"/>
     </linearGradient>
-    <radialGradient id="opslensPupil" cx="0.38" cy="0.34" r="0.85">
-      <stop offset="0" stop-color="#FFFFFF"/>
-      <stop offset="1" stop-color="#C7D2FE"/>
-    </radialGradient>
   </defs>
 
-  <rect x="0" y="0" width="800" height="800" fill="url(#opslensBg)"/>
+  <!-- Indigo -> violet rounded tile -->
+  <rect x="0" y="0" width="1024" height="1024" rx="224" fill="url(#opslensTile)"/>
 
-  <circle cx="376" cy="424" r="206" fill="none" stroke="#FFFFFF" stroke-width="56"/>
-  <circle cx="376" cy="424" r="110" fill="url(#opslensPupil)"/>
-  <circle cx="332" cy="380" r="30" fill="#FFFFFF" fill-opacity="0.85"/>
+  <!-- Magnifying glass handle (drawn first so the ring covers its top end) -->
+  <line x1="760" y1="724" x2="916" y2="880"
+        stroke="#FFFFFF" stroke-width="80" stroke-linecap="round"/>
 
-  <circle cx="560" cy="248" r="92" fill="url(#opslensBg)"/>
-  <circle cx="560" cy="248" r="64" fill="#F59E0B" stroke="#FFFFFF" stroke-width="14"/>
+  <!-- Magnifying glass ring -->
+  <circle cx="452" cy="416" r="300"
+          stroke="#FFFFFF" stroke-width="60"/>
+
+  <!-- 3x3 grid of CRM record cells inside the lens -->
+  <!-- Row 1 -->
+  <rect x="300" y="264" width="76" height="76" rx="14" fill="#FFFFFF"/>
+  <rect x="414" y="264" width="76" height="76" rx="14" fill="#FFFFFF"/>
+  <rect x="528" y="264" width="76" height="76" rx="14" fill="#FFFFFF"/>
+  <!-- Row 2 (center cell flagged in amber — the change OpsLens spotted) -->
+  <rect x="300" y="378" width="76" height="76" rx="14" fill="#FFFFFF"/>
+  <rect x="414" y="378" width="76" height="76" rx="14" fill="#FBBF24"/>
+  <rect x="528" y="378" width="76" height="76" rx="14" fill="#FFFFFF"/>
+  <!-- Row 3 -->
+  <rect x="300" y="492" width="76" height="76" rx="14" fill="#FFFFFF"/>
+  <rect x="414" y="492" width="76" height="76" rx="14" fill="#FFFFFF"/>
+  <rect x="528" y="492" width="76" height="76" rx="14" fill="#FFFFFF"/>
 </svg>
