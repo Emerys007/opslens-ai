@@ -6,6 +6,7 @@ from sqlalchemy import Boolean, DateTime, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
+from app.services.token_crypto import EncryptedToken
 
 
 def _utc_now() -> datetime:
@@ -21,8 +22,8 @@ class HubSpotInstallation(Base):
     user_id: Mapped[str] = mapped_column(String(64), default="")
     app_id: Mapped[str] = mapped_column(String(64), default="")
 
-    access_token: Mapped[str] = mapped_column(Text, default="")
-    refresh_token: Mapped[str] = mapped_column(Text, default="")
+    access_token: Mapped[str] = mapped_column(EncryptedToken, default="")
+    refresh_token: Mapped[str] = mapped_column(EncryptedToken, default="")
     token_type: Mapped[str] = mapped_column(String(64), default="Bearer")
     scopes_json: Mapped[str] = mapped_column(Text, default="[]")
     access_token_expires_at: Mapped[datetime | None] = mapped_column(

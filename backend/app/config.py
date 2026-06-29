@@ -22,6 +22,11 @@ class Settings(BaseSettings):
     oauth_state_secret: str = ""
     oauth_state_ttl_seconds: int = 900
 
+    # Encryption-at-rest for stored HubSpot OAuth tokens. A urlsafe-base64
+    # 32-byte Fernet key. When empty, tokens are stored as plaintext (legacy
+    # behavior); setting it encrypts tokens going forward. Must stay stable.
+    token_encryption_key: str = ""
+
     stripe_secret_key: str = ""
     stripe_webhook_secret: str = ""
     stripe_price_starter_monthly: str = ""
