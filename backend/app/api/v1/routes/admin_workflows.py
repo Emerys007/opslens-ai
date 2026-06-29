@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Path, Query
@@ -36,7 +37,7 @@ def _require_admin_key(supplied: str | None) -> None:
         # where an unset key blocks access in production. Operators must
         # explicitly set MAINTENANCE_API_KEY to enable manual triggers.
         raise HTTPException(status_code=503, detail="Admin API key is not configured.")
-    if str(supplied or "").strip() != expected:
+    if not hmac.compare_digest(str(supplied or "").strip(), expected):
         raise HTTPException(status_code=401, detail="Invalid admin key.")
 
 

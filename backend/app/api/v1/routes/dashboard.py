@@ -618,17 +618,36 @@ _AGENCY_PLANS = {"agency", "business", "enterprise"}
 _PORTFOLIO_PORTAL_CAP = 50
 
 
-def _find_portals_for_user(session, user_email: str) -> list[str]:
-    """Portals an agency partner manages: ones they installed directly, plus
-    ones installed via their App-Sync partner account. Email match only — a
-    caller can only ever see portals tied to their own (signed) identity."""
-    email = str(user_email or "").strip().lower()
-    if not email:
+def _partner_emails_for_portal(session, portal_id: str) -> set[str]:
+    """The owner email identity(ies) of the SIGNED portal, derived server-side
+    — never from a caller-supplied param. This is what scopes the agency
+    rollup, so a caller can only ever see portals tied to the portal they're
+    actually authenticated in."""
+    emails: set[str] = set()
+    install = session.get(HubSpotInstallation, portal_id)
+    if install is not None:
+        email = str(getattr(install, "installing_user_email", "") or "").strip().lower()
+        if email:
+            emails.add(email)
+    for (email,) in session.execute(
+        select(MarketplaceInstallSession.partner_user_email).where(
+            MarketplaceInstallSession.hubspot_portal_id == portal_id
+        )
+    ).all():
+        cleaned = str(email or "").strip().lower()
+        if cleaned:
+            emails.add(cleaned)
+    return emails
+
+
+def _find_portals_for_emails(session, emails: set[str]) -> list[str]:
+    """Every portal owned by any of these (server-derived) partner emails."""
+    if not emails:
         return []
     portal_ids: set[str] = set()
     for (pid,) in session.execute(
         select(HubSpotInstallation.portal_id).where(
-            func.lower(HubSpotInstallation.installing_user_email) == email,
+            func.lower(HubSpotInstallation.installing_user_email).in_(emails),
             HubSpotInstallation.is_active.is_(True),
         )
     ).all():
@@ -636,7 +655,7 @@ def _find_portals_for_user(session, user_email: str) -> list[str]:
             portal_ids.add(str(pid))
     for (pid,) in session.execute(
         select(MarketplaceInstallSession.hubspot_portal_id).where(
-            func.lower(MarketplaceInstallSession.partner_user_email) == email,
+            func.lower(MarketplaceInstallSession.partner_user_email).in_(emails)
         )
     ).all():
         if pid:
@@ -683,7 +702,6 @@ def dashboard_portfolio(request: Request):
     the current portal is returned with agencyEnabled=false."""
     query = request.query_params
     portal_id = str(query.get("portalId", "")).strip()
-    user_email = str(query.get("userEmail", "")).strip()
     if not portal_id:
         raise HTTPException(status_code=400, detail="portalId is required.")
 
@@ -705,7 +723,10 @@ def dashboard_portfolio(request: Request):
         agency_enabled = current_plan in _AGENCY_PLANS
 
         if agency_enabled:
-            portal_ids = _find_portals_for_user(session, user_email)
+            # Scope strictly to the SIGNED portal's owner identity, derived
+            # server-side — never trust a caller-supplied userEmail.
+            emails = _partner_emails_for_portal(session, portal_id)
+            portal_ids = _find_portals_for_emails(session, emails)
             if portal_id not in portal_ids:
                 portal_ids.append(portal_id)
             portal_ids = sorted(set(portal_ids))[:_PORTFOLIO_PORTAL_CAP]

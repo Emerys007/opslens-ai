@@ -42,6 +42,7 @@ from app.services.dependency_mapping import rebuild_workflow_dependencies
 from app.services.email_template_polling import poll_portal_email_templates
 from app.services.list_polling import poll_portal_lists
 from app.services.owner_polling import poll_portal_owners
+from app.services.plan_capabilities import plan_allows_category
 from app.services.property_polling import poll_portal_properties
 from app.services.workflow_polling import poll_portal_workflows
 
@@ -623,6 +624,25 @@ def run_install_diagnostic(
     )
     groups = _dependency_groups(session, portal_key)
     issues = _find_dependency_issues(session, portal_key, groups)
+
+    # Plan-tier gating: the diagnostic must not create or surface alerts for
+    # detection categories the portal's plan excludes (list/template need
+    # Professional+, owner needs Agency) — same policy the correlation engine
+    # enforces. Unknown/empty plans fail OPEN (full coverage).
+    # Local import avoids a portal_entitlements <-> install_diagnostic cycle.
+    from app.services.portal_entitlements import get_portal_entitlement
+
+    plan = str(get_portal_entitlement(session, portal_key).get("plan") or "")
+    issues = [
+        issue
+        for issue in issues
+        if plan_allows_category(
+            plan,
+            SOURCE_EVENT_BY_ISSUE.get(
+                (issue.dependency_type, issue.issue_kind), DIAGNOSTIC_KIND
+            ),
+        )
+    ]
 
     ran_at = _utc_now()
     issue_rows: list[dict[str, Any]] = []

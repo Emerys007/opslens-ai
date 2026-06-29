@@ -13,6 +13,8 @@ from app.models.alert import (
     SOURCE_KIND_INSTALL_DIAGNOSTIC,
     Alert,
 )
+from app.models.owner_snapshot import OwnerSnapshot
+from app.models.portal_entitlement import PortalEntitlement
 from app.models.portal_setting import PortalSetting
 from app.models.property_snapshot import PropertySnapshot
 from app.models.workflow_dependency import WorkflowDependency
@@ -158,6 +160,58 @@ class InstallDiagnosticTests(unittest.TestCase):
                 "Lead Source is broken for Lead Nurture.",
                 alerts[0].plain_english_explanation,
             )
+        finally:
+            session.close()
+
+    def _seed_owner_issue(self, session, *, plan: str) -> None:
+        self._seed_workflow(session)
+        session.add(
+            WorkflowDependency(
+                portal_id=self.PORTAL_ID,
+                workflow_id="workflow-1",
+                dependency_type="owner",
+                dependency_id="9",
+                location="actions[0].fields.owner_id",
+            )
+        )
+        session.add(
+            OwnerSnapshot(
+                portal_id=self.PORTAL_ID,
+                owner_id="9",
+                email="rep@acme.test",
+                is_active=False,
+            )
+        )
+        session.add(
+            PortalEntitlement(
+                portal_id=self.PORTAL_ID,
+                plan=plan,
+                billing_interval="monthly",
+                subscription_status="active",
+                trial_approved=False,
+            )
+        )
+        session.commit()
+
+    def test_owner_issue_gated_out_for_starter_plan(self) -> None:
+        # Owner detection is Agency-only — the diagnostic must not surface or
+        # alert on an owner issue for a Starter portal.
+        session = self._session()
+        try:
+            self._seed_owner_issue(session, plan="starter")
+            summary = self._run_diagnostic(session)
+            self.assertEqual(0, summary["issuesFound"])
+            self.assertEqual(0, session.query(Alert).count())
+        finally:
+            session.close()
+
+    def test_owner_issue_present_for_agency_plan(self) -> None:
+        session = self._session()
+        try:
+            self._seed_owner_issue(session, plan="agency")
+            summary = self._run_diagnostic(session)
+            self.assertGreaterEqual(summary["issuesFound"], 1)
+            self.assertGreaterEqual(session.query(Alert).count(), 1)
         finally:
             session.close()
 

@@ -1372,6 +1372,29 @@ class DashboardEndpointTests(unittest.TestCase):
         self.assertEqual(1, body["totals"]["portalCount"])
         self.assertEqual(self.PORTAL_ID, body["portals"][0]["portalId"])
 
+    def test_portfolio_ignores_caller_supplied_email(self) -> None:
+        # Security: an attacker cannot inject a victim's email to enumerate
+        # their portfolio — enumeration is derived from the signed portal's
+        # own installer, the query userEmail is ignored.
+        session = self._session()
+        try:
+            self._seed_entitlement(session, self.PORTAL_ID, "agency")
+            self._seed_installation(session, self.PORTAL_ID, "me@myagency.test")
+            # A different partner's portal — must NOT appear.
+            self._seed_installation(session, "77777777", "victim@other.test")
+            self._seed_entitlement(session, "77777777", "agency")
+        finally:
+            session.close()
+
+        response = self.client.get(
+            f"/api/v1/dashboard/portfolio?portalId={self.PORTAL_ID}"
+            f"&userEmail=victim@other.test"
+        )
+        self.assertEqual(200, response.status_code)
+        portal_ids = {row["portalId"] for row in response.json()["portals"]}
+        self.assertEqual({self.PORTAL_ID}, portal_ids)
+        self.assertNotIn("77777777", portal_ids)
+
     def test_portfolio_agency_aggregates_partner_portals(self) -> None:
         session = self._session()
         try:
