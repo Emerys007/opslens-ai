@@ -31,8 +31,21 @@ from app.models.alert import (
     Alert,
 )
 from app.models.portal_setting import PortalSetting
-from app.services.portal_entitlements import portal_delivery_blocked
+from app.services.portal_entitlements import get_portal_entitlement, portal_delivery_blocked
 from app.services.portal_settings import severity_meets_threshold
+
+_AGENCY_PLANS = {"agency", "business", "enterprise"}
+
+
+def _resolve_brand_name(session, portal_id: str, portal_setting=None) -> str:
+    """White-label brand for alert footers. Returns the portal's configured
+    name only for Agency-tier portals; everyone else shows 'OpsLens'."""
+    row = portal_setting if portal_setting is not None else session.get(PortalSetting, portal_id)
+    name = str(getattr(row, "white_label_name", "") or "").strip() if row else ""
+    if not name:
+        return "OpsLens"
+    plan = str(get_portal_entitlement(session, portal_id).get("plan") or "").strip().lower()
+    return name if plan in _AGENCY_PLANS else "OpsLens"
 
 logger = logging.getLogger(__name__)
 
@@ -170,7 +183,7 @@ def _format_alert_body(alert: Alert) -> str:
     return "\n\n".join(parts)
 
 
-def _build_slack_payload(alert: Alert) -> dict[str, Any]:
+def _build_slack_payload(alert: Alert, *, brand_name: str = "OpsLens") -> dict[str, Any]:
     severity = (alert.severity or SEVERITY_MEDIUM).lower()
     emoji = SEVERITY_EMOJI.get(severity, "🟡")
     title_text = (alert.title or "OpsLens alert").strip()
@@ -198,7 +211,7 @@ def _build_slack_payload(alert: Alert) -> dict[str, Any]:
                     {
                         "type": "mrkdwn",
                         "text": (
-                            f"OpsLens • Portal {alert.portal_id} • "
+                            f"{brand_name} • Portal {alert.portal_id} • "
                             f"Detected {_format_relative_time(alert.created_at)}"
                         ),
                     }
@@ -276,7 +289,8 @@ def deliver_alert_to_slack(session: Session, alert: Alert) -> bool:
         )
         return False
 
-    payload = _build_slack_payload(alert)
+    brand_name = _resolve_brand_name(session, portal_id, portal_setting)
+    payload = _build_slack_payload(alert, brand_name=brand_name)
     ok, status, body = _post_to_slack(webhook_url, payload)
     if not ok:
         logger.warning(
@@ -396,18 +410,23 @@ def send_test_slack_message(session: Session, portal_id: str) -> tuple[bool, str
     if not webhook_url:
         return False, "No Slack channel is connected. Connect Slack first."
 
+    brand_name = _resolve_brand_name(session, portal_id, portal_setting)
     payload = {
         "blocks": [
             {
                 "type": "header",
-                "text": {"type": "plain_text", "text": "✅ OpsLens test alert", "emoji": True},
+                "text": {
+                    "type": "plain_text",
+                    "text": f"✅ {brand_name} test alert",
+                    "emoji": True,
+                },
             },
             {
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
                     "text": (
-                        "This is a test from OpsLens. Your Slack channel is connected "
+                        f"This is a test from {brand_name}. Your Slack channel is connected "
                         "correctly — real alerts about workflow-breaking changes "
                         "(disabled workflows, archived properties, schema edits) will "
                         "arrive here with plain-English explanations and fixes."
@@ -417,7 +436,7 @@ def send_test_slack_message(session: Session, portal_id: str) -> tuple[bool, str
             {
                 "type": "context",
                 "elements": [
-                    {"type": "mrkdwn", "text": f"OpsLens • Portal {portal_id} • Test message"}
+                    {"type": "mrkdwn", "text": f"{brand_name} • Portal {portal_id} • Test message"}
                 ],
             },
         ]

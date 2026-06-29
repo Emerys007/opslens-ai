@@ -25,6 +25,8 @@ class PortalSetting(Base):
     # itself is stored in slack_webhook_url (shared with manual setup).
     slack_team_name: Mapped[str] = mapped_column(Text, default="")
     slack_channel_name: Mapped[str] = mapped_column(Text, default="")
+    # Agency-tier white-label: brand name shown on alerts instead of "OpsLens".
+    white_label_name: Mapped[str] = mapped_column(Text, default="")
     monitoring_coverage: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     install_diagnostic_summary: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 

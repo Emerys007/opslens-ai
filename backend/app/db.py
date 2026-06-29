@@ -23,6 +23,7 @@ _BACKFILL_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("portal_settings", "install_diagnostic_summary", "JSON"),
     ("portal_settings", "slack_team_name", "TEXT DEFAULT ''"),
     ("portal_settings", "slack_channel_name", "TEXT DEFAULT ''"),
+    ("portal_settings", "white_label_name", "TEXT DEFAULT ''"),
     ("portal_settings", "opslens_pipeline_mode", "VARCHAR(16) DEFAULT 'dedicated'"),
     ("portal_settings", "opslens_ticket_pipeline_id", "VARCHAR(64) DEFAULT ''"),
     ("portal_settings", "opslens_stage_new_alert_id", "VARCHAR(64) DEFAULT ''"),

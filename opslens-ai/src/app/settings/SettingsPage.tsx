@@ -32,6 +32,7 @@ type PortalSettings = {
   alertThreshold?: string;
   slackDeliveryEnabled?: boolean;
   ticketDeliveryEnabled?: boolean;
+  whiteLabelName?: string;
   updatedAtUtc?: string | null;
   loadedAtUtc?: string | null;
   lastPolledAt?: string | null;
@@ -396,6 +397,7 @@ function SettingsPage({ context }: { context: any }) {
   const [alertThreshold, setAlertThreshold] = useState("medium");
   const [slackDeliveryEnabled, setSlackDeliveryEnabled] = useState(true);
   const [ticketDeliveryEnabled, setTicketDeliveryEnabled] = useState(true);
+  const [whiteLabelName, setWhiteLabelName] = useState("");
   const [lastSavedAt, setLastSavedAt] = useState("");
   const [settingsStorage, setSettingsStorage] = useState("");
   const [slackConnected, setSlackConnected] = useState(false);
@@ -586,6 +588,7 @@ function SettingsPage({ context }: { context: any }) {
         setAlertThreshold(String(settings.alertThreshold ?? "medium"));
         setSlackDeliveryEnabled(settings.slackDeliveryEnabled !== false);
         setTicketDeliveryEnabled(settings.ticketDeliveryEnabled !== false);
+        setWhiteLabelName(String(settings.whiteLabelName ?? ""));
         setLastSavedAt(
           String(
             settings.lastPolledAtUtc ??
@@ -1238,6 +1241,7 @@ function SettingsPage({ context }: { context: any }) {
         alertThreshold,
         slackDeliveryEnabled,
         ticketDeliveryEnabled,
+        whiteLabelName,
       };
       const response = await hubspot.fetch(settingsUrl, {
         method: "POST",
@@ -1261,6 +1265,7 @@ function SettingsPage({ context }: { context: any }) {
       setTicketDeliveryEnabled(
         settings.ticketDeliveryEnabled ?? ticketDeliveryEnabled
       );
+      setWhiteLabelName(String(settings.whiteLabelName ?? whiteLabelName));
       setLastSavedAt(
         String(
           settings.updatedAtUtc ??
@@ -1540,6 +1545,18 @@ function SettingsPage({ context }: { context: any }) {
                           { label: "High and critical", value: "high" },
                           { label: "Medium, high, and critical", value: "medium" },
                         ]}
+                      />
+
+                      <Input
+                        label="White-label name (Agency plan)"
+                        name="whiteLabelName"
+                        value={whiteLabelName}
+                        type="text"
+                        onChange={(value) =>
+                          setWhiteLabelName(String(value ?? ""))
+                        }
+                        readOnly={formLocked}
+                        description="Agency plan only: the name shown on Slack alerts and tickets instead of 'OpsLens' (e.g. your agency's name). Leave blank to use OpsLens."
                       />
 
                       <Divider />
