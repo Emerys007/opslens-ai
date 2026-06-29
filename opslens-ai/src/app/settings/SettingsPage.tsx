@@ -1346,25 +1346,22 @@ function SettingsPage({ context }: { context: any }) {
                           <Flex align="center" gap="small" wrap>
                             <Text>{thresholdEmoji(alertThreshold)}</Text>
                             <Text format={{ fontWeight: "bold" }}>
-                              Property 'Lead Source' archived — 1 workflow(s)
-                              affected
+                              Workflow 'Lead routing' was turned off
                             </Text>
                           </Flex>
                           <Text>
-                            Lead Source was archived in HubSpot, but the Lead
-                            Nurture workflow still references it in enrollment
-                            criteria. New contacts may skip the intended route
-                            until the property is restored or the workflow
-                            reference is replaced.
+                            Someone switched off the Lead routing workflow. It
+                            assigns every inbound demo request, and HubSpot sends
+                            no notification when a workflow is disabled — so new
+                            requests will sit unrouted until it's turned back on.
                           </Text>
                           <Flex direction="column" gap="small">
                             <Text format={{ fontWeight: "bold" }}>
                               Recommended action
                             </Text>
                             <Text>
-                              Open the workflow, replace the archived property
-                              reference, then rerun enrollment tests for recent
-                              leads.
+                              Re-enable the workflow if this wasn't intended, or
+                              confirm the change with whoever made it.
                             </Text>
                           </Flex>
                           <Divider />
