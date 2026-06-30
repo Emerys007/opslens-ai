@@ -45,6 +45,7 @@ type SettingsResponse = {
   status?: string;
   message?: string;
   settings?: PortalSettings;
+  entitlement?: { plan?: string; active?: boolean };
   savedAtUtc?: string;
   dbConfigured?: boolean;
 };
@@ -404,6 +405,7 @@ function SettingsPage({ context }: { context: any }) {
   const [billingUrl, setBillingUrl] = useState("");
   const [billingMessage, setBillingMessage] = useState("");
   const [loadingBilling, setLoadingBilling] = useState(false);
+  const [plan, setPlan] = useState("");
   const [lastSavedAt, setLastSavedAt] = useState("");
   const [settingsStorage, setSettingsStorage] = useState("");
   const [slackConnected, setSlackConnected] = useState(false);
@@ -494,6 +496,11 @@ function SettingsPage({ context }: { context: any }) {
   );
 
   const formLocked = loading || saving || !hasLoadedSettings || !portalId;
+  const planKey = plan.trim().toLowerCase();
+  const isAgencyPlan = ["agency", "business", "enterprise"].includes(planKey);
+  const planLabel = planKey
+    ? planKey.charAt(0).toUpperCase() + planKey.slice(1)
+    : "Trial / not subscribed";
   const coverageDirty =
     coverageCategories.length > 0 &&
     coverageFingerprint(coverageCategories) !== loadedCoverageFingerprint;
@@ -596,6 +603,7 @@ function SettingsPage({ context }: { context: any }) {
         setTicketDeliveryEnabled(settings.ticketDeliveryEnabled !== false);
         setWhiteLabelName(String(settings.whiteLabelName ?? ""));
         setDigestEnabled(settings.digestEnabled !== false);
+        setPlan(String(data?.entitlement?.plan ?? ""));
         setLastSavedAt(
           String(
             settings.lastPolledAtUtc ??
@@ -1275,6 +1283,7 @@ function SettingsPage({ context }: { context: any }) {
       );
       setWhiteLabelName(String(settings.whiteLabelName ?? whiteLabelName));
       setDigestEnabled(settings.digestEnabled ?? digestEnabled);
+      setPlan(String(data?.entitlement?.plan ?? plan));
       setLastSavedAt(
         String(
           settings.updatedAtUtc ??
@@ -1411,6 +1420,9 @@ function SettingsPage({ context }: { context: any }) {
                 <StatusTag variant={statusVariant}>
                   {errorMessage ? "Needs attention" : "Active"}
                 </StatusTag>
+                <Tag variant={isAgencyPlan ? "success" : "default"}>
+                  {planKey ? `${planLabel} plan` : "Trial / free"}
+                </Tag>
               </Flex>
               <Text variant="microcopy">
                 Live configuration for this connected account — loaded securely
@@ -1635,14 +1647,26 @@ function SettingsPage({ context }: { context: any }) {
                         onChange={(value) =>
                           setWhiteLabelName(String(value ?? ""))
                         }
-                        readOnly={formLocked}
-                        description="Agency plan only: the name shown on Slack alerts and tickets instead of 'OpsLens' (e.g. your agency's name). Leave blank to use OpsLens."
+                        readOnly={formLocked || !isAgencyPlan}
+                        description={
+                          isAgencyPlan
+                            ? "The name shown on Slack alerts and tickets instead of 'OpsLens' (e.g. your agency's name). Leave blank to use OpsLens. Click Save settings below to apply."
+                            : "Available on the Agency plan — upgrade in Plan & billing below to brand alerts and tickets with your agency's name."
+                        }
                       />
 
                       <Divider />
 
                       <Flex direction="column" gap="small">
                         <Heading>Plan &amp; billing</Heading>
+                        <Flex direction="row" gap="small" align="center" wrap>
+                          <Text format={{ fontWeight: "bold" }}>
+                            Current plan:
+                          </Text>
+                          <Tag variant={isAgencyPlan ? "success" : "default"}>
+                            {planLabel}
+                          </Tag>
+                        </Flex>
                         <Text variant="microcopy">
                           Change your tier (Starter / Professional / Agency),
                           update your payment method, download invoices, or
