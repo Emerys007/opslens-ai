@@ -1651,48 +1651,9 @@ function SettingsPage({ context }: { context: any }) {
                         description={
                           isAgencyPlan
                             ? "The name shown on Slack alerts and tickets instead of 'OpsLens' (e.g. your agency's name). Leave blank to use OpsLens. Click Save settings below to apply."
-                            : "Available on the Agency plan — upgrade in Plan & billing below to brand alerts and tickets with your agency's name."
+                            : "Available on the Agency plan — upgrade from the Plan & billing tab to brand alerts and tickets with your agency's name."
                         }
                       />
-
-                      <Divider />
-
-                      <Flex direction="column" gap="small">
-                        <Heading>Plan &amp; billing</Heading>
-                        <Flex direction="row" gap="small" align="center" wrap>
-                          <Text format={{ fontWeight: "bold" }}>
-                            Current plan:
-                          </Text>
-                          <Tag variant={isAgencyPlan ? "success" : "default"}>
-                            {planLabel}
-                          </Tag>
-                        </Flex>
-                        <Text variant="microcopy">
-                          Change your tier (Starter / Professional / Agency),
-                          update your payment method, download invoices, or
-                          cancel — all in Stripe&apos;s secure billing portal.
-                        </Text>
-                        <Flex direction="row" gap="small" align="center" wrap>
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            disabled={loadingBilling}
-                            onClick={handleManageBilling}
-                          >
-                            {loadingBilling ? "Opening…" : "Manage plan & billing"}
-                          </Button>
-                          {billingUrl ? (
-                            <Link href={{ url: billingUrl, external: true }}>
-                              Open billing portal →
-                            </Link>
-                          ) : null}
-                        </Flex>
-                        {billingMessage ? (
-                          <Alert variant="warning" title="Billing">
-                            {billingMessage}
-                          </Alert>
-                        ) : null}
-                      </Flex>
 
                       <Divider />
 
@@ -1869,6 +1830,75 @@ function SettingsPage({ context }: { context: any }) {
               </Flex>
             </Flex>
           </Form>
+        </Tab>
+
+        <Tab tabId="plan-billing" title="Plan & billing">
+          <Flex direction="column" gap="medium">
+            <Card>
+              <Flex direction="column" gap="medium">
+                <Flex direction="column" gap="extra-small">
+                  <Heading>Plan &amp; billing</Heading>
+                  <Text>
+                    See the plan this portal is on and manage your subscription —
+                    change tier, update your payment method, download invoices, or
+                    cancel.
+                  </Text>
+                </Flex>
+
+                <Flex direction="row" gap="small" align="center" wrap>
+                  <Text format={{ fontWeight: "bold" }}>Current plan:</Text>
+                  <Tag variant={isAgencyPlan ? "success" : "default"}>
+                    {planKey ? `${planLabel} plan` : "Trial / free"}
+                  </Tag>
+                </Flex>
+
+                <Text variant="microcopy">
+                  Tiers: Starter, Professional, and Agency. The Agency plan unlocks
+                  the multi-portal Client portals rollup, white-label branding on
+                  alerts and tickets, and the weekly digest.
+                </Text>
+
+                <Divider />
+
+                <Flex direction="column" gap="small">
+                  <Text format={{ fontWeight: "bold" }}>
+                    Manage your subscription
+                  </Text>
+                  <Text variant="microcopy">
+                    Opens Stripe&apos;s secure billing portal in a new tab to
+                    change tier, update payment, download invoices, or cancel.
+                  </Text>
+                  <Flex direction="row" gap="small" align="center" wrap>
+                    <Button
+                      type="button"
+                      variant="primary"
+                      disabled={loadingBilling || !portalId}
+                      onClick={handleManageBilling}
+                    >
+                      {loadingBilling ? "Opening…" : "Manage plan & billing"}
+                    </Button>
+                    {billingUrl ? (
+                      <Link href={{ url: billingUrl, external: true }}>
+                        Open billing portal →
+                      </Link>
+                    ) : null}
+                  </Flex>
+                  {billingMessage ? (
+                    <Alert variant="warning" title="Billing">
+                      {billingMessage}
+                    </Alert>
+                  ) : null}
+                  <Text variant="microcopy">
+                    If your plan was activated for you directly (not through
+                    self-serve checkout), there may be no Stripe subscription to
+                    open yet — your plan still works exactly the same. To move to
+                    self-serve billing, subscribe through the HubSpot Marketplace
+                    listing.
+                  </Text>
+                </Flex>
+              </Flex>
+            </Card>
+          </Flex>
         </Tab>
 
         <Tab tabId="coverage" title="Coverage">

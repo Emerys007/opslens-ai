@@ -63,7 +63,10 @@ from app.services.portal_settings import (
     load_portal_settings,
     normalize_severity,
 )
-from app.services.hubspot_oauth import get_portal_access_token
+from app.services.hubspot_oauth import (
+    backfill_installer_email,
+    get_portal_access_token,
+)
 from app.services.install_diagnostic import (
     install_diagnostic_not_run_summary,
     run_install_diagnostic,
@@ -673,6 +676,21 @@ def _find_portals_for_emails(session, emails: set[str]) -> list[str]:
     return sorted(portal_ids)
 
 
+def _ensure_installer_email(session, portal_id: str) -> None:
+    """Best-effort heal of the current portal's installer email at view time, so
+    a freshly-opened Agency dashboard links its portals without waiting for the
+    next polling cycle. Delegates to the shared, server-side-only backfill; any
+    failure (no token, HubSpot hiccup) is swallowed so it can never blank the
+    rollup."""
+    try:
+        backfill_installer_email(session, portal_id)
+    except Exception:  # noqa: BLE001
+        try:
+            session.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def _portfolio_portal_summary(session, portal_id: str) -> dict:
     settings = load_portal_settings(session, portal_id)
     entitlement = get_portal_entitlement(session, portal_id)
@@ -735,7 +753,12 @@ def dashboard_portfolio(request: Request):
 
         if agency_enabled:
             # Scope strictly to the SIGNED portal's owner identity, derived
-            # server-side — never trust a caller-supplied userEmail.
+            # server-side from the OAuth installer email — never a
+            # caller-supplied userEmail, even a signed one (defense in depth:
+            # if the shared client secret ever leaked, userEmail must not be a
+            # cross-portal enumeration vector). Installs that predate installer
+            # capture are healed server-side via _ensure_installer_email below.
+            _ensure_installer_email(session, portal_id)
             emails = _partner_emails_for_portal(session, portal_id)
             portal_ids = _find_portals_for_emails(session, emails)
             if portal_id not in portal_ids:
@@ -744,7 +767,13 @@ def dashboard_portfolio(request: Request):
         else:
             portal_ids = [portal_id]
 
-        summaries = [_portfolio_portal_summary(session, pid) for pid in portal_ids]
+        # One malformed portal must never blank the whole rollup.
+        summaries = []
+        for pid in portal_ids:
+            try:
+                summaries.append(_portfolio_portal_summary(session, pid))
+            except Exception:  # noqa: BLE001
+                continue
         return {
             "status": "ok",
             "agencyEnabled": agency_enabled,

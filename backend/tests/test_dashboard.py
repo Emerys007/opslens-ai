@@ -1594,6 +1594,46 @@ class DashboardEndpointTests(unittest.TestCase):
         portal_ids = {row["portalId"] for row in body["portals"]}
         self.assertEqual({self.PORTAL_ID, "88888888"}, portal_ids)
 
+    def test_portfolio_self_heals_installer_email_from_token(self) -> None:
+        # An install that predates installer-email capture has a blank
+        # installing_user_email and so can't link to a partner's other portals.
+        # Viewing its Agency dashboard self-heals it from the SERVER-SIDE token
+        # introspection (never a request param), after which the rollup links
+        # the sibling that already carries the same email.
+        session = self._session()
+        try:
+            self._seed_entitlement(session, self.PORTAL_ID, "agency")
+            # Current portal: blank installer email (legacy install).
+            self._seed_installation(session, self.PORTAL_ID, "")
+            # Sibling already healed, same partner.
+            self._seed_installation(session, "88888888", "partner@agency.test")
+            self._seed_entitlement(session, "88888888", "agency")
+        finally:
+            session.close()
+
+        with patch(
+            "app.services.hubspot_oauth.get_portal_access_token",
+            return_value="AT",
+        ), patch(
+            "app.services.hubspot_oauth.introspect_access_token",
+            return_value={"user": "partner@agency.test"},
+        ):
+            response = self.client.get(
+                f"/api/v1/dashboard/portfolio?portalId={self.PORTAL_ID}"
+            )
+
+        self.assertEqual(200, response.status_code)
+        portal_ids = {row["portalId"] for row in response.json()["portals"]}
+        self.assertEqual({self.PORTAL_ID, "88888888"}, portal_ids)
+
+        # The heal is persisted, not just for this request.
+        session = self._session()
+        try:
+            healed = session.get(HubSpotInstallation, self.PORTAL_ID)
+            self.assertEqual("partner@agency.test", healed.installing_user_email)
+        finally:
+            session.close()
+
 
 if __name__ == "__main__":
     unittest.main()

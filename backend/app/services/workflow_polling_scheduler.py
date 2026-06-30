@@ -13,6 +13,7 @@ from app.models.scheduler_lease import SchedulerLease  # noqa: F401 — register
 from app.services.scheduler_lease import try_acquire_lease
 from app.services.alert_correlation import correlate_unprocessed_events
 from app.services.alert_rewriter import rewrite_pending_alerts
+from app.services.hubspot_oauth import backfill_installer_email
 from app.services.email_template_polling import poll_portal_email_templates
 from app.services.list_polling import poll_portal_lists
 from app.services.owner_polling import poll_portal_owners
@@ -160,6 +161,15 @@ def run_polling_cycle_sync(session_factory: SessionFactory) -> dict[str, Any]:
     summary["portalsAttempted"] = len(portal_ids)
 
     for portal_id in portal_ids:
+        # One-time self-heal: stamp installing_user_email from token
+        # introspection for installs that predate email capture, so the Agency
+        # multi-portal rollup can link a partner's portals. No-op once known.
+        _run_portal_pass(
+            session_factory,
+            portal_id,
+            backfill_installer_email,
+            "installer_email_backfill",
+        )
         workflow_summary = _run_portal_pass(
             session_factory,
             portal_id,

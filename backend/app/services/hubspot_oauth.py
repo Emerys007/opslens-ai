@@ -452,3 +452,32 @@ def get_portal_access_token(session: Session, portal_id: str) -> str:
         raise RuntimeError(f"No access token is stored for portal {portal_key}.")
 
     return token
+
+
+def backfill_installer_email(session: Session, portal_id: str) -> dict[str, Any]:
+    """Self-heal the installer email for installs that predate email capture.
+
+    We started recording ``installing_user_email`` only recently, so older
+    installs have it blank — which means the Agency multi-portal rollup can't
+    link a partner's portals together. This re-derives the email from HubSpot's
+    own token introspection (``user`` field), which is bound to the portal's
+    OAuth token and computed server-side, so it can never be spoofed by a
+    request param. No-op when the email is already known; idempotent and safe to
+    call every polling cycle. Returns a small status dict for accounting.
+    """
+    portal_key = str(portal_id or "").strip()
+    row = session.get(HubSpotInstallation, portal_key) if portal_key else None
+    if row is None or not getattr(row, "is_active", False):
+        return {"portalId": portal_key, "status": "skipped", "reason": "no_active_install"}
+    if str(getattr(row, "installing_user_email", "") or "").strip():
+        return {"portalId": portal_key, "status": "skipped", "reason": "already_known"}
+
+    access_token = get_portal_access_token(session, portal_key)
+    metadata = introspect_access_token(access_token)
+    email = str(metadata.get("user") or "").strip()
+    if not email:
+        return {"portalId": portal_key, "status": "skipped", "reason": "no_email_in_token"}
+
+    row.installing_user_email = email
+    session.commit()
+    return {"portalId": portal_key, "status": "ok"}
