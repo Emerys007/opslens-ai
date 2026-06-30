@@ -17,6 +17,7 @@ from app.services.email_template_polling import poll_portal_email_templates
 from app.services.list_polling import poll_portal_lists
 from app.services.owner_polling import poll_portal_owners
 from app.services.property_polling import poll_portal_properties
+from app.services.alert_snooze import reopen_expired_snoozes
 from app.services.slack_delivery import deliver_pending_alerts
 from app.services.ticket_delivery import deliver_pending_tickets
 from app.services.weekly_digest import send_due_digests
@@ -307,6 +308,26 @@ def run_polling_cycle_sync(session_factory: SessionFactory) -> dict[str, Any]:
     summary["alertsRewritten"] = int(rewrite_summary.get("succeeded") or 0)
     summary["alertsRewriteFailed"] = int(rewrite_summary.get("failed") or 0)
     summary["rewriter"] = rewrite_summary
+
+    # Re-open snoozed alerts whose window elapsed. Runs BEFORE the delivery
+    # passes so a "remind me in N days" snooze re-notifies in this same cycle
+    # (reopen clears slack_delivered_at). Best-effort.
+    snooze_session = session_factory()
+    if snooze_session is not None:
+        try:
+            try:
+                snooze_summary = reopen_expired_snoozes(snooze_session)
+                summary["snoozesReopened"] = int(snooze_summary.get("reopened") or 0)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "alert_snooze_scheduler.cycle_failed", extra={"error": repr(exc)}
+                )
+                try:
+                    snooze_session.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
+        finally:
+            snooze_session.close()
 
     # Deliver fresh alerts to Slack and to the OpsLens Alerts ticket
     # pipeline. Both run on their own session, both are best-effort:

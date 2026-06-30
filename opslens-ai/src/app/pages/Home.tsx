@@ -64,6 +64,7 @@ type OverviewResponse = {
     openIncidents?: number;
     criticalIssues?: number;
     monitoredWorkflows?: number;
+    acknowledgedCount?: number;
     lastCheckedUtc?: string | null;
     activeIncidents?: unknown[];
     actionRequired?: DashboardAlert[];
@@ -504,15 +505,21 @@ function ActionAlertCard({
   portalId,
   resolving,
   reenabling,
+  acting,
   onResolve,
   onReenable,
+  onAcknowledge,
+  onSnooze,
 }: {
   alert: DashboardAlert;
   portalId: string;
   resolving: boolean;
   reenabling: boolean;
+  acting: boolean;
   onResolve: (alertId: string) => void;
   onReenable: (alertId: string, workflowId: string) => void;
+  onAcknowledge: (alertId: string) => void;
+  onSnooze: (alertId: string, days: number) => void;
 }) {
   const alertId = String(alert.id || "");
   const severity = String(alert.severity || "unknown").toUpperCase();
@@ -585,7 +592,23 @@ function ActionAlertCard({
             <Button
               type="button"
               variant="secondary"
-              disabled={!alertId || resolving || reenabling}
+              disabled={!alertId || acting || resolving || reenabling}
+              onClick={() => onAcknowledge(alertId)}
+            >
+              {acting ? "Working..." : "Acknowledge"}
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={!alertId || acting || resolving || reenabling}
+              onClick={() => onSnooze(alertId, 7)}
+            >
+              Snooze 7d
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={!alertId || acting || resolving || reenabling}
               onClick={() => onResolve(alertId)}
             >
               {resolving ? "Resolving..." : "Mark resolved"}
@@ -603,6 +626,7 @@ function HomePage({ context }: HomePageProps) {
   const [overviewData, setOverviewData] = useState<OverviewResponse | null>(null);
   const [resolvingAlertId, setResolvingAlertId] = useState("");
   const [reenablingAlertId, setReenablingAlertId] = useState("");
+  const [pendingActionAlertId, setPendingActionAlertId] = useState("");
   const [actionPageSize, setActionPageSize] = useState(10);
   const [actionPage, setActionPage] = useState(1);
   const [lastUpdatedAt, setLastUpdatedAt] = useState("");
@@ -673,6 +697,8 @@ function HomePage({ context }: HomePageProps) {
       : health.grade === "at_risk"
       ? "danger"
       : "warning";
+  const acknowledgedCount =
+    typeof summary.acknowledgedCount === "number" ? summary.acknowledgedCount : 0;
   const totalActionPages = Math.max(
     1,
     Math.ceil(actionRequiredCount / actionPageSize)
@@ -888,6 +914,70 @@ function HomePage({ context }: HomePageProps) {
     }
   };
 
+  const triageAlert = async (
+    alertId: string,
+    action: "acknowledge" | "snooze",
+    days?: number
+  ) => {
+    if (!alertId || !portalId) {
+      return;
+    }
+
+    const previous = overviewData;
+    setPendingActionAlertId(alertId);
+    setOverviewError("");
+    // Optimistically drop it from "needs action" and bump the acknowledged tally.
+    setOverviewData((current) => {
+      if (!current?.summary) {
+        return current;
+      }
+      const currentSummary = current.summary;
+      const nextActionRequired = Array.isArray(currentSummary.actionRequired)
+        ? currentSummary.actionRequired.filter(
+            (alert) => String(alert.id) !== alertId
+          )
+        : [];
+      return {
+        ...current,
+        summary: {
+          ...currentSummary,
+          actionRequired: nextActionRequired,
+          actionRequiredCount: Math.max(
+            0,
+            Number(currentSummary.actionRequiredCount ?? nextActionRequired.length) - 1
+          ),
+          acknowledgedCount: Number(currentSummary.acknowledgedCount ?? 0) + 1,
+        },
+      };
+    });
+
+    try {
+      const url =
+        action === "snooze"
+          ? buildUrl(`/api/v1/dashboard/alerts/${alertId}/snooze`, {
+              portalId,
+              days: String(days ?? 7),
+            })
+          : buildUrl(`/api/v1/dashboard/alerts/${alertId}/acknowledge`, {
+              portalId,
+            });
+      const response = await hubspot.fetch(url, { method: "POST", timeout: 8000 });
+      if (!response.ok) {
+        throw new Error(`${action} request failed with status ${response.status}`);
+      }
+      await loadOverview();
+    } catch (error) {
+      setOverviewData(previous);
+      setOverviewError(error instanceof Error ? error.message : "Unknown error");
+    } finally {
+      setPendingActionAlertId("");
+    }
+  };
+
+  const acknowledgeAlert = (alertId: string) => triageAlert(alertId, "acknowledge");
+  const snoozeAlert = (alertId: string, days: number) =>
+    triageAlert(alertId, "snooze", days);
+
   const reenableWorkflow = async (alertId: string, workflowId: string) => {
     if (!alertId || !workflowId || !portalId) {
       return;
@@ -1100,6 +1190,9 @@ function HomePage({ context }: HomePageProps) {
             >
               <Text variant="microcopy">Closed in last 7 days</Text>
             </StatisticsItem>
+            <StatisticsItem label="Acknowledged" number={acknowledgedCount}>
+              <Text variant="microcopy">Being handled or snoozed</Text>
+            </StatisticsItem>
             <StatisticsItem label="Last checked" number={lastUpdatedLabel}>
               <Text variant="microcopy">
                 {checkNowMessage ? checkNowMessage : "Auto-refreshes"}
@@ -1248,8 +1341,11 @@ function HomePage({ context }: HomePageProps) {
                   portalId={portalId}
                   resolving={resolvingAlertId === String(alert.id)}
                   reenabling={reenablingAlertId === String(alert.id)}
+                  acting={pendingActionAlertId === String(alert.id)}
                   onResolve={markResolved}
                   onReenable={reenableWorkflow}
+                  onAcknowledge={acknowledgeAlert}
+                  onSnooze={snoozeAlert}
                 />
               ))}
             </Flex>

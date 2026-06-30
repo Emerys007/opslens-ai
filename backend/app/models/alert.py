@@ -134,6 +134,14 @@ class Alert(Base):
         DateTime(timezone=True),
         nullable=True,
     )
+    # Snooze = acknowledge with a timer. While ``status`` is ACKNOWLEDGED and
+    # ``snoozed_until`` is in the future the alert stays out of the open-only
+    # dashboard views; the scheduler re-opens it (status → OPEN, clears this)
+    # once the time passes. Null for a plain acknowledge (no auto-reopen).
+    snoozed_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
 
     # Populated by the Slack-sender / ticket-creator tasks.
     slack_delivered_at: Mapped[datetime | None] = mapped_column(

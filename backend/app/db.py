@@ -26,6 +26,7 @@ _BACKFILL_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("portal_settings", "white_label_name", "TEXT DEFAULT ''"),
     ("portal_settings", "digest_enabled", "BOOLEAN DEFAULT TRUE"),
     ("portal_settings", "last_digest_sent_at", "TIMESTAMP WITH TIME ZONE"),
+    ("alerts", "snoozed_until", "TIMESTAMP WITH TIME ZONE"),
     ("portal_settings", "opslens_pipeline_mode", "VARCHAR(16) DEFAULT 'dedicated'"),
     ("portal_settings", "opslens_ticket_pipeline_id", "VARCHAR(64) DEFAULT ''"),
     ("portal_settings", "opslens_stage_new_alert_id", "VARCHAR(64) DEFAULT ''"),

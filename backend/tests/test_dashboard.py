@@ -16,6 +16,7 @@ from app.models.alert import (
     SOURCE_EVENT_WORKFLOW_DISABLED,
     SOURCE_KIND_PROPERTY,
     SOURCE_KIND_WORKFLOW,
+    STATUS_ACKNOWLEDGED,
     STATUS_OPEN,
     STATUS_RESOLVED,
     Alert,
@@ -27,6 +28,7 @@ from app.models.portal_entitlement import PortalEntitlement
 from app.models.portal_setting import PortalSetting
 from app.models.workflow_dependency import WorkflowDependency
 from app.models.workflow_snapshot import WorkflowSnapshot
+from app.services.alert_snooze import reopen_expired_snoozes
 from app.services.slack_oauth import SlackOAuthError
 from tests.hubspot_fetch_auth import SignedHubSpotTestClient
 
@@ -846,6 +848,122 @@ class DashboardEndpointTests(unittest.TestCase):
             first.json()["resolvedAtUtc"],
             second.json()["resolvedAtUtc"],
         )
+
+    def test_acknowledge_endpoint_sets_status_and_clears_from_needs_action(self) -> None:
+        session = self._session()
+        try:
+            alert = self._seed_alert(session, title="Ack me")
+            alert_id = alert.id
+        finally:
+            session.close()
+
+        response = self.client.post(
+            f"/api/v1/dashboard/alerts/{alert_id}/acknowledge?portalId={self.PORTAL_ID}"
+        )
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(STATUS_ACKNOWLEDGED, response.json()["alertStatus"])
+
+        session = self._session()
+        try:
+            row = session.get(Alert, alert_id)
+            self.assertEqual(STATUS_ACKNOWLEDGED, row.status)
+            self.assertIsNotNone(row.acknowledged_at)
+            self.assertIsNone(row.snoozed_until)
+        finally:
+            session.close()
+
+        overview = self.client.get(
+            f"/api/v1/dashboard/overview?portalId={self.PORTAL_ID}"
+        )
+        summary = overview.json()["summary"]
+        self.assertEqual(1, summary["acknowledgedCount"])
+        self.assertEqual(0, summary["openIncidents"])
+
+    def test_snooze_endpoint_sets_timer(self) -> None:
+        session = self._session()
+        try:
+            alert = self._seed_alert(session, title="Snooze me")
+            alert_id = alert.id
+        finally:
+            session.close()
+
+        response = self.client.post(
+            f"/api/v1/dashboard/alerts/{alert_id}/snooze?portalId={self.PORTAL_ID}&days=7"
+        )
+        self.assertEqual(200, response.status_code)
+        self.assertTrue(response.json()["snoozedUntilUtc"])
+
+        session = self._session()
+        try:
+            row = session.get(Alert, alert_id)
+            self.assertEqual(STATUS_ACKNOWLEDGED, row.status)
+            self.assertIsNotNone(row.snoozed_until)
+        finally:
+            session.close()
+
+    def test_reopen_endpoint_restores_open(self) -> None:
+        session = self._session()
+        try:
+            alert = self._seed_alert(
+                session, status=STATUS_ACKNOWLEDGED, title="Reopen me"
+            )
+            alert_id = alert.id
+        finally:
+            session.close()
+
+        response = self.client.post(
+            f"/api/v1/dashboard/alerts/{alert_id}/reopen?portalId={self.PORTAL_ID}"
+        )
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(STATUS_OPEN, response.json()["alertStatus"])
+
+        session = self._session()
+        try:
+            row = session.get(Alert, alert_id)
+            self.assertEqual(STATUS_OPEN, row.status)
+            self.assertIsNone(row.acknowledged_at)
+            self.assertIsNone(row.snoozed_until)
+        finally:
+            session.close()
+
+    def test_reopen_expired_snoozes_only_reopens_due(self) -> None:
+        now = datetime(2026, 6, 29, 12, 0, tzinfo=timezone.utc)
+        session = self._session()
+        try:
+            due = self._seed_alert(
+                session, status=STATUS_ACKNOWLEDGED, title="Due snooze"
+            )
+            due.snoozed_until = now - timedelta(hours=1)
+            due.slack_delivered_at = now - timedelta(days=7)
+            future = self._seed_alert(
+                session, status=STATUS_ACKNOWLEDGED, title="Future snooze"
+            )
+            future.snoozed_until = now + timedelta(days=3)
+            plain = self._seed_alert(
+                session, status=STATUS_ACKNOWLEDGED, title="Plain ack"
+            )  # snoozed_until stays None
+            session.commit()
+            due_id, future_id, plain_id = due.id, future.id, plain.id
+        finally:
+            session.close()
+
+        session = self._session()
+        try:
+            summary = reopen_expired_snoozes(session, now=now)
+        finally:
+            session.close()
+        self.assertEqual(1, summary["reopened"])
+
+        session = self._session()
+        try:
+            due_row = session.get(Alert, due_id)
+            self.assertEqual(STATUS_OPEN, due_row.status)
+            self.assertIsNone(due_row.snoozed_until)
+            self.assertIsNone(due_row.slack_delivered_at)  # re-notifies
+            self.assertEqual(STATUS_ACKNOWLEDGED, session.get(Alert, future_id).status)
+            self.assertEqual(STATUS_ACKNOWLEDGED, session.get(Alert, plain_id).status)
+        finally:
+            session.close()
 
     def test_workflows_endpoint_returns_sorted_rows_capped_at_200(self) -> None:
         session = self._session()

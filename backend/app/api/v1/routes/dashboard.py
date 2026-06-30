@@ -10,6 +10,7 @@ from app.core.security import require_active_portal_installation
 from app.db import get_session, init_db
 from app.models.alert import (
     SOURCE_EVENT_WORKFLOW_DISABLED,
+    STATUS_ACKNOWLEDGED,
     STATUS_OPEN,
     STATUS_RESOLVED,
     Alert,
@@ -575,6 +576,9 @@ def dashboard_overview(request: Request):
         critical_issues = _count_alerts(
             session, portal_id, open_filter, func.lower(Alert.severity) == "critical"
         )
+        acknowledged_count = _count_alerts(
+            session, portal_id, Alert.status == STATUS_ACKNOWLEDGED
+        )
         monitored_workflows = int(
             session.execute(
                 _portal_filtered(
@@ -596,6 +600,7 @@ def dashboard_overview(request: Request):
                 "openIncidents": open_incidents,
                 "criticalIssues": critical_issues,
                 "monitoredWorkflows": monitored_workflows,
+                "acknowledgedCount": acknowledged_count,
                 "health": compute_portal_health(session, portal_id),
                 "lastCheckedUtc": action.get("lastPollUtc"),
                 "activeIncidents": [],
@@ -1372,6 +1377,111 @@ def resolve_dashboard_alert(alert_id: str, request: Request):
             "status": "ok",
             "alertId": str(alert.id),
             "resolvedAtUtc": _isoformat(alert.resolved_at),
+        }
+    finally:
+        session.close()
+
+
+def _load_alert_for_action(alert_id: str, portal_id: str):
+    """Shared loader for the alert state-change endpoints. Returns
+    ``(session, alert)`` or raises HTTPException(404). The caller owns closing
+    the session."""
+    try:
+        cleaned_alert_id = int(str(alert_id).strip())
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=404, detail="Alert not found.") from exc
+    if not portal_id:
+        raise HTTPException(status_code=404, detail="Alert not found.")
+
+    db_ready = init_db()
+    session = get_session()
+    if not db_ready or session is None:
+        raise HTTPException(status_code=404, detail="Alert not found.")
+
+    alert = session.execute(
+        select(Alert).where(
+            Alert.id == cleaned_alert_id, Alert.portal_id == portal_id
+        )
+    ).scalar_one_or_none()
+    if alert is None:
+        session.close()
+        raise HTTPException(status_code=404, detail="Alert not found.")
+    return session, alert
+
+
+@router.post("/alerts/{alert_id}/acknowledge")
+def acknowledge_dashboard_alert(alert_id: str, request: Request):
+    """Mark an alert acknowledged ('I'm on it'). It leaves the open-only
+    'needs action' views and counts at reduced weight against portal health,
+    but is not resolved."""
+    portal_id = str(request.query_params.get("portalId", "")).strip()
+    session, alert = _load_alert_for_action(alert_id, portal_id)
+    try:
+        if alert.acknowledged_at is None:
+            alert.acknowledged_at = _utc_now()
+        alert.status = STATUS_ACKNOWLEDGED
+        alert.snoozed_until = None
+        session.commit()
+        session.refresh(alert)
+        return {
+            "status": "ok",
+            "alertId": str(alert.id),
+            "alertStatus": alert.status,
+            "acknowledgedAtUtc": _isoformat(alert.acknowledged_at),
+        }
+    finally:
+        session.close()
+
+
+@router.post("/alerts/{alert_id}/snooze")
+def snooze_dashboard_alert(alert_id: str, request: Request):
+    """Snooze an alert for N days (default 7, 1-90). Implemented as an
+    acknowledge with a timer: it leaves the open views now, and the scheduler
+    re-opens it once the snooze elapses."""
+    query = request.query_params
+    portal_id = str(query.get("portalId", "")).strip()
+    try:
+        days = int(str(query.get("days", "7")).strip() or "7")
+    except Exception:  # noqa: BLE001
+        days = 7
+    days = max(1, min(days, 90))
+
+    session, alert = _load_alert_for_action(alert_id, portal_id)
+    try:
+        now = _utc_now()
+        if alert.acknowledged_at is None:
+            alert.acknowledged_at = now
+        alert.status = STATUS_ACKNOWLEDGED
+        alert.snoozed_until = now + timedelta(days=days)
+        session.commit()
+        session.refresh(alert)
+        return {
+            "status": "ok",
+            "alertId": str(alert.id),
+            "alertStatus": alert.status,
+            "snoozedUntilUtc": _isoformat(alert.snoozed_until),
+        }
+    finally:
+        session.close()
+
+
+@router.post("/alerts/{alert_id}/reopen")
+def reopen_dashboard_alert(alert_id: str, request: Request):
+    """Re-open an acknowledged / snoozed / resolved alert back into the active
+    'needs action' state."""
+    portal_id = str(request.query_params.get("portalId", "")).strip()
+    session, alert = _load_alert_for_action(alert_id, portal_id)
+    try:
+        alert.status = STATUS_OPEN
+        alert.acknowledged_at = None
+        alert.resolved_at = None
+        alert.snoozed_until = None
+        session.commit()
+        session.refresh(alert)
+        return {
+            "status": "ok",
+            "alertId": str(alert.id),
+            "alertStatus": alert.status,
         }
     finally:
         session.close()
