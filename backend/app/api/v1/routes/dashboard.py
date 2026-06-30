@@ -55,6 +55,8 @@ from app.services.email_template_polling import poll_portal_email_templates
 from app.services.list_polling import poll_portal_lists
 from app.services.owner_polling import poll_portal_owners
 from app.services.property_polling import poll_portal_properties
+from app.config import settings
+from app.services.marketplace_billing import create_billing_portal_session
 from app.services.portal_entitlements import get_portal_entitlement, portal_is_entitled
 from app.services.portal_settings import (
     SEVERITY_ORDER,
@@ -832,6 +834,49 @@ def dashboard_slack_test(request: Request):
         if not ok:
             raise HTTPException(status_code=400, detail=message)
         return {"status": "ok", "message": message}
+    finally:
+        session.close()
+
+
+@router.post("/billing/portal")
+def dashboard_billing_portal(request: Request):
+    """Open a Stripe Customer Portal session for this portal's subscriber so
+    they can change tiers / payment method / cancel. Returns ``{url}`` (a
+    short-lived link the UI redirects to). 400 if the portal has no Stripe
+    customer yet (admin-set, trial, or not subscribed via the marketplace)."""
+    portal_id = str(request.query_params.get("portalId", "")).strip()
+    if not portal_id:
+        raise HTTPException(status_code=400, detail="portalId is required.")
+
+    db_ready = init_db()
+    session = get_session()
+    if not db_ready or session is None:
+        raise HTTPException(status_code=503, detail="Database is not configured.")
+    try:
+        entitlement = get_portal_entitlement(session, portal_id)
+        customer_id = str(entitlement.get("stripeCustomerId") or "").strip()
+        if not customer_id:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "No Stripe subscription is linked to this portal yet. Plan "
+                    "changes open up once you've subscribed through the marketplace."
+                ),
+            )
+        return_url = f"{str(settings.app_public_base_url or 'https://app-sync.com').rstrip('/')}/"
+        try:
+            portal_session = create_billing_portal_session(
+                customer_id=customer_id, return_url=return_url
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=502,
+                detail="Could not open the billing portal — check Stripe configuration.",
+            ) from exc
+        url = str((portal_session or {}).get("url") or "").strip()
+        if not url:
+            raise HTTPException(status_code=502, detail="Billing portal did not return a URL.")
+        return {"status": "ok", "url": url, "plan": str(entitlement.get("plan") or "")}
     finally:
         session.close()
 

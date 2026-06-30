@@ -965,6 +965,41 @@ class DashboardEndpointTests(unittest.TestCase):
         finally:
             session.close()
 
+    def test_billing_portal_requires_stripe_customer(self) -> None:
+        # No entitlement / no Stripe customer linked -> 400 with guidance.
+        response = self.client.post(
+            f"/api/v1/dashboard/billing/portal?portalId={self.PORTAL_ID}"
+        )
+        self.assertEqual(400, response.status_code)
+
+    def test_billing_portal_returns_url_for_subscriber(self) -> None:
+        session = self._session()
+        try:
+            session.add(
+                PortalEntitlement(
+                    portal_id=self.PORTAL_ID,
+                    plan="agency",
+                    stripe_customer_id="cus_123",
+                    subscription_status="active",
+                )
+            )
+            session.commit()
+        finally:
+            session.close()
+
+        with patch(
+            "app.api.v1.routes.dashboard.create_billing_portal_session",
+            return_value={"url": "https://billing.stripe.com/session/abc"},
+        ) as mock_portal:
+            response = self.client.post(
+                f"/api/v1/dashboard/billing/portal?portalId={self.PORTAL_ID}"
+            )
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(
+            "https://billing.stripe.com/session/abc", response.json()["url"]
+        )
+        mock_portal.assert_called_once()
+
     def test_workflows_endpoint_returns_sorted_rows_capped_at_200(self) -> None:
         session = self._session()
         try:

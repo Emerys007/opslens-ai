@@ -401,6 +401,9 @@ function SettingsPage({ context }: { context: any }) {
   const [whiteLabelName, setWhiteLabelName] = useState("");
   const [digestEnabled, setDigestEnabled] = useState(true);
   const [sendingDigest, setSendingDigest] = useState(false);
+  const [billingUrl, setBillingUrl] = useState("");
+  const [billingMessage, setBillingMessage] = useState("");
+  const [loadingBilling, setLoadingBilling] = useState(false);
   const [lastSavedAt, setLastSavedAt] = useState("");
   const [settingsStorage, setSettingsStorage] = useState("");
   const [slackConnected, setSlackConnected] = useState(false);
@@ -1326,6 +1329,41 @@ function SettingsPage({ context }: { context: any }) {
     }
   }
 
+  async function handleManageBilling() {
+    if (!portalId || loadingBilling) {
+      return;
+    }
+    setBillingUrl("");
+    setBillingMessage("");
+    setLoadingBilling(true);
+    try {
+      const response = await hubspot.fetch(
+        buildUrl(`${DASHBOARD_API_BASE}/billing/portal`, { portalId }),
+        { method: "POST", timeout: 15000 }
+      );
+      const data = (await response.json().catch(() => ({}))) as {
+        url?: string;
+        detail?: string;
+      };
+      if (!response.ok) {
+        throw new Error(
+          data?.detail || `Could not open billing (status ${response.status}).`
+        );
+      }
+      if (data?.url) {
+        setBillingUrl(String(data.url));
+      } else {
+        throw new Error("Billing portal did not return a link.");
+      }
+    } catch (error) {
+      setBillingMessage(
+        error instanceof Error ? error.message : "Could not open the billing portal."
+      );
+    } finally {
+      setLoadingBilling(false);
+    }
+  }
+
   async function handleSampleDigest() {
     if (!portalId || sendingDigest) {
       return;
@@ -1600,6 +1638,37 @@ function SettingsPage({ context }: { context: any }) {
                         readOnly={formLocked}
                         description="Agency plan only: the name shown on Slack alerts and tickets instead of 'OpsLens' (e.g. your agency's name). Leave blank to use OpsLens."
                       />
+
+                      <Divider />
+
+                      <Flex direction="column" gap="small">
+                        <Heading>Plan &amp; billing</Heading>
+                        <Text variant="microcopy">
+                          Change your tier (Starter / Professional / Agency),
+                          update your payment method, download invoices, or
+                          cancel — all in Stripe&apos;s secure billing portal.
+                        </Text>
+                        <Flex direction="row" gap="small" align="center" wrap>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            disabled={loadingBilling}
+                            onClick={handleManageBilling}
+                          >
+                            {loadingBilling ? "Opening…" : "Manage plan & billing"}
+                          </Button>
+                          {billingUrl ? (
+                            <Link href={{ url: billingUrl, external: true }}>
+                              Open billing portal →
+                            </Link>
+                          ) : null}
+                        </Flex>
+                        {billingMessage ? (
+                          <Alert variant="warning" title="Billing">
+                            {billingMessage}
+                          </Alert>
+                        ) : null}
+                      </Flex>
 
                       <Divider />
 

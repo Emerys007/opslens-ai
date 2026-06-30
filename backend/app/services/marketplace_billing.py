@@ -221,6 +221,23 @@ def create_checkout_session(
     return _stripe_request("POST", "/checkout/sessions", fields)
 
 
+def create_billing_portal_session(*, customer_id: str, return_url: str) -> dict:
+    """Open a Stripe Customer Portal session so an existing subscriber can
+    change tiers, update their card, view invoices, or cancel — all
+    Stripe-hosted. Requires the Customer Portal to be enabled (with plan
+    switching across the configured prices) in the Stripe dashboard. Returns
+    the session dict; ``["url"]`` is the short-lived link to redirect to.
+    """
+    cleaned = str(customer_id or "").strip()
+    if not cleaned:
+        raise RuntimeError("customer_id is required.")
+    fields = [
+        ("customer", cleaned),
+        ("return_url", str(return_url)),
+    ]
+    return _stripe_request("POST", "/billing_portal/sessions", fields)
+
+
 def retrieve_checkout_session(checkout_session_id: str) -> dict:
     cleaned = str(checkout_session_id or "").strip()
     if not cleaned:
