@@ -279,7 +279,11 @@ def upsert_portal_entitlement_from_install_session(
         session.add(row)
 
     row.install_session_id = str(install_session.install_session_id or "").strip()
-    row.plan = normalize_plan(install_session.requested_plan or "professional")
+    # Default a plan-less install to the ENTRY tier, never a paid mid-tier. If
+    # the install flow didn't carry an explicit plan choice, "starter" is the
+    # least-privilege default; the portal can be upgraded via checkout or the
+    # admin set-plan path.
+    row.plan = normalize_plan(install_session.requested_plan or "starter")
     row.billing_interval = normalize_billing_interval(install_session.billing_interval or "monthly")
     row.subscription_status = str(install_session.subscription_status or "").strip().lower() or "pending"
     row.trial_approved = bool(install_session.trial_approved)

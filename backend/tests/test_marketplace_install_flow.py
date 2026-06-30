@@ -13,6 +13,7 @@ from app.services.portal_entitlements import (
     create_marketplace_install_session,
     get_marketplace_install_session,
     sync_installation_activation_for_install_session,
+    upsert_portal_entitlement_from_install_session,
 )
 from tests.hubspot_fetch_auth import SignedHubSpotTestClient
 
@@ -40,6 +41,30 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
         session = db_module.get_session()
         self.assertIsNotNone(session)
         return session
+
+    def test_plan_less_install_defaults_to_starter_not_professional(self) -> None:
+        # An install that carries no explicit plan choice must land on the
+        # ENTRY tier, never a paid mid-tier. Guards against silently granting
+        # Professional to every fresh install.
+        session = self._session()
+        try:
+            install = MarketplaceInstallSession(
+                install_session_id="planless-session",
+                hubspot_portal_id="12121212",
+                requested_plan="",
+                billing_interval="",
+                subscription_status="pending",
+            )
+            session.add(install)
+            session.commit()
+            session.refresh(install)
+
+            entitlement = upsert_portal_entitlement_from_install_session(
+                session, portal_id="12121212", install_session=install
+            )
+            self.assertEqual("starter", entitlement.plan)
+        finally:
+            session.close()
 
     def test_install_start_creates_paid_checkout_session(self) -> None:
         with (
