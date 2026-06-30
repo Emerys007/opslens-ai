@@ -161,9 +161,10 @@ def run_polling_cycle_sync(session_factory: SessionFactory) -> dict[str, Any]:
     summary["portalsAttempted"] = len(portal_ids)
 
     for portal_id in portal_ids:
-        # One-time self-heal: stamp installing_user_email from token
-        # introspection for installs that predate email capture, so the Agency
-        # multi-portal rollup can link a partner's portals. No-op once known.
+        # Self-heal: stamp installing_user_email from token introspection for
+        # installs that predate email capture, so the Agency multi-portal
+        # rollup can link a partner's portals. Runs each cycle but no-ops
+        # cheaply (before any network call) once the email is known.
         _run_portal_pass(
             session_factory,
             portal_id,

@@ -767,12 +767,21 @@ def dashboard_portfolio(request: Request):
         else:
             portal_ids = [portal_id]
 
-        # One malformed portal must never blank the whole rollup.
+        # One malformed portal must never blank the whole rollup. Roll back
+        # after a failure so a poisoned transaction can't cascade and fail
+        # every subsequent portal too (which would re-hide the card). Summarize
+        # the signed portal first so the card always shows its own data even if
+        # a sibling errors.
+        ordered_ids = [portal_id] + [p for p in portal_ids if p != portal_id]
         summaries = []
-        for pid in portal_ids:
+        for pid in ordered_ids:
             try:
                 summaries.append(_portfolio_portal_summary(session, pid))
             except Exception:  # noqa: BLE001
+                try:
+                    session.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
                 continue
         return {
             "status": "ok",

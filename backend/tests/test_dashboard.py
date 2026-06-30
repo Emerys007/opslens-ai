@@ -1616,7 +1616,7 @@ class DashboardEndpointTests(unittest.TestCase):
             return_value="AT",
         ), patch(
             "app.services.hubspot_oauth.introspect_access_token",
-            return_value={"user": "partner@agency.test"},
+            return_value={"user": "partner@agency.test", "hub_id": self.PORTAL_ID},
         ):
             response = self.client.get(
                 f"/api/v1/dashboard/portfolio?portalId={self.PORTAL_ID}"
@@ -1633,6 +1633,65 @@ class DashboardEndpointTests(unittest.TestCase):
             self.assertEqual("partner@agency.test", healed.installing_user_email)
         finally:
             session.close()
+
+    def test_backfill_refuses_email_from_mismatched_token(self) -> None:
+        # Defense in depth: the heal must never cross-stamp one portal's owner
+        # onto another. If token introspection reports a different hub_id, the
+        # email is refused and the row stays blank.
+        from app.services.hubspot_oauth import backfill_installer_email
+
+        session = self._session()
+        try:
+            self._seed_installation(session, self.PORTAL_ID, "")
+            with patch(
+                "app.services.hubspot_oauth.get_portal_access_token",
+                return_value="AT",
+            ), patch(
+                "app.services.hubspot_oauth.introspect_access_token",
+                return_value={"user": "attacker@evil.test", "hub_id": "77777777"},
+            ):
+                result = backfill_installer_email(session, self.PORTAL_ID)
+            self.assertEqual("skipped", result["status"])
+            self.assertEqual("portal_mismatch", result["reason"])
+            row = session.get(HubSpotInstallation, self.PORTAL_ID)
+            self.assertEqual("", str(row.installing_user_email or ""))
+        finally:
+            session.close()
+
+    def test_portfolio_one_failing_portal_does_not_blank_card(self) -> None:
+        # The whole point of the fault-tolerance: if a sibling portal's summary
+        # raises (e.g. a transient DB error), the rollup must still return the
+        # signed portal so the card never disappears.
+        session = self._session()
+        try:
+            self._seed_entitlement(session, self.PORTAL_ID, "agency")
+            self._seed_installation(session, self.PORTAL_ID, "partner@agency.test")
+            self._seed_installation(session, "88888888", "partner@agency.test")
+            self._seed_entitlement(session, "88888888", "agency")
+        finally:
+            session.close()
+
+        real_summary = dashboard_module._portfolio_portal_summary
+
+        def flaky_summary(sess, pid):
+            if pid == "88888888":
+                raise RuntimeError("transient boom")
+            return real_summary(sess, pid)
+
+        with patch.object(
+            dashboard_module, "_portfolio_portal_summary", side_effect=flaky_summary
+        ):
+            response = self.client.get(
+                f"/api/v1/dashboard/portfolio?portalId={self.PORTAL_ID}"
+            )
+
+        self.assertEqual(200, response.status_code)
+        body = response.json()
+        self.assertTrue(body["agencyEnabled"])
+        portal_ids = {row["portalId"] for row in body["portals"]}
+        # The signed portal survives; the flaky sibling is dropped, not fatal.
+        self.assertIn(self.PORTAL_ID, portal_ids)
+        self.assertNotIn("88888888", portal_ids)
 
 
 if __name__ == "__main__":

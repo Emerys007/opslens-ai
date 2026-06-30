@@ -474,6 +474,17 @@ def backfill_installer_email(session: Session, portal_id: str) -> dict[str, Any]
 
     access_token = get_portal_access_token(session, portal_key)
     metadata = introspect_access_token(access_token)
+
+    # Defense in depth: only trust the email if the introspected token actually
+    # belongs to THIS portal. HubSpot returns the hub_id on the introspection;
+    # if it's present and doesn't match, refuse to heal (never cross-stamp one
+    # portal's owner onto another). Lenient when HubSpot omits hub_id.
+    token_portal = str(
+        metadata.get("hub_id") or metadata.get("hubId") or ""
+    ).strip()
+    if token_portal and token_portal != portal_key:
+        return {"portalId": portal_key, "status": "skipped", "reason": "portal_mismatch"}
+
     email = str(metadata.get("user") or "").strip()
     if not email:
         return {"portalId": portal_key, "status": "skipped", "reason": "no_email_in_token"}
