@@ -68,6 +68,7 @@ from app.services.install_diagnostic import (
 from app.services.remediation_guidance import fix_guidance_for
 from app.services.slack_delivery import send_test_slack_message
 from app.services.weekly_digest import send_portal_digest
+from app.services.portal_health import compute_portal_health
 from app.services.slack_oauth import SlackOAuthError, build_slack_authorize_url
 from app.services.workflow_remediation import (
     WorkflowRemediationError,
@@ -595,6 +596,7 @@ def dashboard_overview(request: Request):
                 "openIncidents": open_incidents,
                 "criticalIssues": critical_issues,
                 "monitoredWorkflows": monitored_workflows,
+                "health": compute_portal_health(session, portal_id),
                 "lastCheckedUtc": action.get("lastPollUtc"),
                 "activeIncidents": [],
                 **action,
@@ -690,6 +692,7 @@ def _portfolio_portal_summary(session, portal_id: str) -> dict:
         "watchingCount": _count_alerts(
             session, portal_id, Alert.status == STATUS_OPEN, watching_filter
         ),
+        "health": compute_portal_health(session, portal_id),
         "lastPollUtc": _isoformat(last_poll),
         "slackConnected": bool(str(settings.get("slackWebhookUrl") or "").strip()),
     }

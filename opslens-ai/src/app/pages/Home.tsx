@@ -73,7 +73,21 @@ type OverviewResponse = {
     watchingCount?: number;
     lastPollUtc?: string | null;
     slackConnected?: boolean;
+    health?: PortalHealth;
   };
+};
+
+type PortalHealth = {
+  score?: number | null;
+  grade?: "healthy" | "watch" | "at_risk" | "unknown";
+  label?: string;
+  tone?: "success" | "warning" | "danger" | "default";
+  activeTotal?: number;
+  openCritical?: number;
+  openHigh?: number;
+  acknowledged?: number;
+  newThisWeek?: number;
+  resolvedThisWeek?: number;
 };
 
 type PortfolioPortal = {
@@ -85,6 +99,7 @@ type PortfolioPortal = {
   watchingCount?: number;
   lastPollUtc?: string | null;
   slackConnected?: boolean;
+  health?: PortalHealth;
 };
 
 type PortfolioResponse = {
@@ -649,6 +664,15 @@ function HomePage({ context }: HomePageProps) {
     typeof summary.resolvedThisWeekCount === "number"
       ? summary.resolvedThisWeekCount
       : 0;
+  const health = summary.health ?? {};
+  const healthScore = typeof health.score === "number" ? health.score : null;
+  const healthLabel = String(health.label || "Unknown");
+  const healthStatusVariant =
+    health.grade === "healthy"
+      ? "success"
+      : health.grade === "at_risk"
+      ? "danger"
+      : "warning";
   const totalActionPages = Math.max(
     1,
     Math.ceil(actionRequiredCount / actionPageSize)
@@ -1061,6 +1085,9 @@ function HomePage({ context }: HomePageProps) {
           <Divider />
 
           <Statistics>
+            <StatisticsItem label="Portal health" number={healthScore ?? "—"}>
+              <StatusTag variant={healthStatusVariant}>{healthLabel}</StatusTag>
+            </StatisticsItem>
             <StatisticsItem label="Needs action" number={actionRequiredCount}>
               <Text variant="microcopy">Open critical and high</Text>
             </StatisticsItem>
@@ -1120,6 +1147,15 @@ function HomePage({ context }: HomePageProps) {
               {portfolio.portals.map((p) => {
                 const needsAction = Number(p.actionRequiredCount ?? 0);
                 const watching = Number(p.watchingCount ?? 0);
+                const pHealth = p.health ?? {};
+                const pHealthScore =
+                  typeof pHealth.score === "number" ? pHealth.score : null;
+                const pHealthVariant =
+                  pHealth.grade === "healthy"
+                    ? "success"
+                    : pHealth.grade === "at_risk"
+                    ? "danger"
+                    : "warning";
                 return (
                   <Flex
                     key={String(p.portalId)}
@@ -1142,6 +1178,11 @@ function HomePage({ context }: HomePageProps) {
                       </Flex>
                     </Box>
                     <Flex direction="row" gap="small" align="center" wrap>
+                      {pHealthScore !== null ? (
+                        <StatusTag variant={pHealthVariant}>
+                          {`Health ${pHealthScore}`}
+                        </StatusTag>
+                      ) : null}
                       <StatusTag variant={needsAction > 0 ? "danger" : "success"}>
                         {needsAction > 0 ? `${needsAction} need action` : "All clear"}
                       </StatusTag>
