@@ -46,6 +46,13 @@ from app.models.alert import (
     SOURCE_EVENT_LIST_DELETED,
     SOURCE_EVENT_OWNER_DEACTIVATED,
     SOURCE_EVENT_OWNER_DELETED,
+    SOURCE_EVENT_PIPELINE_ARCHIVED,
+    SOURCE_EVENT_PIPELINE_DELETED,
+    SOURCE_EVENT_PIPELINE_RENAMED,
+    SOURCE_EVENT_PIPELINE_STAGE_ADDED,
+    SOURCE_EVENT_PIPELINE_STAGE_REMOVED,
+    SOURCE_EVENT_PIPELINE_STAGE_RENAMED,
+    SOURCE_EVENT_PIPELINE_STAGE_REORDERED,
     SOURCE_EVENT_PROPERTY_ARCHIVED,
     SOURCE_EVENT_PROPERTY_DELETED,
     SOURCE_EVENT_PROPERTY_RENAMED,
@@ -59,6 +66,7 @@ from app.models.alert import (
     SOURCE_KIND_EMAIL_TEMPLATE,
     SOURCE_KIND_LIST,
     SOURCE_KIND_OWNER,
+    SOURCE_KIND_PIPELINE,
     SOURCE_KIND_PROPERTY,
     SOURCE_KIND_WORKFLOW,
     STATUS_OPEN,
@@ -84,6 +92,17 @@ from app.models.owner_change_event import (
     OwnerChangeEvent,
 )
 from app.models.owner_snapshot import OwnerSnapshot
+from app.models.pipeline_change_event import (
+    PIPELINE_EVENT_ARCHIVED,
+    PIPELINE_EVENT_DELETED,
+    PIPELINE_EVENT_RENAMED,
+    PIPELINE_EVENT_STAGE_ADDED,
+    PIPELINE_EVENT_STAGE_REMOVED,
+    PIPELINE_EVENT_STAGE_RENAMED,
+    PIPELINE_EVENT_STAGE_REORDERED,
+    PipelineChangeEvent,
+)
+from app.models.pipeline_snapshot import PipelineSnapshot
 from app.models.property_change_event import (
     PROPERTY_EVENT_ARCHIVED,
     PROPERTY_EVENT_DELETED,
@@ -195,6 +214,28 @@ _OWNER_EVENT_TO_SOURCE: dict[str, str | None] = {
 _OWNER_EVENT_TO_SEVERITY: dict[str, str] = {
     OWNER_EVENT_DEACTIVATED: SEVERITY_HIGH,
     OWNER_EVENT_DELETED: SEVERITY_HIGH,
+}
+
+# Pipeline unarchive is intentionally absent -> .get returns None -> no alert
+# (a recovery signal, like owner_reactivated).
+_PIPELINE_EVENT_TO_SOURCE: dict[str, str | None] = {
+    PIPELINE_EVENT_ARCHIVED: SOURCE_EVENT_PIPELINE_ARCHIVED,
+    PIPELINE_EVENT_DELETED: SOURCE_EVENT_PIPELINE_DELETED,
+    PIPELINE_EVENT_RENAMED: SOURCE_EVENT_PIPELINE_RENAMED,
+    PIPELINE_EVENT_STAGE_ADDED: SOURCE_EVENT_PIPELINE_STAGE_ADDED,
+    PIPELINE_EVENT_STAGE_REMOVED: SOURCE_EVENT_PIPELINE_STAGE_REMOVED,
+    PIPELINE_EVENT_STAGE_RENAMED: SOURCE_EVENT_PIPELINE_STAGE_RENAMED,
+    PIPELINE_EVENT_STAGE_REORDERED: SOURCE_EVENT_PIPELINE_STAGE_REORDERED,
+}
+
+_PIPELINE_EVENT_TO_SEVERITY: dict[str, str] = {
+    PIPELINE_EVENT_ARCHIVED: SEVERITY_HIGH,      # archived ~ deleted for deal routing
+    PIPELINE_EVENT_DELETED: SEVERITY_HIGH,       # automation + reports break
+    PIPELINE_EVENT_RENAMED: SEVERITY_LOW,        # cosmetic; automation keys off id
+    PIPELINE_EVENT_STAGE_ADDED: SEVERITY_LOW,    # additive, low risk
+    PIPELINE_EVENT_STAGE_REMOVED: SEVERITY_HIGH, # stage-based automation/reports orphaned
+    PIPELINE_EVENT_STAGE_RENAMED: SEVERITY_LOW,  # cosmetic
+    PIPELINE_EVENT_STAGE_REORDERED: SEVERITY_MEDIUM,
 }
 
 
@@ -357,6 +398,24 @@ def _lookup_owner_email(
     if snap is None:
         return ""
     return (snap.email or "").strip()
+
+
+def _lookup_pipeline_label(
+    session: Session,
+    portal_id: str,
+    pipeline_id: str,
+) -> str:
+    snap = (
+        session.query(PipelineSnapshot)
+        .filter(
+            PipelineSnapshot.portal_id == portal_id,
+            PipelineSnapshot.pipeline_id == pipeline_id,
+        )
+        .one_or_none()
+    )
+    if snap is None:
+        return ""
+    return (snap.label or "").strip()
 
 
 def _lookup_dependency_locations(
@@ -1063,6 +1122,126 @@ def correlate_owner_change_event(
 
 
 # ---------------------------------------------------------------------------
+# Pipeline correlator
+# ---------------------------------------------------------------------------
+
+
+def _build_pipeline_change_block(event: PipelineChangeEvent) -> dict[str, Any]:
+    try:
+        payload = json.loads(event.payload_json or "{}")
+    except Exception:  # noqa: BLE001
+        payload = {}
+    block: dict[str, Any] = {"pipeline_id": event.pipeline_id}
+    if isinstance(payload, dict):
+        block.update({k: v for k, v in payload.items() if v is not None})
+    return {k: v for k, v in block.items() if v is not None}
+
+
+def correlate_pipeline_change_event(
+    session: Session,
+    event: PipelineChangeEvent,
+    *,
+    counters: dict[str, int] | None = None,
+) -> list[Alert]:
+    """Process one deal-pipeline / stage lifecycle event.
+
+    Pipeline changes break deal automation and every pipeline report; there is
+    no workflow-dependency fan-out, so we emit a single entity-level alert
+    (like the owner no-impact branch).
+    """
+    counters = counters if counters is not None else {}
+    source_event_type = _PIPELINE_EVENT_TO_SOURCE.get(event.event_type)
+    if source_event_type is None:
+        return []
+
+    portal_id = event.portal_id
+    pipeline_id = event.pipeline_id
+    coverage = load_monitoring_coverage(session, portal_id)
+
+    if not is_category_enabled(coverage, source_event_type) or not _plan_allows_category(
+        session, portal_id, source_event_type
+    ):
+        _mark_processed(event)
+        return []
+
+    try:
+        payload = json.loads(event.payload_json or "{}")
+    except Exception:  # noqa: BLE001
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+
+    label = _lookup_pipeline_label(session, portal_id, pipeline_id)
+    pipeline_name = label or str(payload.get("label") or "").strip() or pipeline_id
+    stage_id = str(payload.get("stage_id") or "").strip()
+    stage_label = str(payload.get("stage_label") or "").strip() or stage_id
+    prev_label = str(payload.get("previous_label") or "").strip()
+    new_label = str(payload.get("new_label") or "").strip()
+
+    default_severity = _PIPELINE_EVENT_TO_SEVERITY[event.event_type]
+    severity = get_category_severity(coverage, source_event_type, default_severity)
+
+    rename_suffix = f" ({prev_label} → {new_label})" if (prev_label or new_label) else ""
+    title_for_event_type = {
+        SOURCE_EVENT_PIPELINE_ARCHIVED: (
+            f"Deal pipeline '{pipeline_name}' archived — deal automation & reports affected"
+        ),
+        SOURCE_EVENT_PIPELINE_DELETED: (
+            f"Deal pipeline '{pipeline_name}' deleted — deal automation & reports broken"
+        ),
+        SOURCE_EVENT_PIPELINE_RENAMED: (
+            f"Deal pipeline renamed to '{pipeline_name}'"
+            + (f" (was '{prev_label}')" if prev_label else "")
+        ),
+        SOURCE_EVENT_PIPELINE_STAGE_ADDED: (
+            f"Stage '{stage_label}' added to deal pipeline '{pipeline_name}'"
+        ),
+        SOURCE_EVENT_PIPELINE_STAGE_REMOVED: (
+            f"Stage '{stage_label}' removed from deal pipeline '{pipeline_name}' — deals orphaned"
+        ),
+        SOURCE_EVENT_PIPELINE_STAGE_RENAMED: (
+            f"Stage renamed in deal pipeline '{pipeline_name}'{rename_suffix}"
+        ),
+        SOURCE_EVENT_PIPELINE_STAGE_REORDERED: (
+            f"Stages reordered in deal pipeline '{pipeline_name}'"
+        ),
+    }
+    title = title_for_event_type.get(
+        source_event_type, f"Deal pipeline '{pipeline_name}' changed"
+    )
+
+    # Stage-scoped events dedup independently: the signature uses
+    # source_dependency_id (+ impacted_workflow_id, empty here), so encode the
+    # stage into the dependency id or two stage changes on one pipeline collapse.
+    dependency_id = f"{pipeline_id}:{stage_id}" if stage_id else pipeline_id
+
+    summary_payload = {
+        "kind": source_event_type,
+        "portal_id": portal_id,
+        "change": _build_pipeline_change_block(event),
+        "impact": None,
+    }
+
+    alert = _upsert_alert(
+        session,
+        portal_id=portal_id,
+        severity=severity,
+        source_event_type=source_event_type,
+        source_event_id=event.id,
+        source_event_kind=SOURCE_KIND_PIPELINE,
+        source_dependency_type="pipeline",
+        source_dependency_id=dependency_id,
+        source_object_type_id=None,
+        impacted_workflow_id=None,
+        impacted_workflow_name=None,
+        title=title,
+        summary_payload=summary_payload,
+        counters=counters,
+    )
+    return [alert]
+
+
+# ---------------------------------------------------------------------------
 # Workflow correlator
 # ---------------------------------------------------------------------------
 
@@ -1243,6 +1422,26 @@ def correlate_unprocessed_events(
         except Exception:  # noqa: BLE001
             logger.exception(
                 "alert_correlation.owner_event_failed",
+                extra={"event_id": event.id, "portal_id": event.portal_id},
+            )
+            continue
+        event.processed_at = now
+        counters["events_processed"] += 1
+
+    # ------- Pipeline events
+    pipeline_events: list[PipelineChangeEvent] = (
+        session.query(PipelineChangeEvent)
+        .filter(PipelineChangeEvent.processed_at.is_(None))
+        .order_by(PipelineChangeEvent.id.asc())
+        .limit(batch_size)
+        .all()
+    )
+    for event in pipeline_events:
+        try:
+            correlate_pipeline_change_event(session, event, counters=counters)
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "alert_correlation.pipeline_event_failed",
                 extra={"event_id": event.id, "portal_id": event.portal_id},
             )
             continue

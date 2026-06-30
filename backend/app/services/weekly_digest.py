@@ -65,6 +65,7 @@ _CATEGORY_BY_PREFIX = (
     ("list_", "Segments"),
     ("template_", "Email templates"),
     ("owner_", "Owners"),
+    ("pipeline_", "Pipelines"),
 )
 
 
@@ -218,7 +219,7 @@ def build_digest_payload(digest: dict[str, Any], *, brand_name: str = "OpsLens")
         headline = (
             "✅ *All clear this week.* No workflow-breaking changes detected. "
             "OpsLens kept watch over your properties, workflows, segments, "
-            "email templates and owners."
+            "email templates, owners and deal pipelines."
         )
         if digest["open"] > 0:
             headline += f"\n\n*{digest['open']}* issue(s) from before are still open."

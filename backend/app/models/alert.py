@@ -56,6 +56,13 @@ SOURCE_EVENT_TEMPLATE_DELETED = "template_deleted"
 SOURCE_EVENT_TEMPLATE_EDITED = "template_edited"
 SOURCE_EVENT_OWNER_DEACTIVATED = "owner_deactivated"
 SOURCE_EVENT_OWNER_DELETED = "owner_deleted"
+SOURCE_EVENT_PIPELINE_ARCHIVED = "pipeline_archived"
+SOURCE_EVENT_PIPELINE_DELETED = "pipeline_deleted"
+SOURCE_EVENT_PIPELINE_RENAMED = "pipeline_renamed"
+SOURCE_EVENT_PIPELINE_STAGE_ADDED = "pipeline_stage_added"
+SOURCE_EVENT_PIPELINE_STAGE_REMOVED = "pipeline_stage_removed"
+SOURCE_EVENT_PIPELINE_STAGE_RENAMED = "pipeline_stage_renamed"
+SOURCE_EVENT_PIPELINE_STAGE_REORDERED = "pipeline_stage_reordered"
 
 
 # ---------------------------------------------------------------------------
@@ -67,6 +74,7 @@ SOURCE_KIND_PROPERTY = "property_change_event"
 SOURCE_KIND_LIST = "list_change_event"
 SOURCE_KIND_EMAIL_TEMPLATE = "email_template_change_event"
 SOURCE_KIND_OWNER = "owner_change_event"
+SOURCE_KIND_PIPELINE = "pipeline_change_event"
 SOURCE_KIND_INSTALL_DIAGNOSTIC = "install_diagnostic"
 
 

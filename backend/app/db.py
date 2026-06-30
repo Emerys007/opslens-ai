@@ -125,6 +125,8 @@ def init_db() -> bool:
     from app.models.monitoring_exclusion import MonitoringExclusion  # noqa: F401
     from app.models.owner_change_event import OwnerChangeEvent  # noqa: F401
     from app.models.owner_snapshot import OwnerSnapshot  # noqa: F401
+    from app.models.pipeline_change_event import PipelineChangeEvent  # noqa: F401
+    from app.models.pipeline_snapshot import PipelineSnapshot  # noqa: F401
     from app.models.portal_setting import PortalSetting  # noqa: F401
     from app.models.portal_entitlement import PortalEntitlement  # noqa: F401
     from app.models.property_change_event import PropertyChangeEvent  # noqa: F401

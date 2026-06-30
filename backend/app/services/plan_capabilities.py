@@ -24,6 +24,7 @@ DETECTION_GROUP_WORKFLOW = "workflow"
 DETECTION_GROUP_LIST = "list"
 DETECTION_GROUP_TEMPLATE = "template"
 DETECTION_GROUP_OWNER = "owner"
+DETECTION_GROUP_PIPELINE = "pipeline"
 
 ALL_DETECTION_GROUPS = frozenset(
     {
@@ -32,6 +33,7 @@ ALL_DETECTION_GROUPS = frozenset(
         DETECTION_GROUP_LIST,
         DETECTION_GROUP_TEMPLATE,
         DETECTION_GROUP_OWNER,
+        DETECTION_GROUP_PIPELINE,
     }
 )
 
@@ -42,10 +44,12 @@ _GROUP_ORDER = (
     DETECTION_GROUP_LIST,
     DETECTION_GROUP_TEMPLATE,
     DETECTION_GROUP_OWNER,
+    DETECTION_GROUP_PIPELINE,
 )
 
-# Pricing-page matrix: Starter = property + workflow (7 categories);
-# Professional = + list + template (13); Agency = + owner (15).
+# Detection-group matrix (counts = entries in MONITORING_CATEGORY_DEFAULT_SEVERITIES):
+# Starter = property + workflow (6); Professional = + list + template (12);
+# Agency = + owner + pipeline (21).
 _PLAN_DETECTION_GROUPS = {
     "starter": frozenset({DETECTION_GROUP_PROPERTY, DETECTION_GROUP_WORKFLOW}),
     "professional": frozenset(
