@@ -76,6 +76,17 @@ type OverviewResponse = {
     slackConnected?: boolean;
     health?: PortalHealth;
   };
+  billing?: BillingStatus;
+};
+
+type BillingStatus = {
+  state?: "trialing" | "active" | "expired" | "none";
+  plan?: string;
+  planLabel?: string;
+  daysLeft?: number | null;
+  trialExpiresAt?: string;
+  active?: boolean;
+  subscribeUrl?: string;
 };
 
 type PortalHealth = {
@@ -699,6 +710,58 @@ function HomePage({ context }: HomePageProps) {
       : "warning";
   const acknowledgedCount =
     typeof summary.acknowledgedCount === "number" ? summary.acknowledgedCount : 0;
+
+  // Trial → conversion banner. Monitoring value is easy to miss during a quiet
+  // trial, so surface days-left urgency plus a recap of what's being protected
+  // and a one-click path to subscribe.
+  const billing = overviewData?.billing ?? {};
+  const billingState = String(billing.state || "none");
+  const trialDaysLeft =
+    typeof billing.daysLeft === "number" ? billing.daysLeft : null;
+  const subscribeUrl = String(billing.subscribeUrl || "");
+  const billingPlanLabel = String(billing.planLabel || "").trim() || "Your plan";
+  const monitoredWorkflows =
+    typeof summary.monitoredWorkflows === "number"
+      ? summary.monitoredWorkflows
+      : 0;
+  const trialBanner = (() => {
+    if (billingState === "trialing") {
+      const urgent = trialDaysLeft !== null && trialDaysLeft <= 3;
+      const daysText =
+        trialDaysLeft === null
+          ? "trial active"
+          : trialDaysLeft <= 1
+          ? "1 day left"
+          : `${trialDaysLeft} days left`;
+      const watchingText =
+        monitoredWorkflows > 0
+          ? `OpsLens is actively watching ${monitoredWorkflows} workflow${
+              monitoredWorkflows === 1 ? "" : "s"
+            } plus your properties, pipelines, and lists`
+          : "OpsLens is actively watching your workflows, properties, pipelines, and lists";
+      return {
+        show: true,
+        variant: (urgent ? "warning" : "info") as "warning" | "info",
+        title: `${billingPlanLabel} trial — ${daysText}`,
+        body: `${watchingText} — catching silent breakages before they cost you. ${
+          urgent
+            ? "Subscribe now to keep your monitoring on without interruption."
+            : "Subscribe any time to lock in continuous protection."
+        }`,
+      };
+    }
+    if (billingState === "expired") {
+      return {
+        show: true,
+        variant: "warning" as const,
+        title: "Your trial has ended",
+        body:
+          "Resubscribe to switch monitoring back on — while it's off, OpsLens can't catch disabled workflows, deleted properties, or pipeline changes.",
+      };
+    }
+    return { show: false, variant: "info" as const, title: "", body: "" };
+  })();
+
   const totalActionPages = Math.max(
     1,
     Math.ceil(actionRequiredCount / actionPageSize)
@@ -1130,6 +1193,18 @@ function HomePage({ context }: HomePageProps) {
 
   return (
     <Flex direction="column" gap="medium">
+      {trialBanner.show ? (
+        <Alert title={trialBanner.title} variant={trialBanner.variant}>
+          <Flex direction="column" gap="small">
+            <Text>{trialBanner.body}</Text>
+            {subscribeUrl ? (
+              <Link href={{ url: subscribeUrl, external: true }}>
+                Subscribe to keep OpsLens active →
+              </Link>
+            ) : null}
+          </Flex>
+        </Alert>
+      ) : null}
       <Card>
         <Flex direction="column" gap="medium">
           <Flex direction="row" justify="between" align="start" gap="small" wrap>

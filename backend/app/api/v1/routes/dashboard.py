@@ -522,6 +522,75 @@ def _properties_path_for_object_type(object_type_id: str) -> str:
     return OBJECT_TYPE_ID_TO_PROPERTIES_PATH.get(cleaned, cleaned)
 
 
+def _billing_status(entitlement: dict, portal_id: str) -> dict:
+    """Trial / subscription state for the dashboard banner.
+
+    Collapses the raw entitlement into the handful of fields the UI needs to
+    show days-left urgency and the right conversion CTA, so billing rules stay
+    server-side. ``state`` is one of:
+      - ``trialing``  — in an active trial window (show days left + subscribe)
+      - ``expired``   — trial lapsed or subscription ended (win-back CTA)
+      - ``active``    — paid and current (no banner needed)
+      - ``none``      — no billing record yet / pending
+    """
+    plan = str(entitlement.get("plan") or "").strip()
+    status = str(entitlement.get("subscriptionStatus") or "").strip().lower()
+    active = bool(entitlement.get("active"))
+    trial_approved = bool(entitlement.get("trialApproved"))
+    expires_raw = str(entitlement.get("trialExpiresAt") or "").strip()
+
+    expires_dt = None
+    if expires_raw:
+        try:
+            expires_dt = datetime.fromisoformat(expires_raw.replace("Z", "+00:00"))
+            if expires_dt.tzinfo is None:
+                expires_dt = expires_dt.replace(tzinfo=timezone.utc)
+        except Exception:  # noqa: BLE001
+            expires_dt = None
+
+    days_left = None
+    in_trial_window = False
+    if expires_dt is not None:
+        remaining = (expires_dt - datetime.now(timezone.utc)).total_seconds()
+        in_trial_window = remaining > 0
+        # Round up so a fresh 14-day trial reads "14" and the final hours read
+        # "1 day left" rather than "0".
+        days_left = int((remaining + 86399) // 86400) if remaining > 0 else 0
+
+    if trial_approved and in_trial_window:
+        state = "trialing"
+    elif active:
+        state = "active"
+    elif (trial_approved and expires_dt is not None) or status in {
+        "canceled",
+        "unpaid",
+        "past_due",
+        "expired",
+    }:
+        state = "expired"
+    else:
+        state = "none"
+
+    base = str(settings.app_public_base_url or "https://app-sync.com").rstrip("/")
+    subscribe_url = f"{base}/pricing"
+    params = {"portalId": str(portal_id or "").strip()}
+    if plan:
+        params["plan"] = plan
+    query = urllib.parse.urlencode({k: v for k, v in params.items() if v})
+    if query:
+        subscribe_url = f"{subscribe_url}?{query}"
+
+    return {
+        "state": state,
+        "plan": plan,
+        "planLabel": (plan[:1].upper() + plan[1:]) if plan else "",
+        "daysLeft": days_left,
+        "trialExpiresAt": expires_raw,
+        "active": active,
+        "subscribeUrl": subscribe_url,
+    }
+
+
 @router.get("/overview")
 def dashboard_overview(request: Request):
     query = request.query_params
@@ -545,6 +614,7 @@ def dashboard_overview(request: Request):
             "connectedBackend": True,
             "settings": settings,
             "entitlement": entitlement,
+            "billing": _billing_status(entitlement, portal_id),
             "summary": {
                 "openIncidents": 0,
                 "criticalIssues": 0,
@@ -601,6 +671,7 @@ def dashboard_overview(request: Request):
             "connectedBackend": True,
             "settings": settings,
             "entitlement": entitlement,
+            "billing": _billing_status(entitlement, portal_id),
             "summary": {
                 "openIncidents": open_incidents,
                 "criticalIssues": critical_issues,

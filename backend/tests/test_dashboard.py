@@ -1694,5 +1694,89 @@ class DashboardEndpointTests(unittest.TestCase):
         self.assertNotIn("88888888", portal_ids)
 
 
+class BillingStatusHelperTests(unittest.TestCase):
+    """The dashboard trial banner reads `_billing_status`; it must classify the
+    trial/subscription state and days-left correctly and never raise on odd
+    entitlement shapes."""
+
+    @staticmethod
+    def _iso(dt: datetime) -> str:
+        return dt.astimezone(timezone.utc).isoformat()
+
+    def test_active_trial_reports_trialing_with_days_left(self) -> None:
+        expires = datetime.now(timezone.utc) + timedelta(days=9, hours=1)
+        status = dashboard_module._billing_status(
+            {
+                "plan": "professional",
+                "subscriptionStatus": "trial_approved",
+                "active": True,
+                "trialApproved": True,
+                "trialExpiresAt": self._iso(expires),
+            },
+            "51300126",
+        )
+        self.assertEqual("trialing", status["state"])
+        self.assertEqual("Professional", status["planLabel"])
+        self.assertEqual(10, status["daysLeft"])  # rounds up
+        self.assertIn("portalId=51300126", status["subscribeUrl"])
+        self.assertIn("plan=professional", status["subscribeUrl"])
+
+    def test_lapsed_trial_reports_expired(self) -> None:
+        expires = datetime.now(timezone.utc) - timedelta(days=1)
+        status = dashboard_module._billing_status(
+            {
+                "plan": "professional",
+                "subscriptionStatus": "trial_approved",
+                "active": False,
+                "trialApproved": True,
+                "trialExpiresAt": self._iso(expires),
+            },
+            "51300126",
+        )
+        self.assertEqual("expired", status["state"])
+        self.assertEqual(0, status["daysLeft"])
+
+    def test_paid_active_reports_active(self) -> None:
+        status = dashboard_module._billing_status(
+            {
+                "plan": "agency",
+                "subscriptionStatus": "active",
+                "active": True,
+                "trialApproved": False,
+                "trialExpiresAt": "",
+            },
+            "51300126",
+        )
+        self.assertEqual("active", status["state"])
+
+    def test_no_billing_record_reports_none(self) -> None:
+        status = dashboard_module._billing_status(
+            {
+                "plan": "",
+                "subscriptionStatus": "pending",
+                "active": False,
+                "trialApproved": False,
+                "trialExpiresAt": "",
+            },
+            "51300126",
+        )
+        self.assertEqual("none", status["state"])
+        self.assertIsNone(status["daysLeft"])
+
+    def test_malformed_expiry_does_not_raise(self) -> None:
+        status = dashboard_module._billing_status(
+            {
+                "plan": "professional",
+                "subscriptionStatus": "trial_approved",
+                "active": True,
+                "trialApproved": True,
+                "trialExpiresAt": "not-a-date",
+            },
+            "51300126",
+        )
+        # Unparseable expiry → no trial window; falls through to active here.
+        self.assertIn(status["state"], {"active", "none", "expired"})
+
+
 if __name__ == "__main__":
     unittest.main()
