@@ -42,10 +42,10 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
         self.assertIsNotNone(session)
         return session
 
-    def test_plan_less_install_defaults_to_starter_not_professional(self) -> None:
-        # An install that carries no explicit plan choice must land on the
-        # ENTRY tier, never a paid mid-tier. Guards against silently granting
-        # Professional to every fresh install.
+    def test_plan_less_install_defaults_to_professional(self) -> None:
+        # Product decision: Professional is the intended default trial tier, so
+        # a plan-less install (no explicit choice carried through) also lands on
+        # Professional. Explicit / Stripe-derived plans still win over this.
         session = self._session()
         try:
             install = MarketplaceInstallSession(
@@ -62,7 +62,7 @@ class MarketplaceInstallFlowTests(unittest.TestCase):
             entitlement = upsert_portal_entitlement_from_install_session(
                 session, portal_id="12121212", install_session=install
             )
-            self.assertEqual("starter", entitlement.plan)
+            self.assertEqual("professional", entitlement.plan)
         finally:
             session.close()
 
